@@ -584,6 +584,17 @@ func xmlEscape(s string) string {
 	return repl.Replace(s)
 }
 
+func formatS3Time(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+func boolString(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
+}
+
 func writeXMLError(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(status)
@@ -594,49 +605,176 @@ func writeXMLError(w http.ResponseWriter, status int, code, msg string) {
 	_, _ = w.Write([]byte("</Error>"))
 }
 
-func writeUpstreamError(w http.ResponseWriter, err error) {
-	status := http.StatusBadGateway
-	code := "BadGateway"
-	msg := "Upstream error"
+type upstreamErrorInfo struct {
+	status  int
+	code    string
+	message string
+	headers http.Header
+}
+
+func extractUpstreamErrorInfo(err error) upstreamErrorInfo {
+	info := upstreamErrorInfo{
+		status:  http.StatusBadGateway,
+		code:    "BadGateway",
+		message: "Upstream error",
+		headers: make(http.Header),
+	}
 
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
 		if c := strings.TrimSpace(apiErr.ErrorCode()); c != "" {
-			code = c
+			info.code = c
 		}
 		if m := strings.TrimSpace(apiErr.ErrorMessage()); m != "" {
-			msg = m
+			info.message = m
 		}
-		switch apiErr.ErrorFault() {
-		case smithy.FaultClient:
-			if status == http.StatusBadGateway {
-				status = http.StatusBadRequest
-			}
-		case smithy.FaultServer:
-			if status == http.StatusBadGateway {
-				status = http.StatusBadGateway
-			}
+		if info.status == http.StatusBadGateway && apiErr.ErrorFault() == smithy.FaultClient {
+			info.status = http.StatusBadRequest
 		}
 	}
 
 	var respErr *smithyhttp.ResponseError
 	if errors.As(err, &respErr) {
 		if sc := respErr.HTTPStatusCode(); sc >= 400 {
-			status = sc
+			info.status = sc
 		}
 		if hr := respErr.HTTPResponse(); hr != nil {
 			for k, vals := range hr.Header {
 				kl := strings.ToLower(k)
 				if strings.HasPrefix(kl, "x-amz-") || kl == "retry-after" {
 					for _, v := range vals {
-						w.Header().Add(k, v)
+						info.headers.Add(k, v)
 					}
 				}
 			}
 		}
 	}
+	return info
+}
 
-	writeXMLError(w, status, code, msg)
+func writeUpstreamError(w http.ResponseWriter, err error) {
+	info := extractUpstreamErrorInfo(err)
+	for k, vals := range info.headers {
+		for _, v := range vals {
+			w.Header().Add(k, v)
+		}
+	}
+	writeXMLError(w, info.status, info.code, info.message)
+}
+
+func writeUpstreamHeadError(w http.ResponseWriter, err error) {
+	info := extractUpstreamErrorInfo(err)
+	for k, vals := range info.headers {
+		for _, v := range vals {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(info.status)
+}
+
+func parseEncodingType(v string) (types.EncodingType, error) {
+	raw := strings.TrimSpace(v)
+	if raw == "" {
+		return "", nil
+	}
+	if strings.EqualFold(raw, string(types.EncodingTypeUrl)) {
+		return types.EncodingTypeUrl, nil
+	}
+	return "", fmt.Errorf("unsupported encoding-type %q", raw)
+}
+
+func parseRequestPayerHeader(h http.Header) (types.RequestPayer, error) {
+	raw := strings.TrimSpace(h.Get("x-amz-request-payer"))
+	if raw == "" {
+		return "", nil
+	}
+	if strings.EqualFold(raw, string(types.RequestPayerRequester)) {
+		return types.RequestPayerRequester, nil
+	}
+	return "", fmt.Errorf("unsupported request payer %q", raw)
+}
+
+func parseOptionalObjectAttributes(v string) ([]types.OptionalObjectAttributes, error) {
+	raw := strings.TrimSpace(v)
+	if raw == "" {
+		return nil, nil
+	}
+	seen := map[types.OptionalObjectAttributes]struct{}{}
+	out := make([]types.OptionalObjectAttributes, 0, 2)
+	for _, token := range strings.Split(raw, ",") {
+		t := strings.TrimSpace(token)
+		if t == "" {
+			continue
+		}
+		var attr types.OptionalObjectAttributes
+		switch strings.ToLower(t) {
+		case strings.ToLower(string(types.OptionalObjectAttributesRestoreStatus)):
+			attr = types.OptionalObjectAttributesRestoreStatus
+		default:
+			return nil, fmt.Errorf("unsupported optional object attribute %q", t)
+		}
+		if _, ok := seen[attr]; ok {
+			continue
+		}
+		seen[attr] = struct{}{}
+		out = append(out, attr)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no optional object attributes requested")
+	}
+	return out, nil
+}
+
+func parseMetadataDirective(v string) (types.MetadataDirective, error) {
+	raw := strings.TrimSpace(v)
+	if raw == "" {
+		return "", nil
+	}
+	for _, allowed := range types.MetadataDirective("").Values() {
+		if strings.EqualFold(raw, string(allowed)) {
+			return allowed, nil
+		}
+	}
+	return "", fmt.Errorf("unsupported metadata directive %q", raw)
+}
+
+func parseTaggingDirective(v string) (types.TaggingDirective, error) {
+	raw := strings.TrimSpace(v)
+	if raw == "" {
+		return "", nil
+	}
+	for _, allowed := range types.TaggingDirective("").Values() {
+		if strings.EqualFold(raw, string(allowed)) {
+			return allowed, nil
+		}
+	}
+	return "", fmt.Errorf("unsupported tagging directive %q", raw)
+}
+
+func parseStorageClass(v string) (types.StorageClass, error) {
+	raw := strings.TrimSpace(v)
+	if raw == "" {
+		return "", nil
+	}
+	for _, allowed := range types.StorageClass("").Values() {
+		if strings.EqualFold(raw, string(allowed)) {
+			return allowed, nil
+		}
+	}
+	return "", fmt.Errorf("unsupported storage class %q", raw)
+}
+
+func parseObjectCannedACL(v string) (types.ObjectCannedACL, error) {
+	raw := strings.TrimSpace(v)
+	if raw == "" {
+		return "", nil
+	}
+	for _, allowed := range types.ObjectCannedACL("").Values() {
+		if strings.EqualFold(raw, string(allowed)) {
+			return allowed, nil
+		}
+	}
+	return "", fmt.Errorf("unsupported x-amz-acl %q", raw)
 }
 
 func parseOptionalHTTPTime(v string) (*time.Time, error) {
@@ -652,6 +790,21 @@ func parseOptionalHTTPTime(v string) (*time.Time, error) {
 	return &utc, nil
 }
 
+func parseOptionalBool(v string) (bool, bool, error) {
+	raw := strings.TrimSpace(v)
+	if raw == "" {
+		return false, false, nil
+	}
+	switch strings.ToLower(raw) {
+	case "true":
+		return true, true, nil
+	case "false":
+		return false, true, nil
+	default:
+		return false, false, fmt.Errorf("invalid boolean %q", raw)
+	}
+}
+
 func parseSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string, present bool, err error) {
 	a := strings.TrimSpace(h.Get("x-amz-server-side-encryption-customer-algorithm"))
 	k := strings.TrimSpace(h.Get("x-amz-server-side-encryption-customer-key"))
@@ -664,6 +817,36 @@ func parseSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string, present 
 		return nil, nil, nil, true, errors.New("incomplete SSE-C headers")
 	}
 	return aws.String(a), aws.String(k), aws.String(m), true, nil
+}
+
+func parseCopySourceSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string, present bool, err error) {
+	a := strings.TrimSpace(h.Get("x-amz-copy-source-server-side-encryption-customer-algorithm"))
+	k := strings.TrimSpace(h.Get("x-amz-copy-source-server-side-encryption-customer-key"))
+	m := strings.TrimSpace(h.Get("x-amz-copy-source-server-side-encryption-customer-key-md5"))
+	present = a != "" || k != "" || m != ""
+	if !present {
+		return nil, nil, nil, false, nil
+	}
+	if a == "" || k == "" || m == "" {
+		return nil, nil, nil, true, errors.New("incomplete copy-source SSE-C headers")
+	}
+	return aws.String(a), aws.String(k), aws.String(m), true, nil
+}
+
+func parseCopySourceConditionalHeaders(h http.Header) (ifMatch, ifNoneMatch *string, ifModifiedSince, ifUnmodifiedSince *time.Time, err error) {
+	if raw := strings.TrimSpace(h.Get("x-amz-copy-source-if-match")); raw != "" {
+		ifMatch = aws.String(raw)
+	}
+	if raw := strings.TrimSpace(h.Get("x-amz-copy-source-if-none-match")); raw != "" {
+		ifNoneMatch = aws.String(raw)
+	}
+	if ifModifiedSince, err = parseOptionalHTTPTime(h.Get("x-amz-copy-source-if-modified-since")); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if ifUnmodifiedSince, err = parseOptionalHTTPTime(h.Get("x-amz-copy-source-if-unmodified-since")); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return ifMatch, ifNoneMatch, ifModifiedSince, ifUnmodifiedSince, nil
 }
 
 type sseWriteHeaders struct {
@@ -1038,11 +1221,40 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if _, ok := q["versioning"]; ok {
+			switch r.Method {
+			case http.MethodPut:
+				s.handlePutBucketVersioning(w, r, bucket)
+				return
+			case http.MethodGet:
+				s.handleGetBucketVersioning(w, r, bucket)
+				return
+			default:
+				writeXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+				return
+			}
+		}
+		if _, ok := q["delete"]; ok && r.Method == http.MethodPost {
+			s.handleDeleteObjects(w, r, bucket)
+			return
+		}
 		if r.Method == http.MethodPut {
 			s.handleCreateBucket(w, r, bucket)
 			return
 		}
+		if r.Method == http.MethodDelete {
+			s.handleDeleteBucket(w, r, bucket)
+			return
+		}
+		if r.Method == http.MethodHead {
+			s.handleHeadBucket(w, r, bucket)
+			return
+		}
 		if r.Method == http.MethodGet {
+			if _, ok := q["versions"]; ok {
+				s.handleListObjectVersions(w, r, bucket)
+				return
+			}
 			if q.Get("list-type") == "2" {
 				s.handleListObjectsV2(w, r, bucket)
 				return
@@ -1081,6 +1293,10 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "partNumber required")
 				return
 			}
+			if strings.TrimSpace(r.Header.Get("x-amz-copy-source")) != "" {
+				s.handleUploadPartCopy(w, r, bucket, key, uploadID, int32(pn))
+				return
+			}
 			s.handleUploadPart(w, r, bucket, key, uploadID, int32(pn))
 			return
 		case http.MethodPost:
@@ -1099,7 +1315,14 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		s.handleGetObject(w, r, bucket, key)
 		return
+	case http.MethodHead:
+		s.handleHeadObject(w, r, bucket, key)
+		return
 	case http.MethodPut:
+		if strings.TrimSpace(r.Header.Get("x-amz-copy-source")) != "" {
+			s.handleCopyObject(w, r, bucket, key)
+			return
+		}
 		s.handlePutObject(w, r, bucket, key)
 		return
 	case http.MethodDelete:
@@ -1155,6 +1378,87 @@ func (s *server) handleCreateBucket(w http.ResponseWriter, r *http.Request, buck
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+type versioningConfigXML struct {
+	XMLName   xml.Name `xml:"VersioningConfiguration"`
+	XMLNS     string   `xml:"xmlns,attr,omitempty"`
+	Status    *string  `xml:"Status,omitempty"`
+	MFADelete *string  `xml:"MfaDelete,omitempty"`
+}
+
+func decodeVersioningConfigXML(r io.Reader) (*types.VersioningConfiguration, error) {
+	var in versioningConfigXML
+	if err := xml.NewDecoder(r).Decode(&in); err != nil {
+		return nil, err
+	}
+
+	var out types.VersioningConfiguration
+	if in.Status != nil {
+		rawStatus := strings.TrimSpace(*in.Status)
+		if rawStatus != "" {
+			matched := false
+			for _, allowed := range types.BucketVersioningStatus("").Values() {
+				if strings.EqualFold(rawStatus, string(allowed)) {
+					out.Status = allowed
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil, fmt.Errorf("invalid versioning status %q", rawStatus)
+			}
+		}
+	}
+	if in.MFADelete != nil {
+		rawMFA := strings.TrimSpace(*in.MFADelete)
+		if rawMFA != "" {
+			matched := false
+			for _, allowed := range types.MFADelete("").Values() {
+				if strings.EqualFold(rawMFA, string(allowed)) {
+					out.MFADelete = allowed
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil, fmt.Errorf("invalid mfa delete status %q", rawMFA)
+			}
+		}
+	}
+	return &out, nil
+}
+
+func encodeVersioningConfigXML(status types.BucketVersioningStatus, mfaDelete types.MFADeleteStatus) ([]byte, error) {
+	out := versioningConfigXML{
+		XMLNS: "http://s3.amazonaws.com/doc/2006-03-01/",
+	}
+	if status != "" {
+		s := string(status)
+		out.Status = &s
+	}
+	if mfaDelete != "" {
+		m := string(mfaDelete)
+		out.MFADelete = &m
+	}
+
+	body, err := xml.Marshal(out)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(xml.Header), body...), nil
+}
+
+type deleteObjectsReqXML struct {
+	XMLName xml.Name                 `xml:"Delete"`
+	Objects []deleteObjectReqItemXML `xml:"Object"`
+	Quiet   *bool                    `xml:"Quiet,omitempty"`
+}
+
+type deleteObjectReqItemXML struct {
+	Key       *string `xml:"Key"`
+	VersionID *string `xml:"VersionId,omitempty"`
+	ETag      *string `xml:"ETag,omitempty"`
 }
 
 type lifecycleConfigReqXML struct {
@@ -1827,6 +2131,412 @@ func (s *server) handleDeleteBucketLifecycleConfiguration(w http.ResponseWriter,
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *server) handleHeadBucket(w http.ResponseWriter, r *http.Request, bucket string) {
+	rules := rulesFromCtx(r)
+	if !canRead(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	in := &s3.HeadBucketInput{Bucket: &bucket}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	out, err := s.up.HeadBucket(r.Context(), in)
+	if err != nil {
+		writeUpstreamHeadError(w, err)
+		return
+	}
+
+	if out.BucketRegion != nil {
+		w.Header().Set("x-amz-bucket-region", *out.BucketRegion)
+	}
+	if out.BucketArn != nil {
+		w.Header().Set("x-amz-bucket-arn", *out.BucketArn)
+	}
+	if out.BucketLocationName != nil {
+		w.Header().Set("x-amz-bucket-location-name", *out.BucketLocationName)
+	}
+	if out.BucketLocationType != "" {
+		w.Header().Set("x-amz-bucket-location-type", string(out.BucketLocationType))
+	}
+	if out.AccessPointAlias != nil {
+		w.Header().Set("x-amz-access-point-alias", boolString(*out.AccessPointAlias))
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *server) handleDeleteBucket(w http.ResponseWriter, r *http.Request, bucket string) {
+	rules := rulesFromCtx(r)
+	if !canWrite(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	in := &s3.DeleteBucketInput{Bucket: &bucket}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	_, err := s.up.DeleteBucket(r.Context(), in)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handlePutBucketVersioning(w http.ResponseWriter, r *http.Request, bucket string) {
+	rules := rulesFromCtx(r)
+	if !canWrite(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	cfg, err := decodeVersioningConfigXML(r.Body)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid versioning configuration")
+		return
+	}
+	in := &s3.PutBucketVersioningInput{
+		Bucket:                  &bucket,
+		VersioningConfiguration: cfg,
+	}
+	if mfa := strings.TrimSpace(r.Header.Get("x-amz-mfa")); mfa != "" {
+		in.MFA = aws.String(mfa)
+	}
+	if contentMD5 := strings.TrimSpace(r.Header.Get("Content-MD5")); contentMD5 != "" {
+		in.ContentMD5 = aws.String(contentMD5)
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	_, err = s.up.PutBucketVersioning(r.Context(), in)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *server) handleGetBucketVersioning(w http.ResponseWriter, r *http.Request, bucket string) {
+	rules := rulesFromCtx(r)
+	if !canRead(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	in := &s3.GetBucketVersioningInput{Bucket: &bucket}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	out, err := s.up.GetBucketVersioning(r.Context(), in)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+
+	body, err := encodeVersioningConfigXML(out.Status, out.MFADelete)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
+
+func (s *server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, bucket string) {
+	rules := rulesFromCtx(r)
+	if !canWrite(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	var req deleteObjectsReqXML
+	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid DeleteObjects payload")
+		return
+	}
+	if len(req.Objects) == 0 || len(req.Objects) > 1000 {
+		writeXMLError(w, http.StatusBadRequest, "MalformedXML", "DeleteObjects requires 1..1000 objects")
+		return
+	}
+
+	objects := make([]types.ObjectIdentifier, 0, len(req.Objects))
+	for i, obj := range req.Objects {
+		key := strings.TrimSpace(aws.ToString(obj.Key))
+		if key == "" {
+			writeXMLError(w, http.StatusBadRequest, "MalformedXML", fmt.Sprintf("DeleteObjects object[%d] missing Key", i))
+			return
+		}
+		item := types.ObjectIdentifier{Key: aws.String(key)}
+		if obj.VersionID != nil {
+			v := strings.TrimSpace(*obj.VersionID)
+			if v != "" {
+				item.VersionId = aws.String(v)
+			}
+		}
+		if obj.ETag != nil {
+			e := strings.TrimSpace(*obj.ETag)
+			if e != "" {
+				item.ETag = aws.String(e)
+			}
+		}
+		objects = append(objects, item)
+	}
+
+	in := &s3.DeleteObjectsInput{
+		Bucket: &bucket,
+		Delete: &types.Delete{
+			Objects: objects,
+			Quiet:   req.Quiet,
+		},
+	}
+	if bypass, set, err := parseOptionalBool(r.Header.Get("x-amz-bypass-governance-retention")); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-bypass-governance-retention header")
+		return
+	} else if set {
+		in.BypassGovernanceRetention = aws.Bool(bypass)
+	}
+	if mfa := strings.TrimSpace(r.Header.Get("x-amz-mfa")); mfa != "" {
+		in.MFA = aws.String(mfa)
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if payer, err := parseRequestPayerHeader(r.Header); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	} else if payer != "" {
+		in.RequestPayer = payer
+	}
+
+	out, err := s.up.DeleteObjects(r.Context(), in)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	if out.RequestCharged != "" {
+		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
+	}
+
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+	b.WriteString(`<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	for _, d := range out.Deleted {
+		b.WriteString("<Deleted>")
+		if d.Key != nil {
+			b.WriteString("<Key>" + xmlEscape(*d.Key) + "</Key>")
+		}
+		if d.VersionId != nil {
+			b.WriteString("<VersionId>" + xmlEscape(*d.VersionId) + "</VersionId>")
+		}
+		if d.DeleteMarker != nil {
+			b.WriteString("<DeleteMarker>" + boolString(*d.DeleteMarker) + "</DeleteMarker>")
+		}
+		if d.DeleteMarkerVersionId != nil {
+			b.WriteString("<DeleteMarkerVersionId>" + xmlEscape(*d.DeleteMarkerVersionId) + "</DeleteMarkerVersionId>")
+		}
+		b.WriteString("</Deleted>")
+	}
+	for _, e := range out.Errors {
+		b.WriteString("<Error>")
+		if e.Key != nil {
+			b.WriteString("<Key>" + xmlEscape(*e.Key) + "</Key>")
+		}
+		if e.VersionId != nil {
+			b.WriteString("<VersionId>" + xmlEscape(*e.VersionId) + "</VersionId>")
+		}
+		if e.Code != nil {
+			b.WriteString("<Code>" + xmlEscape(*e.Code) + "</Code>")
+		}
+		if e.Message != nil {
+			b.WriteString("<Message>" + xmlEscape(*e.Message) + "</Message>")
+		}
+		b.WriteString("</Error>")
+	}
+	b.WriteString(`</DeleteResult>`)
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(b.String()))
+}
+
+func (s *server) handleListObjectVersions(w http.ResponseWriter, r *http.Request, bucket string) {
+	rules := rulesFromCtx(r)
+	if !canRead(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	q := r.URL.Query()
+	in := &s3.ListObjectVersionsInput{Bucket: &bucket}
+	if v := q.Get("prefix"); v != "" {
+		in.Prefix = &v
+	}
+	if v := q.Get("delimiter"); v != "" {
+		in.Delimiter = &v
+	}
+	if v := q.Get("key-marker"); v != "" {
+		in.KeyMarker = &v
+	}
+	if v := q.Get("version-id-marker"); v != "" {
+		in.VersionIdMarker = &v
+	}
+	if v := q.Get("max-keys"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-keys")
+			return
+		}
+		in.MaxKeys = aws.Int32(int32(n))
+	}
+	if et, err := parseEncodingType(q.Get("encoding-type")); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid encoding-type")
+		return
+	} else if et != "" {
+		in.EncodingType = et
+	}
+	if attrs, err := parseOptionalObjectAttributes(q.Get("optional-object-attributes")); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid optional-object-attributes")
+		return
+	} else if len(attrs) > 0 {
+		in.OptionalObjectAttributes = attrs
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if payer, err := parseRequestPayerHeader(r.Header); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	} else if payer != "" {
+		in.RequestPayer = payer
+	}
+
+	out, err := s.up.ListObjectVersions(r.Context(), in)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	if out.RequestCharged != "" {
+		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
+	}
+
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+	b.WriteString(`<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	if out.Name != nil {
+		b.WriteString("<Name>" + xmlEscape(*out.Name) + "</Name>")
+	}
+	if out.Prefix != nil {
+		b.WriteString("<Prefix>" + xmlEscape(*out.Prefix) + "</Prefix>")
+	}
+	if out.KeyMarker != nil {
+		b.WriteString("<KeyMarker>" + xmlEscape(*out.KeyMarker) + "</KeyMarker>")
+	}
+	if out.VersionIdMarker != nil {
+		b.WriteString("<VersionIdMarker>" + xmlEscape(*out.VersionIdMarker) + "</VersionIdMarker>")
+	}
+	if out.NextKeyMarker != nil {
+		b.WriteString("<NextKeyMarker>" + xmlEscape(*out.NextKeyMarker) + "</NextKeyMarker>")
+	}
+	if out.NextVersionIdMarker != nil {
+		b.WriteString("<NextVersionIdMarker>" + xmlEscape(*out.NextVersionIdMarker) + "</NextVersionIdMarker>")
+	}
+	if out.Delimiter != nil {
+		b.WriteString("<Delimiter>" + xmlEscape(*out.Delimiter) + "</Delimiter>")
+	}
+	if out.MaxKeys != nil {
+		b.WriteString("<MaxKeys>" + strconv.Itoa(int(*out.MaxKeys)) + "</MaxKeys>")
+	}
+	if out.EncodingType != "" {
+		b.WriteString("<EncodingType>" + xmlEscape(string(out.EncodingType)) + "</EncodingType>")
+	}
+	b.WriteString("<IsTruncated>" + boolString(aws.ToBool(out.IsTruncated)) + "</IsTruncated>")
+	for _, cp := range out.CommonPrefixes {
+		if cp.Prefix == nil {
+			continue
+		}
+		b.WriteString("<CommonPrefixes><Prefix>" + xmlEscape(*cp.Prefix) + "</Prefix></CommonPrefixes>")
+	}
+	for _, v := range out.Versions {
+		b.WriteString("<Version>")
+		if v.Key != nil {
+			b.WriteString("<Key>" + xmlEscape(*v.Key) + "</Key>")
+		}
+		if v.VersionId != nil {
+			b.WriteString("<VersionId>" + xmlEscape(*v.VersionId) + "</VersionId>")
+		}
+		if v.IsLatest != nil {
+			b.WriteString("<IsLatest>" + boolString(*v.IsLatest) + "</IsLatest>")
+		}
+		if v.LastModified != nil {
+			b.WriteString("<LastModified>" + formatS3Time(*v.LastModified) + "</LastModified>")
+		}
+		if v.ETag != nil {
+			b.WriteString("<ETag>" + xmlEscape(*v.ETag) + "</ETag>")
+		}
+		if v.Size != nil {
+			b.WriteString("<Size>" + strconv.FormatInt(*v.Size, 10) + "</Size>")
+		}
+		if v.StorageClass != "" {
+			b.WriteString("<StorageClass>" + xmlEscape(string(v.StorageClass)) + "</StorageClass>")
+		}
+		if v.Owner != nil {
+			b.WriteString("<Owner>")
+			if v.Owner.ID != nil {
+				b.WriteString("<ID>" + xmlEscape(*v.Owner.ID) + "</ID>")
+			}
+			if v.Owner.DisplayName != nil {
+				b.WriteString("<DisplayName>" + xmlEscape(*v.Owner.DisplayName) + "</DisplayName>")
+			}
+			b.WriteString("</Owner>")
+		}
+		if v.RestoreStatus != nil {
+			b.WriteString("<RestoreStatus>")
+			if v.RestoreStatus.IsRestoreInProgress != nil {
+				b.WriteString("<IsRestoreInProgress>" + boolString(*v.RestoreStatus.IsRestoreInProgress) + "</IsRestoreInProgress>")
+			}
+			if v.RestoreStatus.RestoreExpiryDate != nil {
+				b.WriteString("<RestoreExpiryDate>" + formatS3Time(*v.RestoreStatus.RestoreExpiryDate) + "</RestoreExpiryDate>")
+			}
+			b.WriteString("</RestoreStatus>")
+		}
+		b.WriteString("</Version>")
+	}
+	for _, d := range out.DeleteMarkers {
+		b.WriteString("<DeleteMarker>")
+		if d.Key != nil {
+			b.WriteString("<Key>" + xmlEscape(*d.Key) + "</Key>")
+		}
+		if d.VersionId != nil {
+			b.WriteString("<VersionId>" + xmlEscape(*d.VersionId) + "</VersionId>")
+		}
+		if d.IsLatest != nil {
+			b.WriteString("<IsLatest>" + boolString(*d.IsLatest) + "</IsLatest>")
+		}
+		if d.LastModified != nil {
+			b.WriteString("<LastModified>" + formatS3Time(*d.LastModified) + "</LastModified>")
+		}
+		if d.Owner != nil {
+			b.WriteString("<Owner>")
+			if d.Owner.ID != nil {
+				b.WriteString("<ID>" + xmlEscape(*d.Owner.ID) + "</ID>")
+			}
+			if d.Owner.DisplayName != nil {
+				b.WriteString("<DisplayName>" + xmlEscape(*d.Owner.DisplayName) + "</DisplayName>")
+			}
+			b.WriteString("</Owner>")
+		}
+		b.WriteString("</DeleteMarker>")
+	}
+	b.WriteString(`</ListVersionsResult>`)
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(b.String()))
+}
+
 func (s *server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
 	if !canRead(rules, bucket) {
@@ -1834,35 +2544,149 @@ func (s *server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 		return
 	}
 
-	prefix := r.URL.Query().Get("prefix")
+	q := r.URL.Query()
 	in := &s3.ListObjectsV2Input{Bucket: &bucket}
-	if prefix != "" {
-		in.Prefix = &prefix
+	if v := q.Get("prefix"); v != "" {
+		in.Prefix = &v
 	}
+	if v := q.Get("delimiter"); v != "" {
+		in.Delimiter = &v
+	}
+	if v := q.Get("continuation-token"); v != "" {
+		in.ContinuationToken = &v
+	}
+	if v := q.Get("start-after"); v != "" {
+		in.StartAfter = &v
+	}
+	if v := q.Get("max-keys"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-keys")
+			return
+		}
+		in.MaxKeys = aws.Int32(int32(n))
+	}
+	if fetchOwner, set, err := parseOptionalBool(q.Get("fetch-owner")); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid fetch-owner")
+		return
+	} else if set {
+		in.FetchOwner = aws.Bool(fetchOwner)
+	}
+	if et, err := parseEncodingType(q.Get("encoding-type")); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid encoding-type")
+		return
+	} else if et != "" {
+		in.EncodingType = et
+	}
+	if attrs, err := parseOptionalObjectAttributes(q.Get("optional-object-attributes")); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid optional-object-attributes")
+		return
+	} else if len(attrs) > 0 {
+		in.OptionalObjectAttributes = attrs
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if payer, err := parseRequestPayerHeader(r.Header); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	} else if payer != "" {
+		in.RequestPayer = payer
+	}
+
 	out, err := s.up.ListObjectsV2(r.Context(), in)
 	if err != nil {
 		writeUpstreamError(w, err)
 		return
 	}
+	if out.RequestCharged != "" {
+		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
+	}
 
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
 	b.WriteString(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
-	b.WriteString("<Name>")
-	b.WriteString(xmlEscape(bucket))
-	b.WriteString("</Name>")
-	if prefix != "" {
-		b.WriteString("<Prefix>")
-		b.WriteString(xmlEscape(prefix))
-		b.WriteString("</Prefix>")
+	if out.Name != nil {
+		b.WriteString("<Name>" + xmlEscape(*out.Name) + "</Name>")
 	}
-	for _, o := range out.Contents {
-		if o.Key == nil {
+	if out.Prefix != nil {
+		b.WriteString("<Prefix>" + xmlEscape(*out.Prefix) + "</Prefix>")
+	}
+	if out.StartAfter != nil {
+		b.WriteString("<StartAfter>" + xmlEscape(*out.StartAfter) + "</StartAfter>")
+	}
+	if out.Delimiter != nil {
+		b.WriteString("<Delimiter>" + xmlEscape(*out.Delimiter) + "</Delimiter>")
+	}
+	if out.MaxKeys != nil {
+		b.WriteString("<MaxKeys>" + strconv.Itoa(int(*out.MaxKeys)) + "</MaxKeys>")
+	}
+	if out.KeyCount != nil {
+		b.WriteString("<KeyCount>" + strconv.Itoa(int(*out.KeyCount)) + "</KeyCount>")
+	}
+	if out.EncodingType != "" {
+		b.WriteString("<EncodingType>" + xmlEscape(string(out.EncodingType)) + "</EncodingType>")
+	}
+	if out.ContinuationToken != nil {
+		b.WriteString("<ContinuationToken>" + xmlEscape(*out.ContinuationToken) + "</ContinuationToken>")
+	}
+	if out.NextContinuationToken != nil {
+		b.WriteString("<NextContinuationToken>" + xmlEscape(*out.NextContinuationToken) + "</NextContinuationToken>")
+	}
+	b.WriteString("<IsTruncated>" + boolString(aws.ToBool(out.IsTruncated)) + "</IsTruncated>")
+	for _, cp := range out.CommonPrefixes {
+		if cp.Prefix == nil {
 			continue
 		}
-		b.WriteString("<Contents><Key>")
-		b.WriteString(xmlEscape(*o.Key))
-		b.WriteString("</Key></Contents>")
+		b.WriteString("<CommonPrefixes><Prefix>" + xmlEscape(*cp.Prefix) + "</Prefix></CommonPrefixes>")
+	}
+	for _, o := range out.Contents {
+		b.WriteString("<Contents>")
+		if o.Key != nil {
+			b.WriteString("<Key>" + xmlEscape(*o.Key) + "</Key>")
+		}
+		if o.LastModified != nil {
+			b.WriteString("<LastModified>" + formatS3Time(*o.LastModified) + "</LastModified>")
+		}
+		if o.ETag != nil {
+			b.WriteString("<ETag>" + xmlEscape(*o.ETag) + "</ETag>")
+		}
+		for _, c := range o.ChecksumAlgorithm {
+			if c == "" {
+				continue
+			}
+			b.WriteString("<ChecksumAlgorithm>" + xmlEscape(string(c)) + "</ChecksumAlgorithm>")
+		}
+		if o.ChecksumType != "" {
+			b.WriteString("<ChecksumType>" + xmlEscape(string(o.ChecksumType)) + "</ChecksumType>")
+		}
+		if o.Size != nil {
+			b.WriteString("<Size>" + strconv.FormatInt(*o.Size, 10) + "</Size>")
+		}
+		if o.StorageClass != "" {
+			b.WriteString("<StorageClass>" + xmlEscape(string(o.StorageClass)) + "</StorageClass>")
+		}
+		if o.Owner != nil {
+			b.WriteString("<Owner>")
+			if o.Owner.ID != nil {
+				b.WriteString("<ID>" + xmlEscape(*o.Owner.ID) + "</ID>")
+			}
+			if o.Owner.DisplayName != nil {
+				b.WriteString("<DisplayName>" + xmlEscape(*o.Owner.DisplayName) + "</DisplayName>")
+			}
+			b.WriteString("</Owner>")
+		}
+		if o.RestoreStatus != nil {
+			b.WriteString("<RestoreStatus>")
+			if o.RestoreStatus.IsRestoreInProgress != nil {
+				b.WriteString("<IsRestoreInProgress>" + boolString(*o.RestoreStatus.IsRestoreInProgress) + "</IsRestoreInProgress>")
+			}
+			if o.RestoreStatus.RestoreExpiryDate != nil {
+				b.WriteString("<RestoreExpiryDate>" + formatS3Time(*o.RestoreStatus.RestoreExpiryDate) + "</RestoreExpiryDate>")
+			}
+			b.WriteString("</RestoreStatus>")
+		}
+		b.WriteString("</Contents>")
 	}
 	b.WriteString(`</ListBucketResult>`)
 
@@ -2008,6 +2832,14 @@ func (s *server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 	if versionID := r.URL.Query().Get("versionId"); versionID != "" {
 		in.VersionId = &versionID
 	}
+	if partNumStr := strings.TrimSpace(r.URL.Query().Get("partNumber")); partNumStr != "" {
+		partNum, err := strconv.Atoi(partNumStr)
+		if err != nil || partNum <= 0 {
+			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid partNumber")
+			return
+		}
+		in.PartNumber = aws.Int32(int32(partNum))
+	}
 	if rng := r.Header.Get("Range"); rng != "" {
 		in.Range = &rng
 	}
@@ -2045,6 +2877,39 @@ func (s *server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 		in.SSECustomerKey = ssecKey
 		in.SSECustomerKeyMD5 = ssecMD5
 	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if payer, err := parseRequestPayerHeader(r.Header); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	} else if payer != "" {
+		in.RequestPayer = payer
+	}
+	q := r.URL.Query()
+	if v := q.Get("response-cache-control"); v != "" {
+		in.ResponseCacheControl = aws.String(v)
+	}
+	if v := q.Get("response-content-disposition"); v != "" {
+		in.ResponseContentDisposition = aws.String(v)
+	}
+	if v := q.Get("response-content-encoding"); v != "" {
+		in.ResponseContentEncoding = aws.String(v)
+	}
+	if v := q.Get("response-content-language"); v != "" {
+		in.ResponseContentLanguage = aws.String(v)
+	}
+	if v := q.Get("response-content-type"); v != "" {
+		in.ResponseContentType = aws.String(v)
+	}
+	if v := q.Get("response-expires"); v != "" {
+		t, err := parseOptionalHTTPTime(v)
+		if err != nil || t == nil {
+			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid response-expires")
+			return
+		}
+		in.ResponseExpires = t
+	}
 
 	out, err := s.up.GetObject(r.Context(), in)
 	if err != nil {
@@ -2077,6 +2942,65 @@ func (s *server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 	}
 	if out.Expires != nil {
 		w.Header().Set("Expires", out.Expires.UTC().Format(http.TimeFormat))
+	} else if out.ExpiresString != nil {
+		w.Header().Set("Expires", *out.ExpiresString)
+	}
+	if out.AcceptRanges != nil {
+		w.Header().Set("Accept-Ranges", *out.AcceptRanges)
+	}
+	if out.CacheControl != nil {
+		w.Header().Set("Cache-Control", *out.CacheControl)
+	}
+	if out.ContentDisposition != nil {
+		w.Header().Set("Content-Disposition", *out.ContentDisposition)
+	}
+	if out.ContentEncoding != nil {
+		w.Header().Set("Content-Encoding", *out.ContentEncoding)
+	}
+	if out.ContentLanguage != nil {
+		w.Header().Set("Content-Language", *out.ContentLanguage)
+	}
+	if out.StorageClass != "" {
+		w.Header().Set("x-amz-storage-class", string(out.StorageClass))
+	}
+	if out.ServerSideEncryption != "" {
+		w.Header().Set("x-amz-server-side-encryption", string(out.ServerSideEncryption))
+	}
+	if out.SSEKMSKeyId != nil {
+		w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", *out.SSEKMSKeyId)
+	}
+	if out.SSECustomerAlgorithm != nil {
+		w.Header().Set("x-amz-server-side-encryption-customer-algorithm", *out.SSECustomerAlgorithm)
+	}
+	if out.SSECustomerKeyMD5 != nil {
+		w.Header().Set("x-amz-server-side-encryption-customer-key-MD5", *out.SSECustomerKeyMD5)
+	}
+	if out.BucketKeyEnabled != nil {
+		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", boolString(*out.BucketKeyEnabled))
+	}
+	if out.Expiration != nil {
+		w.Header().Set("x-amz-expiration", *out.Expiration)
+	}
+	if out.Restore != nil {
+		w.Header().Set("x-amz-restore", *out.Restore)
+	}
+	if out.WebsiteRedirectLocation != nil {
+		w.Header().Set("x-amz-website-redirect-location", *out.WebsiteRedirectLocation)
+	}
+	if out.ReplicationStatus != "" {
+		w.Header().Set("x-amz-replication-status", string(out.ReplicationStatus))
+	}
+	if out.TagCount != nil {
+		w.Header().Set("x-amz-tagging-count", strconv.Itoa(int(*out.TagCount)))
+	}
+	if out.PartsCount != nil {
+		w.Header().Set("x-amz-mp-parts-count", strconv.Itoa(int(*out.PartsCount)))
+	}
+	if out.MissingMeta != nil {
+		w.Header().Set("x-amz-missing-meta", strconv.Itoa(int(*out.MissingMeta)))
+	}
+	if out.RequestCharged != "" {
+		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 	if out.ChecksumCRC32 != nil {
 		w.Header().Set("x-amz-checksum-crc32", *out.ChecksumCRC32)
@@ -2093,6 +3017,9 @@ func (s *server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 	if out.ChecksumSHA256 != nil {
 		w.Header().Set("x-amz-checksum-sha256", *out.ChecksumSHA256)
 	}
+	if out.ChecksumType != "" {
+		w.Header().Set("x-amz-checksum-type", string(out.ChecksumType))
+	}
 	for k, v := range out.Metadata {
 		w.Header().Set("x-amz-meta-"+k, v)
 	}
@@ -2102,6 +3029,218 @@ func (s *server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 	}
 	w.WriteHeader(status)
 	_, _ = io.Copy(w, out.Body)
+}
+
+func (s *server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	rules := rulesFromCtx(r)
+	if !canRead(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	in := &s3.HeadObjectInput{Bucket: &bucket, Key: &key}
+	q := r.URL.Query()
+	if versionID := q.Get("versionId"); versionID != "" {
+		in.VersionId = &versionID
+	}
+	if partNumStr := strings.TrimSpace(q.Get("partNumber")); partNumStr != "" {
+		partNum, err := strconv.Atoi(partNumStr)
+		if err != nil || partNum <= 0 {
+			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid partNumber")
+			return
+		}
+		in.PartNumber = aws.Int32(int32(partNum))
+	}
+	if rng := r.Header.Get("Range"); rng != "" {
+		in.Range = &rng
+	}
+	if ifMatch := strings.TrimSpace(r.Header.Get("If-Match")); ifMatch != "" {
+		in.IfMatch = &ifMatch
+	}
+	if ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match")); ifNoneMatch != "" {
+		in.IfNoneMatch = &ifNoneMatch
+	}
+	if t, err := parseOptionalHTTPTime(r.Header.Get("If-Modified-Since")); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid If-Modified-Since header")
+		return
+	} else if t != nil {
+		in.IfModifiedSince = t
+	}
+	if t, err := parseOptionalHTTPTime(r.Header.Get("If-Unmodified-Since")); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid If-Unmodified-Since header")
+		return
+	} else if t != nil {
+		in.IfUnmodifiedSince = t
+	}
+	if mode, err := parseChecksumMode(r.Header.Get("x-amz-checksum-mode")); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-checksum-mode header")
+		return
+	} else if mode != "" {
+		in.ChecksumMode = mode
+	}
+	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := parseSSECustomerHeaders(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
+		return
+	}
+	if hasSSEC {
+		in.SSECustomerAlgorithm = ssecAlgo
+		in.SSECustomerKey = ssecKey
+		in.SSECustomerKeyMD5 = ssecMD5
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if payer, err := parseRequestPayerHeader(r.Header); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	} else if payer != "" {
+		in.RequestPayer = payer
+	}
+	if v := q.Get("response-cache-control"); v != "" {
+		in.ResponseCacheControl = aws.String(v)
+	}
+	if v := q.Get("response-content-disposition"); v != "" {
+		in.ResponseContentDisposition = aws.String(v)
+	}
+	if v := q.Get("response-content-encoding"); v != "" {
+		in.ResponseContentEncoding = aws.String(v)
+	}
+	if v := q.Get("response-content-language"); v != "" {
+		in.ResponseContentLanguage = aws.String(v)
+	}
+	if v := q.Get("response-content-type"); v != "" {
+		in.ResponseContentType = aws.String(v)
+	}
+	if v := q.Get("response-expires"); v != "" {
+		t, err := parseOptionalHTTPTime(v)
+		if err != nil || t == nil {
+			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid response-expires")
+			return
+		}
+		in.ResponseExpires = t
+	}
+
+	out, err := s.up.HeadObject(r.Context(), in)
+	if err != nil {
+		writeUpstreamHeadError(w, err)
+		return
+	}
+
+	if out.AcceptRanges != nil {
+		w.Header().Set("Accept-Ranges", *out.AcceptRanges)
+	}
+	if out.ETag != nil {
+		w.Header().Set("ETag", *out.ETag)
+	}
+	if out.LastModified != nil {
+		w.Header().Set("Last-Modified", out.LastModified.UTC().Format(http.TimeFormat))
+	}
+	if out.ContentType != nil {
+		w.Header().Set("Content-Type", *out.ContentType)
+	}
+	if out.ContentLength != nil {
+		w.Header().Set("Content-Length", strconv.FormatInt(*out.ContentLength, 10))
+	}
+	if out.ContentRange != nil {
+		w.Header().Set("Content-Range", *out.ContentRange)
+	}
+	if out.CacheControl != nil {
+		w.Header().Set("Cache-Control", *out.CacheControl)
+	}
+	if out.ContentDisposition != nil {
+		w.Header().Set("Content-Disposition", *out.ContentDisposition)
+	}
+	if out.ContentEncoding != nil {
+		w.Header().Set("Content-Encoding", *out.ContentEncoding)
+	}
+	if out.ContentLanguage != nil {
+		w.Header().Set("Content-Language", *out.ContentLanguage)
+	}
+	if out.Expires != nil {
+		w.Header().Set("Expires", out.Expires.UTC().Format(http.TimeFormat))
+	} else if out.ExpiresString != nil {
+		w.Header().Set("Expires", *out.ExpiresString)
+	}
+	if out.VersionId != nil {
+		w.Header().Set("x-amz-version-id", *out.VersionId)
+	}
+	if out.DeleteMarker != nil {
+		w.Header().Set("x-amz-delete-marker", boolString(*out.DeleteMarker))
+	}
+	if out.StorageClass != "" {
+		w.Header().Set("x-amz-storage-class", string(out.StorageClass))
+	}
+	if out.ServerSideEncryption != "" {
+		w.Header().Set("x-amz-server-side-encryption", string(out.ServerSideEncryption))
+	}
+	if out.SSEKMSKeyId != nil {
+		w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", *out.SSEKMSKeyId)
+	}
+	if out.SSECustomerAlgorithm != nil {
+		w.Header().Set("x-amz-server-side-encryption-customer-algorithm", *out.SSECustomerAlgorithm)
+	}
+	if out.SSECustomerKeyMD5 != nil {
+		w.Header().Set("x-amz-server-side-encryption-customer-key-MD5", *out.SSECustomerKeyMD5)
+	}
+	if out.BucketKeyEnabled != nil {
+		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", boolString(*out.BucketKeyEnabled))
+	}
+	if out.Expiration != nil {
+		w.Header().Set("x-amz-expiration", *out.Expiration)
+	}
+	if out.Restore != nil {
+		w.Header().Set("x-amz-restore", *out.Restore)
+	}
+	if out.WebsiteRedirectLocation != nil {
+		w.Header().Set("x-amz-website-redirect-location", *out.WebsiteRedirectLocation)
+	}
+	if out.ReplicationStatus != "" {
+		w.Header().Set("x-amz-replication-status", string(out.ReplicationStatus))
+	}
+	if out.TagCount != nil {
+		w.Header().Set("x-amz-tagging-count", strconv.Itoa(int(*out.TagCount)))
+	}
+	if out.PartsCount != nil {
+		w.Header().Set("x-amz-mp-parts-count", strconv.Itoa(int(*out.PartsCount)))
+	}
+	if out.MissingMeta != nil {
+		w.Header().Set("x-amz-missing-meta", strconv.Itoa(int(*out.MissingMeta)))
+	}
+	if out.ObjectLockMode != "" {
+		w.Header().Set("x-amz-object-lock-mode", string(out.ObjectLockMode))
+	}
+	if out.ObjectLockLegalHoldStatus != "" {
+		w.Header().Set("x-amz-object-lock-legal-hold", string(out.ObjectLockLegalHoldStatus))
+	}
+	if out.ObjectLockRetainUntilDate != nil {
+		w.Header().Set("x-amz-object-lock-retain-until-date", out.ObjectLockRetainUntilDate.UTC().Format(time.RFC3339))
+	}
+	if out.RequestCharged != "" {
+		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
+	}
+	if out.ChecksumCRC32 != nil {
+		w.Header().Set("x-amz-checksum-crc32", *out.ChecksumCRC32)
+	}
+	if out.ChecksumCRC32C != nil {
+		w.Header().Set("x-amz-checksum-crc32c", *out.ChecksumCRC32C)
+	}
+	if out.ChecksumCRC64NVME != nil {
+		w.Header().Set("x-amz-checksum-crc64nvme", *out.ChecksumCRC64NVME)
+	}
+	if out.ChecksumSHA1 != nil {
+		w.Header().Set("x-amz-checksum-sha1", *out.ChecksumSHA1)
+	}
+	if out.ChecksumSHA256 != nil {
+		w.Header().Set("x-amz-checksum-sha256", *out.ChecksumSHA256)
+	}
+	if out.ChecksumType != "" {
+		w.Header().Set("x-amz-checksum-type", string(out.ChecksumType))
+	}
+	for k, v := range out.Metadata {
+		w.Header().Set("x-amz-meta-"+k, v)
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func parseObjectAttributesHeader(h http.Header) ([]types.ObjectAttributes, error) {
@@ -2295,11 +3434,6 @@ func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		return
 	}
 
-	if strings.TrimSpace(r.Header.Get("x-amz-copy-source")) != "" {
-		writeXMLError(w, http.StatusNotImplemented, "NotImplemented", "CopyObject is not implemented")
-		return
-	}
-
 	body, cl, err := decodeBodyForS3Write(r)
 	if err != nil {
 		writeXMLError(w, http.StatusLengthRequired, "MissingContentLength", "Content-Length required")
@@ -2340,6 +3474,12 @@ func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "Content-MD5 cannot be combined with x-amz-checksum-algorithm")
 		return
 	}
+	expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner"))
+	payer, err := parseRequestPayerHeader(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	}
 
 	in := &s3.PutObjectInput{
 		Bucket:        &bucket,
@@ -2356,6 +3496,12 @@ func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 	}
 	if ifNoneMatch != "" {
 		in.IfNoneMatch = aws.String(ifNoneMatch)
+	}
+	if expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if payer != "" {
+		in.RequestPayer = payer
 	}
 	if contentMD5 != "" {
 		in.ContentMD5 = aws.String(contentMD5)
@@ -2391,7 +3537,419 @@ func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 	if out.ETag != nil {
 		w.Header().Set("ETag", *out.ETag)
 	}
+	if out.VersionId != nil {
+		w.Header().Set("x-amz-version-id", *out.VersionId)
+	}
+	if out.ServerSideEncryption != "" {
+		w.Header().Set("x-amz-server-side-encryption", string(out.ServerSideEncryption))
+	}
+	if out.SSEKMSKeyId != nil {
+		w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", *out.SSEKMSKeyId)
+	}
+	if out.SSEKMSEncryptionContext != nil {
+		w.Header().Set("x-amz-server-side-encryption-context", *out.SSEKMSEncryptionContext)
+	}
+	if out.SSECustomerAlgorithm != nil {
+		w.Header().Set("x-amz-server-side-encryption-customer-algorithm", *out.SSECustomerAlgorithm)
+	}
+	if out.SSECustomerKeyMD5 != nil {
+		w.Header().Set("x-amz-server-side-encryption-customer-key-MD5", *out.SSECustomerKeyMD5)
+	}
+	if out.BucketKeyEnabled != nil {
+		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", boolString(*out.BucketKeyEnabled))
+	}
+	if out.Expiration != nil {
+		w.Header().Set("x-amz-expiration", *out.Expiration)
+	}
+	if out.RequestCharged != "" {
+		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
+	}
+	if out.ChecksumCRC32 != nil {
+		w.Header().Set("x-amz-checksum-crc32", *out.ChecksumCRC32)
+	}
+	if out.ChecksumCRC32C != nil {
+		w.Header().Set("x-amz-checksum-crc32c", *out.ChecksumCRC32C)
+	}
+	if out.ChecksumCRC64NVME != nil {
+		w.Header().Set("x-amz-checksum-crc64nvme", *out.ChecksumCRC64NVME)
+	}
+	if out.ChecksumSHA1 != nil {
+		w.Header().Set("x-amz-checksum-sha1", *out.ChecksumSHA1)
+	}
+	if out.ChecksumSHA256 != nil {
+		w.Header().Set("x-amz-checksum-sha256", *out.ChecksumSHA256)
+	}
+	if out.ChecksumType != "" {
+		w.Header().Set("x-amz-checksum-type", string(out.ChecksumType))
+	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	rules := rulesFromCtx(r)
+	if !canWrite(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	copySource := strings.TrimSpace(r.Header.Get("x-amz-copy-source"))
+	if copySource == "" {
+		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "x-amz-copy-source is required")
+		return
+	}
+
+	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
+	ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))
+	if ifMatch != "" && ifNoneMatch != "" {
+		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "If-Match and If-None-Match cannot both be set")
+		return
+	}
+
+	sse, err := parseSSEWriteHeaders(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid server-side encryption headers")
+		return
+	}
+	copySSECAlgo, copySSECKey, copySSECMD5, hasCopySSEC, err := parseCopySourceSSECustomerHeaders(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source SSE-C headers")
+		return
+	}
+	checksumAlgorithm, err := parseChecksumAlgorithmHeader(r.Header.Get("x-amz-checksum-algorithm"))
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum algorithm")
+		return
+	}
+
+	metadataDirective, err := parseMetadataDirective(r.Header.Get("x-amz-metadata-directive"))
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-metadata-directive header")
+		return
+	}
+	taggingDirective, err := parseTaggingDirective(r.Header.Get("x-amz-tagging-directive"))
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-tagging-directive header")
+		return
+	}
+	storageClass, err := parseStorageClass(r.Header.Get("x-amz-storage-class"))
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-storage-class header")
+		return
+	}
+	acl, err := parseObjectCannedACL(r.Header.Get("x-amz-acl"))
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-acl header")
+		return
+	}
+	payer, err := parseRequestPayerHeader(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	}
+
+	copyIfMatch, copyIfNoneMatch, copyIfModifiedSince, copyIfUnmodifiedSince, err := parseCopySourceConditionalHeaders(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source conditional header")
+		return
+	}
+	expires, err := parseExpiresHeader(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid Expires header")
+		return
+	}
+
+	in := &s3.CopyObjectInput{
+		Bucket:     &bucket,
+		Key:        &key,
+		CopySource: aws.String(copySource),
+		Metadata:   extractAmzMeta(r.Header),
+		Expires:    expires,
+	}
+	if ifMatch != "" {
+		in.IfMatch = aws.String(ifMatch)
+	}
+	if ifNoneMatch != "" {
+		in.IfNoneMatch = aws.String(ifNoneMatch)
+	}
+	if copyIfMatch != nil {
+		in.CopySourceIfMatch = copyIfMatch
+	}
+	if copyIfNoneMatch != nil {
+		in.CopySourceIfNoneMatch = copyIfNoneMatch
+	}
+	if copyIfModifiedSince != nil {
+		in.CopySourceIfModifiedSince = copyIfModifiedSince
+	}
+	if copyIfUnmodifiedSince != nil {
+		in.CopySourceIfUnmodifiedSince = copyIfUnmodifiedSince
+	}
+	if hasCopySSEC {
+		in.CopySourceSSECustomerAlgorithm = copySSECAlgo
+		in.CopySourceSSECustomerKey = copySSECKey
+		in.CopySourceSSECustomerKeyMD5 = copySSECMD5
+	}
+	if metadataDirective != "" {
+		in.MetadataDirective = metadataDirective
+	}
+	if taggingDirective != "" {
+		in.TaggingDirective = taggingDirective
+	}
+	if tagging := strings.TrimSpace(r.Header.Get("x-amz-tagging")); tagging != "" {
+		in.Tagging = aws.String(tagging)
+	}
+	if storageClass != "" {
+		in.StorageClass = storageClass
+	}
+	if acl != "" {
+		in.ACL = acl
+	}
+	if checksumAlgorithm != "" {
+		in.ChecksumAlgorithm = checksumAlgorithm
+	}
+	if ct := strings.TrimSpace(r.Header.Get("Content-Type")); ct != "" {
+		in.ContentType = aws.String(ct)
+	}
+	if cc := strings.TrimSpace(r.Header.Get("Cache-Control")); cc != "" {
+		in.CacheControl = aws.String(cc)
+	}
+	if cd := strings.TrimSpace(r.Header.Get("Content-Disposition")); cd != "" {
+		in.ContentDisposition = aws.String(cd)
+	}
+	if ce := strings.TrimSpace(r.Header.Get("Content-Encoding")); ce != "" {
+		in.ContentEncoding = aws.String(ce)
+	}
+	if cl := strings.TrimSpace(r.Header.Get("Content-Language")); cl != "" {
+		in.ContentLanguage = aws.String(cl)
+	}
+	if redirect := strings.TrimSpace(r.Header.Get("x-amz-website-redirect-location")); redirect != "" {
+		in.WebsiteRedirectLocation = aws.String(redirect)
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if sourceExpectedOwner := strings.TrimSpace(r.Header.Get("x-amz-source-expected-bucket-owner")); sourceExpectedOwner != "" {
+		in.ExpectedSourceBucketOwner = aws.String(sourceExpectedOwner)
+	}
+	if payer != "" {
+		in.RequestPayer = payer
+	}
+	if sse.ServerSideEncryption != "" {
+		in.ServerSideEncryption = sse.ServerSideEncryption
+	}
+	in.SSEKMSKeyId = sse.SSEKMSKeyID
+	in.SSEKMSEncryptionContext = sse.SSEKMSEncryptionContext
+	in.SSECustomerAlgorithm = sse.SSECustomerAlgorithm
+	in.SSECustomerKey = sse.SSECustomerKey
+	in.SSECustomerKeyMD5 = sse.SSECustomerKeyMD5
+
+	out, err := s.up.CopyObject(r.Context(), in)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+
+	if out.VersionId != nil {
+		w.Header().Set("x-amz-version-id", *out.VersionId)
+	}
+	if out.CopySourceVersionId != nil {
+		w.Header().Set("x-amz-copy-source-version-id", *out.CopySourceVersionId)
+	}
+	if out.ServerSideEncryption != "" {
+		w.Header().Set("x-amz-server-side-encryption", string(out.ServerSideEncryption))
+	}
+	if out.SSEKMSKeyId != nil {
+		w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", *out.SSEKMSKeyId)
+	}
+	if out.SSEKMSEncryptionContext != nil {
+		w.Header().Set("x-amz-server-side-encryption-context", *out.SSEKMSEncryptionContext)
+	}
+	if out.SSECustomerAlgorithm != nil {
+		w.Header().Set("x-amz-server-side-encryption-customer-algorithm", *out.SSECustomerAlgorithm)
+	}
+	if out.SSECustomerKeyMD5 != nil {
+		w.Header().Set("x-amz-server-side-encryption-customer-key-MD5", *out.SSECustomerKeyMD5)
+	}
+	if out.BucketKeyEnabled != nil {
+		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", boolString(*out.BucketKeyEnabled))
+	}
+	if out.Expiration != nil {
+		w.Header().Set("x-amz-expiration", *out.Expiration)
+	}
+	if out.RequestCharged != "" {
+		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
+	}
+
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+	b.WriteString(`<CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	if out.CopyObjectResult != nil {
+		if out.CopyObjectResult.LastModified != nil {
+			b.WriteString("<LastModified>" + formatS3Time(*out.CopyObjectResult.LastModified) + "</LastModified>")
+		}
+		if out.CopyObjectResult.ETag != nil {
+			b.WriteString("<ETag>" + xmlEscape(*out.CopyObjectResult.ETag) + "</ETag>")
+		}
+		if out.CopyObjectResult.ChecksumCRC32 != nil {
+			b.WriteString("<ChecksumCRC32>" + xmlEscape(*out.CopyObjectResult.ChecksumCRC32) + "</ChecksumCRC32>")
+		}
+		if out.CopyObjectResult.ChecksumCRC32C != nil {
+			b.WriteString("<ChecksumCRC32C>" + xmlEscape(*out.CopyObjectResult.ChecksumCRC32C) + "</ChecksumCRC32C>")
+		}
+		if out.CopyObjectResult.ChecksumCRC64NVME != nil {
+			b.WriteString("<ChecksumCRC64NVME>" + xmlEscape(*out.CopyObjectResult.ChecksumCRC64NVME) + "</ChecksumCRC64NVME>")
+		}
+		if out.CopyObjectResult.ChecksumSHA1 != nil {
+			b.WriteString("<ChecksumSHA1>" + xmlEscape(*out.CopyObjectResult.ChecksumSHA1) + "</ChecksumSHA1>")
+		}
+		if out.CopyObjectResult.ChecksumSHA256 != nil {
+			b.WriteString("<ChecksumSHA256>" + xmlEscape(*out.CopyObjectResult.ChecksumSHA256) + "</ChecksumSHA256>")
+		}
+		if out.CopyObjectResult.ChecksumType != "" {
+			b.WriteString("<ChecksumType>" + xmlEscape(string(out.CopyObjectResult.ChecksumType)) + "</ChecksumType>")
+		}
+	}
+	b.WriteString(`</CopyObjectResult>`)
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(b.String()))
+}
+
+func (s *server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string, partNumber int32) {
+	rules := rulesFromCtx(r)
+	if !canWrite(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	copySource := strings.TrimSpace(r.Header.Get("x-amz-copy-source"))
+	if copySource == "" {
+		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "x-amz-copy-source is required")
+		return
+	}
+
+	copyIfMatch, copyIfNoneMatch, copyIfModifiedSince, copyIfUnmodifiedSince, err := parseCopySourceConditionalHeaders(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source conditional header")
+		return
+	}
+	copySSECAlgo, copySSECKey, copySSECMD5, hasCopySSEC, err := parseCopySourceSSECustomerHeaders(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source SSE-C headers")
+		return
+	}
+	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := parseSSECustomerHeaders(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
+		return
+	}
+	payer, err := parseRequestPayerHeader(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	}
+
+	in := &s3.UploadPartCopyInput{
+		Bucket:     &bucket,
+		Key:        &key,
+		UploadId:   &uploadID,
+		PartNumber: aws.Int32(partNumber),
+		CopySource: aws.String(copySource),
+	}
+	if copyIfMatch != nil {
+		in.CopySourceIfMatch = copyIfMatch
+	}
+	if copyIfNoneMatch != nil {
+		in.CopySourceIfNoneMatch = copyIfNoneMatch
+	}
+	if copyIfModifiedSince != nil {
+		in.CopySourceIfModifiedSince = copyIfModifiedSince
+	}
+	if copyIfUnmodifiedSince != nil {
+		in.CopySourceIfUnmodifiedSince = copyIfUnmodifiedSince
+	}
+	if copySourceRange := strings.TrimSpace(r.Header.Get("x-amz-copy-source-range")); copySourceRange != "" {
+		in.CopySourceRange = aws.String(copySourceRange)
+	}
+	if hasCopySSEC {
+		in.CopySourceSSECustomerAlgorithm = copySSECAlgo
+		in.CopySourceSSECustomerKey = copySSECKey
+		in.CopySourceSSECustomerKeyMD5 = copySSECMD5
+	}
+	if hasSSEC {
+		in.SSECustomerAlgorithm = ssecAlgo
+		in.SSECustomerKey = ssecKey
+		in.SSECustomerKeyMD5 = ssecMD5
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if sourceExpectedOwner := strings.TrimSpace(r.Header.Get("x-amz-source-expected-bucket-owner")); sourceExpectedOwner != "" {
+		in.ExpectedSourceBucketOwner = aws.String(sourceExpectedOwner)
+	}
+	if payer != "" {
+		in.RequestPayer = payer
+	}
+
+	out, err := s.up.UploadPartCopy(r.Context(), in)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+
+	if out.CopySourceVersionId != nil {
+		w.Header().Set("x-amz-copy-source-version-id", *out.CopySourceVersionId)
+	}
+	if out.ServerSideEncryption != "" {
+		w.Header().Set("x-amz-server-side-encryption", string(out.ServerSideEncryption))
+	}
+	if out.SSEKMSKeyId != nil {
+		w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", *out.SSEKMSKeyId)
+	}
+	if out.SSECustomerAlgorithm != nil {
+		w.Header().Set("x-amz-server-side-encryption-customer-algorithm", *out.SSECustomerAlgorithm)
+	}
+	if out.SSECustomerKeyMD5 != nil {
+		w.Header().Set("x-amz-server-side-encryption-customer-key-MD5", *out.SSECustomerKeyMD5)
+	}
+	if out.BucketKeyEnabled != nil {
+		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", boolString(*out.BucketKeyEnabled))
+	}
+	if out.RequestCharged != "" {
+		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
+	}
+
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+	b.WriteString(`<CopyPartResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	if out.CopyPartResult != nil {
+		if out.CopyPartResult.LastModified != nil {
+			b.WriteString("<LastModified>" + formatS3Time(*out.CopyPartResult.LastModified) + "</LastModified>")
+		}
+		if out.CopyPartResult.ETag != nil {
+			b.WriteString("<ETag>" + xmlEscape(*out.CopyPartResult.ETag) + "</ETag>")
+		}
+		if out.CopyPartResult.ChecksumCRC32 != nil {
+			b.WriteString("<ChecksumCRC32>" + xmlEscape(*out.CopyPartResult.ChecksumCRC32) + "</ChecksumCRC32>")
+		}
+		if out.CopyPartResult.ChecksumCRC32C != nil {
+			b.WriteString("<ChecksumCRC32C>" + xmlEscape(*out.CopyPartResult.ChecksumCRC32C) + "</ChecksumCRC32C>")
+		}
+		if out.CopyPartResult.ChecksumCRC64NVME != nil {
+			b.WriteString("<ChecksumCRC64NVME>" + xmlEscape(*out.CopyPartResult.ChecksumCRC64NVME) + "</ChecksumCRC64NVME>")
+		}
+		if out.CopyPartResult.ChecksumSHA1 != nil {
+			b.WriteString("<ChecksumSHA1>" + xmlEscape(*out.CopyPartResult.ChecksumSHA1) + "</ChecksumSHA1>")
+		}
+		if out.CopyPartResult.ChecksumSHA256 != nil {
+			b.WriteString("<ChecksumSHA256>" + xmlEscape(*out.CopyPartResult.ChecksumSHA256) + "</ChecksumSHA256>")
+		}
+	}
+	b.WriteString(`</CopyPartResult>`)
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(b.String()))
 }
 
 func (s *server) handleDeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
@@ -2411,11 +3969,35 @@ func (s *server) handleDeleteObject(w http.ResponseWriter, r *http.Request, buck
 	if ifMatch := strings.TrimSpace(r.Header.Get("If-Match")); ifMatch != "" {
 		in.IfMatch = &ifMatch
 	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if bypass, set, err := parseOptionalBool(r.Header.Get("x-amz-bypass-governance-retention")); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-bypass-governance-retention header")
+		return
+	} else if set {
+		in.BypassGovernanceRetention = aws.Bool(bypass)
+	}
+	if payer, err := parseRequestPayerHeader(r.Header); err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	} else if payer != "" {
+		in.RequestPayer = payer
+	}
 
-	_, err := s.up.DeleteObject(r.Context(), in)
+	out, err := s.up.DeleteObject(r.Context(), in)
 	if err != nil {
 		writeUpstreamError(w, err)
 		return
+	}
+	if out.DeleteMarker != nil {
+		w.Header().Set("x-amz-delete-marker", boolString(*out.DeleteMarker))
+	}
+	if out.VersionId != nil {
+		w.Header().Set("x-amz-version-id", *out.VersionId)
+	}
+	if out.RequestCharged != "" {
+		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

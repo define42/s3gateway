@@ -1591,6 +1591,558 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 	}
 }
 
+type integrationEnv struct {
+	ctx            context.Context
+	cfg            Config
+	rwClient       *s3.Client
+	roClient       *s3.Client
+	upstreamClient *s3.Client
+	cleanup        func()
+}
+
+func setupIntegrationEnv(t *testing.T) *integrationEnv {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ldapCfgPath := writeGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+
+	cfg := Config{
+		LDAPURL:                ldapURL,
+		BaseDN:                 "dc=glauth,dc=com",
+		GroupTTL:               30 * time.Second,
+		UpstreamEndpoint:       minioURL,
+		UpstreamRegion:         "us-east-1",
+		UpstreamAccessKey:      "minioadmin",
+		UpstreamSecretKey:      "minioadmin",
+		UpstreamForcePathStyle: true,
+		SigV4Secret:            "password",
+		SigV4Service:           "s3",
+	}
+
+	up, err := newUpstreamS3(ctx, cfg)
+	if err != nil {
+		stopMinio()
+		stopLDAP()
+		cancel()
+		t.Fatalf("init upstream s3: %v", err)
+	}
+	gw := &server{
+		cfg:    cfg,
+		up:     up,
+		gcache: newGroupCache(cfg.GroupTTL),
+	}
+	gwSrv := httptest.NewServer(gw.withAuth(gw))
+
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+
+	env := &integrationEnv{
+		ctx:            ctx,
+		cfg:            cfg,
+		rwClient:       rwClient,
+		roClient:       roClient,
+		upstreamClient: upstreamClient,
+	}
+	env.cleanup = func() {
+		gwSrv.Close()
+		stopMinio()
+		stopLDAP()
+		cancel()
+	}
+	t.Cleanup(env.cleanup)
+	return env
+}
+
+func TestLdapS3upstreamHeadAndDeleteBucket(t *testing.T) {
+	env := setupIntegrationEnv(t)
+	bucket := fmt.Sprintf("team2-head-%d", time.Now().UnixNano())
+	key := "head/object.txt"
+	body := []byte("head object payload")
+
+	if _, err := env.rwClient.CreateBucket(env.ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("create bucket via gateway: %v", err)
+	}
+	if _, err := env.rwClient.HeadBucket(env.ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("head bucket via gateway rw: %v", err)
+	}
+	if _, err := env.roClient.HeadBucket(env.ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("head bucket via gateway readonly: %v", err)
+	}
+
+	if _, err := env.rwClient.PutObject(env.ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(key),
+		Body:          bytes.NewReader(body),
+		ContentLength: aws.Int64(int64(len(body))),
+		ContentType:   aws.String("text/plain"),
+	}); err != nil {
+		t.Fatalf("put object via gateway: %v", err)
+	}
+
+	rwHead, err := env.rwClient.HeadObject(env.ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("head object via gateway rw: %v", err)
+	}
+	if aws.ToInt64(rwHead.ContentLength) != int64(len(body)) {
+		t.Fatalf("head object content length mismatch: got=%d want=%d", aws.ToInt64(rwHead.ContentLength), len(body))
+	}
+	if rwHead.ETag == nil || *rwHead.ETag == "" {
+		t.Fatalf("head object should include ETag")
+	}
+	roHead, err := env.roClient.HeadObject(env.ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("head object via gateway readonly: %v", err)
+	}
+	if aws.ToInt64(roHead.ContentLength) != int64(len(body)) {
+		t.Fatalf("readonly head object content length mismatch: got=%d want=%d", aws.ToInt64(roHead.ContentLength), len(body))
+	}
+
+	if _, err := env.roClient.DeleteBucket(env.ctx, &s3.DeleteBucketInput{
+		Bucket: aws.String(bucket),
+	}); err == nil {
+		t.Fatalf("expected readonly DeleteBucket to fail")
+	}
+
+	if _, err := env.rwClient.DeleteObject(env.ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}); err != nil {
+		t.Fatalf("delete object via gateway: %v", err)
+	}
+	if _, err := env.rwClient.DeleteBucket(env.ctx, &s3.DeleteBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("delete bucket via gateway: %v", err)
+	}
+	if _, err := env.upstreamClient.HeadBucket(env.ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(bucket),
+	}); err == nil {
+		t.Fatalf("expected upstream head bucket to fail after delete")
+	}
+}
+
+func TestLdapS3upstreamCopyObjectAndUploadPartCopy(t *testing.T) {
+	env := setupIntegrationEnv(t)
+	bucket := fmt.Sprintf("team2-copy-%d", time.Now().UnixNano())
+	srcKey := "copy/source.bin"
+	dstKey := "copy/direct.bin"
+	mpDstKey := "copy/mp.bin"
+	srcBody := bytes.Repeat([]byte("abcdef"), 1024*1024) // 6 MiB
+
+	if _, err := env.rwClient.CreateBucket(env.ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("create bucket via gateway: %v", err)
+	}
+	if _, err := env.rwClient.PutObject(env.ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(srcKey),
+		Body:          bytes.NewReader(srcBody),
+		ContentLength: aws.Int64(int64(len(srcBody))),
+		ContentType:   aws.String("application/octet-stream"),
+		Metadata: map[string]string{
+			"origin": "source",
+		},
+	}); err != nil {
+		t.Fatalf("put source object via gateway: %v", err)
+	}
+
+	copySource := bucket + "/" + srcKey
+	if _, err := env.rwClient.CopyObject(env.ctx, &s3.CopyObjectInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String(dstKey),
+		CopySource:        aws.String(copySource),
+		MetadataDirective: s3types.MetadataDirectiveReplace,
+		Metadata: map[string]string{
+			"origin": "copy",
+		},
+	}); err != nil {
+		t.Fatalf("copy object via gateway: %v", err)
+	}
+
+	dstObj, err := env.upstreamClient.GetObject(env.ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(dstKey),
+	})
+	if err != nil {
+		t.Fatalf("get copied object from upstream: %v", err)
+	}
+	defer dstObj.Body.Close()
+	dstBody, err := io.ReadAll(dstObj.Body)
+	if err != nil {
+		t.Fatalf("read copied object from upstream: %v", err)
+	}
+	if !bytes.Equal(dstBody, srcBody) {
+		t.Fatalf("copied body mismatch: got=%d want=%d", len(dstBody), len(srcBody))
+	}
+	if dstObj.Metadata["origin"] != "copy" {
+		t.Fatalf("copied metadata mismatch: got=%v", dstObj.Metadata)
+	}
+
+	if _, err := env.rwClient.CopyObject(env.ctx, &s3.CopyObjectInput{
+		Bucket:            aws.String(bucket),
+		Key:               aws.String("copy/conditional-fail.bin"),
+		CopySource:        aws.String(copySource),
+		CopySourceIfMatch: aws.String(`"does-not-match"`),
+	}); err == nil {
+		t.Fatalf("expected copy object with failing source condition to fail")
+	}
+
+	mpCreate, err := env.rwClient.CreateMultipartUpload(env.ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(mpDstKey),
+	})
+	if err != nil {
+		t.Fatalf("create multipart upload for upload-part-copy: %v", err)
+	}
+	if mpCreate.UploadId == nil || *mpCreate.UploadId == "" {
+		t.Fatalf("multipart upload id should not be empty")
+	}
+
+	part1, err := env.rwClient.UploadPartCopy(env.ctx, &s3.UploadPartCopyInput{
+		Bucket:          aws.String(bucket),
+		Key:             aws.String(mpDstKey),
+		UploadId:        mpCreate.UploadId,
+		PartNumber:      aws.Int32(1),
+		CopySource:      aws.String(copySource),
+		CopySourceRange: aws.String("bytes=0-5242879"),
+	})
+	if err != nil {
+		t.Fatalf("upload part copy 1 via gateway: %v", err)
+	}
+	part2, err := env.rwClient.UploadPartCopy(env.ctx, &s3.UploadPartCopyInput{
+		Bucket:          aws.String(bucket),
+		Key:             aws.String(mpDstKey),
+		UploadId:        mpCreate.UploadId,
+		PartNumber:      aws.Int32(2),
+		CopySource:      aws.String(copySource),
+		CopySourceRange: aws.String(fmt.Sprintf("bytes=5242880-%d", len(srcBody)-1)),
+	})
+	if err != nil {
+		t.Fatalf("upload part copy 2 via gateway: %v", err)
+	}
+	if part1.CopyPartResult == nil || part1.CopyPartResult.ETag == nil || part2.CopyPartResult == nil || part2.CopyPartResult.ETag == nil {
+		t.Fatalf("upload part copy should return etags for completed parts")
+	}
+	if _, err := env.rwClient.CompleteMultipartUpload(env.ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(mpDstKey),
+		UploadId: mpCreate.UploadId,
+		MultipartUpload: &s3types.CompletedMultipartUpload{
+			Parts: []s3types.CompletedPart{
+				{PartNumber: aws.Int32(1), ETag: part1.CopyPartResult.ETag},
+				{PartNumber: aws.Int32(2), ETag: part2.CopyPartResult.ETag},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("complete multipart upload-part-copy via gateway: %v", err)
+	}
+	mpObj, err := env.upstreamClient.GetObject(env.ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(mpDstKey),
+	})
+	if err != nil {
+		t.Fatalf("get multipart-copied object from upstream: %v", err)
+	}
+	defer mpObj.Body.Close()
+	mpBody, err := io.ReadAll(mpObj.Body)
+	if err != nil {
+		t.Fatalf("read multipart-copied object from upstream: %v", err)
+	}
+	if !bytes.Equal(mpBody, srcBody) {
+		t.Fatalf("multipart copied body mismatch: got=%d want=%d", len(mpBody), len(srcBody))
+	}
+
+	if _, err := env.roClient.CopyObject(env.ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(bucket),
+		Key:        aws.String("copy/readonly-fail.bin"),
+		CopySource: aws.String(copySource),
+	}); err == nil {
+		t.Fatalf("expected readonly copy object to fail")
+	}
+}
+
+func TestLdapS3upstreamDeleteObjectsVersioningAndListObjectVersions(t *testing.T) {
+	env := setupIntegrationEnv(t)
+	bucket := fmt.Sprintf("team2-versions-%d", time.Now().UnixNano())
+	key := "versions/item.txt"
+
+	if _, err := env.rwClient.CreateBucket(env.ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("create bucket via gateway: %v", err)
+	}
+	if _, err := env.rwClient.PutBucketVersioning(env.ctx, &s3.PutBucketVersioningInput{
+		Bucket: aws.String(bucket),
+		VersioningConfiguration: &s3types.VersioningConfiguration{
+			Status: s3types.BucketVersioningStatusEnabled,
+		},
+	}); err != nil {
+		t.Fatalf("enable versioning via gateway: %v", err)
+	}
+	if _, err := env.roClient.PutBucketVersioning(env.ctx, &s3.PutBucketVersioningInput{
+		Bucket: aws.String(bucket),
+		VersioningConfiguration: &s3types.VersioningConfiguration{
+			Status: s3types.BucketVersioningStatusSuspended,
+		},
+	}); err == nil {
+		t.Fatalf("expected readonly put bucket versioning to fail")
+	}
+
+	verOut, err := env.rwClient.GetBucketVersioning(env.ctx, &s3.GetBucketVersioningInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("get bucket versioning via gateway: %v", err)
+	}
+	if verOut.Status != s3types.BucketVersioningStatusEnabled {
+		t.Fatalf("unexpected versioning status: got=%q want=%q", verOut.Status, s3types.BucketVersioningStatusEnabled)
+	}
+
+	put1, err := env.rwClient.PutObject(env.ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(key),
+		Body:          bytes.NewReader([]byte("v1")),
+		ContentLength: aws.Int64(2),
+	})
+	if err != nil {
+		t.Fatalf("put version 1 via gateway: %v", err)
+	}
+	put2, err := env.rwClient.PutObject(env.ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(key),
+		Body:          bytes.NewReader([]byte("v2")),
+		ContentLength: aws.Int64(2),
+	})
+	if err != nil {
+		t.Fatalf("put version 2 via gateway: %v", err)
+	}
+	if put1.VersionId == nil || put2.VersionId == nil || *put1.VersionId == "" || *put2.VersionId == "" {
+		t.Fatalf("expected version ids for versioned puts: v1=%v v2=%v", put1.VersionId, put2.VersionId)
+	}
+	delOut, err := env.rwClient.DeleteObject(env.ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("delete current object to create delete marker via gateway: %v", err)
+	}
+	if delOut.VersionId == nil || *delOut.VersionId == "" {
+		t.Fatalf("expected delete marker version id after delete")
+	}
+
+	upstreamVersions, err := env.upstreamClient.ListObjectVersions(env.ctx, &s3.ListObjectVersionsInput{
+		Bucket: aws.String(bucket),
+		Prefix: aws.String("versions/"),
+	})
+	if err != nil {
+		t.Fatalf("list object versions via upstream: %v", err)
+	}
+	gatewayVersions, err := env.rwClient.ListObjectVersions(env.ctx, &s3.ListObjectVersionsInput{
+		Bucket: aws.String(bucket),
+		Prefix: aws.String("versions/"),
+	})
+	if err != nil {
+		t.Fatalf("list object versions via gateway: %v", err)
+	}
+
+	makeVersionSigs := func(out *s3.ListObjectVersionsOutput) []string {
+		sigs := make([]string, 0, len(out.Versions)+len(out.DeleteMarkers))
+		for _, v := range out.Versions {
+			sigs = append(sigs, fmt.Sprintf("V|%s|%s|%v", aws.ToString(v.Key), aws.ToString(v.VersionId), aws.ToBool(v.IsLatest)))
+		}
+		for _, d := range out.DeleteMarkers {
+			sigs = append(sigs, fmt.Sprintf("D|%s|%s|%v", aws.ToString(d.Key), aws.ToString(d.VersionId), aws.ToBool(d.IsLatest)))
+		}
+		sort.Strings(sigs)
+		return sigs
+	}
+	if got, want := strings.Join(makeVersionSigs(gatewayVersions), ","), strings.Join(makeVersionSigs(upstreamVersions), ","); got != want {
+		t.Fatalf("list object versions mismatch: gateway=%q upstream=%q", got, want)
+	}
+
+	if _, err := env.roClient.DeleteObjects(env.ctx, &s3.DeleteObjectsInput{
+		Bucket: aws.String(bucket),
+		Delete: &s3types.Delete{
+			Objects: []s3types.ObjectIdentifier{
+				{Key: aws.String(key)},
+			},
+		},
+	}); err == nil {
+		t.Fatalf("expected readonly delete objects to fail")
+	}
+
+	deleteReq := &s3.DeleteObjectsInput{
+		Bucket: aws.String(bucket),
+		Delete: &s3types.Delete{
+			Objects: []s3types.ObjectIdentifier{
+				{Key: aws.String(key), VersionId: put1.VersionId},
+				{Key: aws.String(key), VersionId: put2.VersionId},
+				{Key: aws.String(key), VersionId: delOut.VersionId},
+			},
+		},
+	}
+	deleteRes, err := env.rwClient.DeleteObjects(env.ctx, deleteReq)
+	if err != nil {
+		t.Fatalf("delete objects via gateway: %v", err)
+	}
+	if len(deleteRes.Deleted) != 3 {
+		t.Fatalf("expected 3 deleted entries, got %d", len(deleteRes.Deleted))
+	}
+
+	postDeleteVersions, err := env.rwClient.ListObjectVersions(env.ctx, &s3.ListObjectVersionsInput{
+		Bucket: aws.String(bucket),
+		Prefix: aws.String("versions/"),
+	})
+	if err != nil {
+		t.Fatalf("list object versions after delete via gateway: %v", err)
+	}
+	for _, v := range postDeleteVersions.Versions {
+		if aws.ToString(v.Key) == key {
+			t.Fatalf("expected no remaining object versions for key %q, got version=%s", key, aws.ToString(v.VersionId))
+		}
+	}
+	for _, d := range postDeleteVersions.DeleteMarkers {
+		if aws.ToString(d.Key) == key {
+			t.Fatalf("expected no remaining delete markers for key %q, got version=%s", key, aws.ToString(d.VersionId))
+		}
+	}
+}
+
+func TestLdapS3upstreamListObjectsV2FullSemantics(t *testing.T) {
+	env := setupIntegrationEnv(t)
+	bucket := fmt.Sprintf("team2-listv2full-%d", time.Now().UnixNano())
+
+	if _, err := env.rwClient.CreateBucket(env.ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("create bucket via gateway: %v", err)
+	}
+
+	objects := map[string][]byte{
+		"a/1.txt":      []byte("one"),
+		"a/2.txt":      []byte("two"),
+		"a/sub/3.txt":  []byte("three"),
+		"a/file 4.txt": []byte("four"),
+		"b/1.txt":      []byte("b"),
+		"z.txt":        []byte("z"),
+	}
+	for key, body := range objects {
+		if _, err := env.rwClient.PutObject(env.ctx, &s3.PutObjectInput{
+			Bucket:        aws.String(bucket),
+			Key:           aws.String(key),
+			Body:          bytes.NewReader(body),
+			ContentLength: aws.Int64(int64(len(body))),
+		}); err != nil {
+			t.Fatalf("put object %q via gateway: %v", key, err)
+		}
+	}
+
+	type listV2Sig struct {
+		keys         []string
+		commonPrefix []string
+		nextToken    string
+		isTruncated  bool
+		keyCount     int32
+		delimiter    string
+		prefix       string
+		startAfter   string
+		encodingType string
+	}
+	makeListV2Sig := func(out *s3.ListObjectsV2Output) listV2Sig {
+		keys := make([]string, 0, len(out.Contents))
+		for _, o := range out.Contents {
+			keys = append(keys, aws.ToString(o.Key))
+		}
+		prefixes := make([]string, 0, len(out.CommonPrefixes))
+		for _, cp := range out.CommonPrefixes {
+			prefixes = append(prefixes, aws.ToString(cp.Prefix))
+		}
+		sort.Strings(keys)
+		sort.Strings(prefixes)
+		return listV2Sig{
+			keys:         keys,
+			commonPrefix: prefixes,
+			nextToken:    aws.ToString(out.NextContinuationToken),
+			isTruncated:  aws.ToBool(out.IsTruncated),
+			keyCount:     aws.ToInt32(out.KeyCount),
+			delimiter:    aws.ToString(out.Delimiter),
+			prefix:       aws.ToString(out.Prefix),
+			startAfter:   aws.ToString(out.StartAfter),
+			encodingType: string(out.EncodingType),
+		}
+	}
+
+	assertMatchesUpstream := func(in *s3.ListObjectsV2Input, label string) *s3.ListObjectsV2Output {
+		t.Helper()
+		upstreamOut, err := env.upstreamClient.ListObjectsV2(env.ctx, in)
+		if err != nil {
+			t.Fatalf("%s list objects v2 via upstream: %v", label, err)
+		}
+		gatewayOut, err := env.rwClient.ListObjectsV2(env.ctx, in)
+		if err != nil {
+			t.Fatalf("%s list objects v2 via gateway: %v", label, err)
+		}
+		got, want := makeListV2Sig(gatewayOut), makeListV2Sig(upstreamOut)
+		if fmt.Sprintf("%v", got) != fmt.Sprintf("%v", want) {
+			t.Fatalf("%s list objects v2 mismatch: gateway=%+v upstream=%+v", label, got, want)
+		}
+		return gatewayOut
+	}
+
+	page1 := assertMatchesUpstream(&s3.ListObjectsV2Input{
+		Bucket:       aws.String(bucket),
+		Prefix:       aws.String("a/"),
+		Delimiter:    aws.String("/"),
+		MaxKeys:      aws.Int32(2),
+		FetchOwner:   aws.Bool(true),
+		EncodingType: s3types.EncodingTypeUrl,
+		OptionalObjectAttributes: []s3types.OptionalObjectAttributes{
+			s3types.OptionalObjectAttributesRestoreStatus,
+		},
+	}, "page1")
+	if page1.NextContinuationToken != nil && *page1.NextContinuationToken != "" {
+		_ = assertMatchesUpstream(&s3.ListObjectsV2Input{
+			Bucket:            aws.String(bucket),
+			Prefix:            aws.String("a/"),
+			Delimiter:         aws.String("/"),
+			MaxKeys:           aws.Int32(2),
+			ContinuationToken: page1.NextContinuationToken,
+			FetchOwner:        aws.Bool(true),
+			EncodingType:      s3types.EncodingTypeUrl,
+			OptionalObjectAttributes: []s3types.OptionalObjectAttributes{
+				s3types.OptionalObjectAttributesRestoreStatus,
+			},
+		}, "page2")
+	}
+
+	_ = assertMatchesUpstream(&s3.ListObjectsV2Input{
+		Bucket:       aws.String(bucket),
+		Prefix:       aws.String("a/"),
+		StartAfter:   aws.String("a/1.txt"),
+		MaxKeys:      aws.Int32(1000),
+		FetchOwner:   aws.Bool(true),
+		EncodingType: s3types.EncodingTypeUrl,
+	}, "start-after")
+}
+
 func startGlauthWithConfig(ctx context.Context, t *testing.T, cfg string, scheme string) (string, func()) {
 	t.Helper()
 
