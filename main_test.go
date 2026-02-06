@@ -264,6 +264,99 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 	}
 }
 
+func TestLdapS3upstreamListBuckets(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	ldapCfgPath := writeGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	defer stopLDAP()
+
+	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	defer stopMinio()
+
+	cfg := Config{
+		LDAPURL:                ldapURL,
+		BaseDN:                 "dc=glauth,dc=com",
+		GroupTTL:               30 * time.Second,
+		UpstreamEndpoint:       minioURL,
+		UpstreamRegion:         "us-east-1",
+		UpstreamAccessKey:      "minioadmin",
+		UpstreamSecretKey:      "minioadmin",
+		UpstreamForcePathStyle: true,
+		SigV4Secret:            "password",
+		SigV4Service:           "s3",
+	}
+
+	up, err := newUpstreamS3(ctx, cfg)
+	if err != nil {
+		t.Fatalf("init upstream s3: %v", err)
+	}
+
+	gw := &server{
+		cfg:    cfg,
+		up:     up,
+		gcache: newGroupCache(cfg.GroupTTL),
+	}
+	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	defer gwSrv.Close()
+
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+
+	suffix := time.Now().UnixNano()
+	allowedBucketA := fmt.Sprintf("team2-list-%d-a", suffix)
+	allowedBucketB := fmt.Sprintf("team2-list-%d-b", suffix)
+	deniedBucket := fmt.Sprintf("team1-list-%d-x", suffix)
+
+	for _, b := range []string{allowedBucketA, allowedBucketB, deniedBucket} {
+		if _, err := upstreamClient.CreateBucket(ctx, &s3.CreateBucketInput{
+			Bucket: aws.String(b),
+		}); err != nil {
+			t.Fatalf("create upstream bucket %q: %v", b, err)
+		}
+	}
+
+	rwList, err := rwClient.ListBuckets(ctx, &s3.ListBucketsInput{})
+	if err != nil {
+		t.Fatalf("list buckets via gateway rw user: %v", err)
+	}
+	rwNames := map[string]bool{}
+	for _, b := range rwList.Buckets {
+		if b.Name != nil {
+			rwNames[*b.Name] = true
+		}
+	}
+
+	if !rwNames[allowedBucketA] || !rwNames[allowedBucketB] {
+		t.Fatalf("rw list missing allowed buckets: got=%v", mapBoolKeys(rwNames))
+	}
+	if rwNames[deniedBucket] {
+		t.Fatalf("rw list unexpectedly included denied bucket %q: got=%v", deniedBucket, mapBoolKeys(rwNames))
+	}
+
+	roList, err := roClient.ListBuckets(ctx, &s3.ListBucketsInput{})
+	if err != nil {
+		t.Fatalf("list buckets via gateway readonly user: %v", err)
+	}
+	roNames := map[string]bool{}
+	for _, b := range roList.Buckets {
+		if b.Name != nil {
+			roNames[*b.Name] = true
+		}
+	}
+
+	if !roNames[allowedBucketA] || !roNames[allowedBucketB] {
+		t.Fatalf("readonly list missing allowed buckets: got=%v", mapBoolKeys(roNames))
+	}
+	if roNames[deniedBucket] {
+		t.Fatalf("readonly list unexpectedly included denied bucket %q: got=%v", deniedBucket, mapBoolKeys(roNames))
+	}
+}
+
 func startGlauthWithConfig(ctx context.Context, t *testing.T, cfg string, scheme string) (string, func()) {
 	t.Helper()
 
@@ -375,6 +468,14 @@ debug = true
 }
 
 func mapKeys(in map[string]struct{}) []string {
+	out := make([]string, 0, len(in))
+	for k := range in {
+		out = append(out, k)
+	}
+	return out
+}
+
+func mapBoolKeys(in map[string]bool) []string {
 	out := make([]string, 0, len(in))
 	for k := range in {
 		out = append(out, k)
