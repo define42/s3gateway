@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	minio "github.com/minio/minio-go/v7"
+	minioCredentials "github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -113,6 +116,101 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 		Key:    aws.String(key),
 	}); err != nil {
 		t.Fatalf("delete object via gateway: %v", err)
+	}
+
+	if _, err := upstreamClient.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}); err == nil {
+		t.Fatalf("expected upstream object to be deleted, but get object succeeded")
+	}
+}
+
+func TestLdapS3upstreamWithMinioClient(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	ldapCfgPath := writeGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	defer stopLDAP()
+
+	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	defer stopMinio()
+
+	cfg := Config{
+		LDAPURL:                ldapURL,
+		BaseDN:                 "dc=glauth,dc=com",
+		GroupTTL:               30 * time.Second,
+		UpstreamEndpoint:       minioURL,
+		UpstreamRegion:         "us-east-1",
+		UpstreamAccessKey:      "minioadmin",
+		UpstreamSecretKey:      "minioadmin",
+		UpstreamForcePathStyle: true,
+		SigV4Secret:            "password",
+		SigV4Service:           "s3",
+	}
+
+	up, err := newUpstreamS3(ctx, cfg)
+	if err != nil {
+		t.Fatalf("init upstream s3: %v", err)
+	}
+
+	gw := &server{
+		cfg:    cfg,
+		up:     up,
+		gcache: newGroupCache(cfg.GroupTTL),
+	}
+	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	defer gwSrv.Close()
+
+	gatewayAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	gatewayAwsClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, cfg.SigV4Secret)
+	gatewayMinioClient := newMinioGatewayClient(t, gwSrv.URL, gatewayAccessKey, cfg.SigV4Secret)
+	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+
+	bucket := fmt.Sprintf("team2-minio-client-%d", time.Now().UnixNano())
+	key := "smoke/minio-client.txt"
+	wantBody := []byte("hello through minio-go client and s3gateway")
+
+	if _, err := gatewayAwsClient.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("create bucket via aws client through gateway: %v", err)
+	}
+
+	if _, err := gatewayMinioClient.PutObject(
+		ctx,
+		bucket,
+		key,
+		bytes.NewReader(wantBody),
+		int64(len(wantBody)),
+		minio.PutObjectOptions{
+			ContentType:          "text/plain",
+			DisableContentSha256: true,
+		},
+	); err != nil {
+		t.Fatalf("put object via minio client through gateway: %v", err)
+	}
+
+	gotObj, err := upstreamClient.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("get object from upstream minio: %v", err)
+	}
+	defer gotObj.Body.Close()
+
+	gotBody, err := io.ReadAll(gotObj.Body)
+	if err != nil {
+		t.Fatalf("read upstream object body: %v", err)
+	}
+	if !bytes.Equal(gotBody, wantBody) {
+		t.Fatalf("upstream object mismatch: got %q want %q", string(gotBody), string(wantBody))
+	}
+
+	if err := gatewayMinioClient.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{}); err != nil {
+		t.Fatalf("remove object via minio client through gateway: %v", err)
 	}
 
 	if _, err := upstreamClient.GetObject(ctx, &s3.GetObjectInput{
@@ -251,6 +349,25 @@ func newS3Client(t *testing.T, ctx context.Context, endpoint, region, accessKey,
 	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.UsePathStyle = true
 	})
+}
+
+func newMinioGatewayClient(t *testing.T, gatewayURL, accessKey, secretKey string) *minio.Client {
+	t.Helper()
+
+	parsedURL, err := url.Parse(gatewayURL)
+	if err != nil {
+		t.Fatalf("parse gateway url %q: %v", gatewayURL, err)
+	}
+	client, err := minio.New(parsedURL.Host, &minio.Options{
+		Creds:        minioCredentials.NewStaticV4(accessKey, secretKey, ""),
+		Secure:       strings.EqualFold(parsedURL.Scheme, "https"),
+		Region:       "us-east-1",
+		BucketLookup: minio.BucketLookupPath,
+	})
+	if err != nil {
+		t.Fatalf("init minio client for %s: %v", gatewayURL, err)
+	}
+	return client
 }
 
 func pathRelative(t *testing.T, elems ...string) string {
