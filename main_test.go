@@ -56,6 +56,14 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	if !canWrite(rulesFromGroups(grps), "team2-integration-check") {
 		t.Fatalf("expected team2-rw write permission, got groups: %v", mapKeys(grps))
 	}
+	roGrps, err := fetchGroupsUPN(cfg, "readonly@example.com", "dogood")
+	if err != nil {
+		t.Fatalf("ldap auth/group lookup failed for readonly user: %v", err)
+	}
+	roRules := rulesFromGroups(roGrps)
+	if !canRead(roRules, "team2-integration-check") || canWrite(roRules, "team2-integration-check") {
+		t.Fatalf("expected team2-r read-only permission, got groups: %v", mapKeys(roGrps))
+	}
 
 	up, err := newUpstreamS3(ctx, cfg)
 	if err != nil {
@@ -72,6 +80,8 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 
 	gatewayAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
 	gatewayClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, cfg.SigV4Secret)
+	readonlyAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	readonlyClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", readonlyAccessKey, cfg.SigV4Secret)
 	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-integration-%d", time.Now().UnixNano())
@@ -109,6 +119,39 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	}
 	if !bytes.Equal(gotBody, wantBody) {
 		t.Fatalf("upstream object mismatch: got %q want %q", string(gotBody), string(wantBody))
+	}
+	readonlyObj, err := readonlyClient.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("readonly get object via gateway: %v", err)
+	}
+	defer readonlyObj.Body.Close()
+
+	readonlyBody, err := io.ReadAll(readonlyObj.Body)
+	if err != nil {
+		t.Fatalf("read readonly get object body: %v", err)
+	}
+	if !bytes.Equal(readonlyBody, wantBody) {
+		t.Fatalf("readonly object mismatch: got %q want %q", string(readonlyBody), string(wantBody))
+	}
+
+	readonlyDeniedKey := "smoke/readonly-put-should-fail.txt"
+	if _, err := readonlyClient.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(readonlyDeniedKey),
+		Body:          bytes.NewReader([]byte("should fail")),
+		ContentLength: aws.Int64(int64(len("should fail"))),
+		ContentType:   aws.String("text/plain"),
+	}); err == nil {
+		t.Fatalf("expected readonly user put object to fail, but it succeeded")
+	}
+	if _, err := upstreamClient.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(readonlyDeniedKey),
+	}); err == nil {
+		t.Fatalf("readonly denied key unexpectedly exists in upstream")
 	}
 
 	if _, err := gatewayClient.DeleteObject(ctx, &s3.DeleteObjectInput{
@@ -305,9 +348,23 @@ debug = true
     action = "search"
     object = "*"
 
+[[users]]
+  name = "readonly"
+  mail = "readonly@example.com"
+  primarygroup = 5507
+  othergroups = [5507]
+  passsha256 = "6478579e37aff45f013e14eeb30b3cc56c72ccdc310123bcdf53e0333e3f416a" # dogood
+    [[users.capabilities]]
+    action = "search"
+    object = "*"
+
 [[groups]]
   name = "team2-rw"
   gidnumber = 5506
+
+[[groups]]
+  name = "team2-r"
+  gidnumber = 5507
 `
 
 	cfgPath := filepath.Join(t.TempDir(), "glauth-integration.cfg")
