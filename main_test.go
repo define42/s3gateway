@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -20,6 +22,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	minio "github.com/minio/minio-go/v7"
 	minioCredentials "github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/testcontainers/testcontainers-go"
@@ -89,6 +92,11 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	bucket := fmt.Sprintf("team2-integration-%d", time.Now().UnixNano())
 	key := "smoke/hello.txt"
 	wantBody := []byte("hello through s3gateway")
+	metadata := map[string]string{
+		"owner":   "integration",
+		"purpose": "metadata-ttl-check",
+	}
+	expiresAt := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
 
 	if _, err := gatewayClient.CreateBucket(ctx, &s3.CreateBucketInput{
 		Bucket: aws.String(bucket),
@@ -102,6 +110,8 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 		Body:          bytes.NewReader(wantBody),
 		ContentLength: aws.Int64(int64(len(wantBody))),
 		ContentType:   aws.String("text/plain"),
+		Metadata:      metadata,
+		Expires:       aws.Time(expiresAt),
 	}); err != nil {
 		t.Fatalf("put object via gateway: %v", err)
 	}
@@ -122,6 +132,15 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	if !bytes.Equal(gotBody, wantBody) {
 		t.Fatalf("upstream object mismatch: got %q want %q", string(gotBody), string(wantBody))
 	}
+	if gotObj.Metadata["owner"] != metadata["owner"] || gotObj.Metadata["purpose"] != metadata["purpose"] {
+		t.Fatalf("upstream metadata mismatch: got=%v want=%v", gotObj.Metadata, metadata)
+	}
+	if gotObj.Expires == nil {
+		t.Fatalf("expected upstream object Expires to be set")
+	}
+	if gotObj.Expires.UTC().Unix() != expiresAt.Unix() {
+		t.Fatalf("upstream expires mismatch: got=%s want=%s", gotObj.Expires.UTC().Format(time.RFC3339), expiresAt.Format(time.RFC3339))
+	}
 	readonlyObj, err := readonlyClient.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
@@ -137,6 +156,15 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	}
 	if !bytes.Equal(readonlyBody, wantBody) {
 		t.Fatalf("readonly object mismatch: got %q want %q", string(readonlyBody), string(wantBody))
+	}
+	if readonlyObj.Metadata["owner"] != metadata["owner"] || readonlyObj.Metadata["purpose"] != metadata["purpose"] {
+		t.Fatalf("readonly metadata mismatch through gateway: got=%v want=%v", readonlyObj.Metadata, metadata)
+	}
+	if readonlyObj.Expires == nil {
+		t.Fatalf("expected readonly get through gateway to include Expires")
+	}
+	if readonlyObj.Expires.UTC().Unix() != expiresAt.Unix() {
+		t.Fatalf("readonly expires mismatch through gateway: got=%s want=%s", readonlyObj.Expires.UTC().Format(time.RFC3339), expiresAt.Format(time.RFC3339))
 	}
 
 	readonlyDeniedKey := "smoke/readonly-put-should-fail.txt"
@@ -1070,6 +1098,496 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 		Key:    aws.String(abortKey),
 	}); err == nil {
 		t.Fatalf("expected aborted multipart object to be absent in upstream")
+	}
+}
+
+func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	ldapCfgPath := writeGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	defer stopLDAP()
+
+	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	defer stopMinio()
+
+	cfg := Config{
+		LDAPURL:                ldapURL,
+		BaseDN:                 "dc=glauth,dc=com",
+		GroupTTL:               30 * time.Second,
+		UpstreamEndpoint:       minioURL,
+		UpstreamRegion:         "us-east-1",
+		UpstreamAccessKey:      "minioadmin",
+		UpstreamSecretKey:      "minioadmin",
+		UpstreamForcePathStyle: true,
+		SigV4Secret:            "password",
+		SigV4Service:           "s3",
+	}
+
+	up, err := newUpstreamS3(ctx, cfg)
+	if err != nil {
+		t.Fatalf("init upstream s3: %v", err)
+	}
+
+	gw := &server{
+		cfg:    cfg,
+		up:     up,
+		gcache: newGroupCache(cfg.GroupTTL),
+	}
+	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	defer gwSrv.Close()
+
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+
+	bucket := fmt.Sprintf("team2-lifecycle-%d", time.Now().UnixNano())
+	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("create bucket via gateway: %v", err)
+	}
+
+	lifecycleCfg := &s3types.BucketLifecycleConfiguration{
+		Rules: []s3types.LifecycleRule{
+			{
+				ID:     aws.String("expire-logs"),
+				Status: s3types.ExpirationStatusEnabled,
+				Prefix: aws.String("logs/"),
+				Expiration: &s3types.LifecycleExpiration{
+					Days: aws.Int32(7),
+				},
+				AbortIncompleteMultipartUpload: &s3types.AbortIncompleteMultipartUpload{
+					DaysAfterInitiation: aws.Int32(2),
+				},
+			},
+		},
+	}
+	if _, err := rwClient.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{
+		Bucket:                 aws.String(bucket),
+		LifecycleConfiguration: lifecycleCfg,
+	}); err != nil {
+		t.Fatalf("put lifecycle via gateway rw user: %v", err)
+	}
+
+	if _, err := roClient.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{
+		Bucket:                 aws.String(bucket),
+		LifecycleConfiguration: lifecycleCfg,
+	}); err == nil {
+		t.Fatalf("expected readonly put lifecycle via gateway to fail, but it succeeded")
+	}
+
+	makeRuleSigs := func(rules []s3types.LifecycleRule) []string {
+		out := make([]string, 0, len(rules))
+		for _, r := range rules {
+			prefix := ""
+			if r.Filter != nil && r.Filter.Prefix != nil {
+				prefix = *r.Filter.Prefix
+			} else if r.Prefix != nil {
+				prefix = *r.Prefix
+			}
+			expDays := int32(0)
+			if r.Expiration != nil && r.Expiration.Days != nil {
+				expDays = *r.Expiration.Days
+			}
+			abortDays := int32(0)
+			if r.AbortIncompleteMultipartUpload != nil && r.AbortIncompleteMultipartUpload.DaysAfterInitiation != nil {
+				abortDays = *r.AbortIncompleteMultipartUpload.DaysAfterInitiation
+			}
+			out = append(out, fmt.Sprintf(
+				"id=%s|status=%s|prefix=%s|expDays=%d|abortDays=%d",
+				aws.ToString(r.ID),
+				string(r.Status),
+				prefix,
+				expDays,
+				abortDays,
+			))
+		}
+		sort.Strings(out)
+		return out
+	}
+
+	upstreamOut, err := upstreamClient.GetBucketLifecycleConfiguration(ctx, &s3.GetBucketLifecycleConfigurationInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("get lifecycle from upstream: %v", err)
+	}
+	upstreamSigs := strings.Join(makeRuleSigs(upstreamOut.Rules), ",")
+
+	rwOut, err := rwClient.GetBucketLifecycleConfiguration(ctx, &s3.GetBucketLifecycleConfigurationInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("get lifecycle via gateway rw user: %v", err)
+	}
+	if got := strings.Join(makeRuleSigs(rwOut.Rules), ","); got != upstreamSigs {
+		t.Fatalf("rw lifecycle mismatch: gateway=%q upstream=%q", got, upstreamSigs)
+	}
+
+	roOut, err := roClient.GetBucketLifecycleConfiguration(ctx, &s3.GetBucketLifecycleConfigurationInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("get lifecycle via gateway readonly user: %v", err)
+	}
+	if got := strings.Join(makeRuleSigs(roOut.Rules), ","); got != upstreamSigs {
+		t.Fatalf("readonly lifecycle mismatch: gateway=%q upstream=%q", got, upstreamSigs)
+	}
+
+	if _, err := roClient.DeleteBucketLifecycle(ctx, &s3.DeleteBucketLifecycleInput{
+		Bucket: aws.String(bucket),
+	}); err == nil {
+		t.Fatalf("expected readonly delete lifecycle via gateway to fail, but it succeeded")
+	}
+
+	if _, err := rwClient.DeleteBucketLifecycle(ctx, &s3.DeleteBucketLifecycleInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("delete lifecycle via gateway rw user: %v", err)
+	}
+
+	if _, err := upstreamClient.GetBucketLifecycleConfiguration(ctx, &s3.GetBucketLifecycleConfigurationInput{
+		Bucket: aws.String(bucket),
+	}); err == nil {
+		t.Fatalf("expected upstream lifecycle config to be deleted")
+	}
+
+	if _, err := rwClient.GetBucketLifecycleConfiguration(ctx, &s3.GetBucketLifecycleConfigurationInput{
+		Bucket: aws.String(bucket),
+	}); err == nil {
+		t.Fatalf("expected gateway lifecycle config get to fail after delete")
+	}
+}
+
+func TestLifecycleConfigXMLExpandedRoundTrip(t *testing.T) {
+	const inputXML = `<?xml version="1.0" encoding="UTF-8"?>
+<LifecycleConfiguration>
+  <Rule>
+    <ID>archive-logs</ID>
+    <Status>Enabled</Status>
+    <Filter>
+      <And>
+        <Prefix>logs/</Prefix>
+        <Tag>
+          <Key>app</Key>
+          <Value>api</Value>
+        </Tag>
+        <ObjectSizeGreaterThan>128</ObjectSizeGreaterThan>
+        <ObjectSizeLessThan>4096</ObjectSizeLessThan>
+      </And>
+    </Filter>
+    <Expiration>
+      <Date>2030-01-01T00:00:00.000Z</Date>
+    </Expiration>
+    <Transition>
+      <Days>30</Days>
+      <StorageClass>GLACIER</StorageClass>
+    </Transition>
+    <NoncurrentVersionTransition>
+      <NoncurrentDays>14</NoncurrentDays>
+      <NewerNoncurrentVersions>3</NewerNoncurrentVersions>
+      <StorageClass>STANDARD_IA</StorageClass>
+    </NoncurrentVersionTransition>
+    <NoncurrentVersionExpiration>
+      <NoncurrentDays>60</NoncurrentDays>
+      <NewerNoncurrentVersions>10</NewerNoncurrentVersions>
+    </NoncurrentVersionExpiration>
+    <AbortIncompleteMultipartUpload>
+      <DaysAfterInitiation>7</DaysAfterInitiation>
+    </AbortIncompleteMultipartUpload>
+  </Rule>
+  <Rule>
+    <ID>expire-delete-markers</ID>
+    <Status>Enabled</Status>
+    <Filter>
+      <Prefix>tmp/</Prefix>
+    </Filter>
+    <Expiration>
+      <ExpiredObjectDeleteMarker>true</ExpiredObjectDeleteMarker>
+    </Expiration>
+  </Rule>
+</LifecycleConfiguration>`
+
+	cfg, err := decodeLifecycleConfigXML(strings.NewReader(inputXML))
+	if err != nil {
+		t.Fatalf("decode expanded lifecycle xml: %v", err)
+	}
+	if len(cfg.Rules) != 2 {
+		t.Fatalf("expected 2 lifecycle rules, got %d", len(cfg.Rules))
+	}
+
+	r0 := cfg.Rules[0]
+	if aws.ToString(r0.ID) != "archive-logs" || r0.Status != s3types.ExpirationStatusEnabled {
+		t.Fatalf("rule 0 basic fields mismatch: id=%q status=%q", aws.ToString(r0.ID), string(r0.Status))
+	}
+	if r0.Filter == nil || r0.Filter.And == nil || aws.ToString(r0.Filter.And.Prefix) != "logs/" {
+		t.Fatalf("rule 0 filter and prefix mismatch: %+v", r0.Filter)
+	}
+	if len(r0.Filter.And.Tags) != 1 || aws.ToString(r0.Filter.And.Tags[0].Key) != "app" || aws.ToString(r0.Filter.And.Tags[0].Value) != "api" {
+		t.Fatalf("rule 0 filter tags mismatch: %+v", r0.Filter.And.Tags)
+	}
+	if aws.ToInt64(r0.Filter.And.ObjectSizeGreaterThan) != 128 || aws.ToInt64(r0.Filter.And.ObjectSizeLessThan) != 4096 {
+		t.Fatalf("rule 0 filter size bounds mismatch: gt=%d lt=%d", aws.ToInt64(r0.Filter.And.ObjectSizeGreaterThan), aws.ToInt64(r0.Filter.And.ObjectSizeLessThan))
+	}
+	if r0.Expiration == nil || r0.Expiration.Date == nil || r0.Expiration.Date.UTC().Format("2006-01-02T15:04:05.000Z") != "2030-01-01T00:00:00.000Z" {
+		t.Fatalf("rule 0 expiration date mismatch: %+v", r0.Expiration)
+	}
+	if len(r0.Transitions) != 1 || aws.ToInt32(r0.Transitions[0].Days) != 30 || r0.Transitions[0].StorageClass != s3types.TransitionStorageClassGlacier {
+		t.Fatalf("rule 0 transition mismatch: %+v", r0.Transitions)
+	}
+	if len(r0.NoncurrentVersionTransitions) != 1 {
+		t.Fatalf("rule 0 expected one noncurrent transition, got %d", len(r0.NoncurrentVersionTransitions))
+	}
+	if aws.ToInt32(r0.NoncurrentVersionTransitions[0].NoncurrentDays) != 14 ||
+		aws.ToInt32(r0.NoncurrentVersionTransitions[0].NewerNoncurrentVersions) != 3 ||
+		r0.NoncurrentVersionTransitions[0].StorageClass != s3types.TransitionStorageClassStandardIa {
+		t.Fatalf("rule 0 noncurrent transition mismatch: %+v", r0.NoncurrentVersionTransitions[0])
+	}
+	if r0.NoncurrentVersionExpiration == nil ||
+		aws.ToInt32(r0.NoncurrentVersionExpiration.NoncurrentDays) != 60 ||
+		aws.ToInt32(r0.NoncurrentVersionExpiration.NewerNoncurrentVersions) != 10 {
+		t.Fatalf("rule 0 noncurrent expiration mismatch: %+v", r0.NoncurrentVersionExpiration)
+	}
+	if r0.AbortIncompleteMultipartUpload == nil || aws.ToInt32(r0.AbortIncompleteMultipartUpload.DaysAfterInitiation) != 7 {
+		t.Fatalf("rule 0 abort multipart mismatch: %+v", r0.AbortIncompleteMultipartUpload)
+	}
+
+	r1 := cfg.Rules[1]
+	if aws.ToString(r1.ID) != "expire-delete-markers" || r1.Filter == nil || aws.ToString(r1.Filter.Prefix) != "tmp/" {
+		t.Fatalf("rule 1 basic filter mismatch: %+v", r1)
+	}
+	if r1.Expiration == nil || !aws.ToBool(r1.Expiration.ExpiredObjectDeleteMarker) {
+		t.Fatalf("rule 1 expired delete marker mismatch: %+v", r1.Expiration)
+	}
+
+	encoded, err := encodeLifecycleConfigXML(cfg.Rules)
+	if err != nil {
+		t.Fatalf("encode expanded lifecycle xml: %v", err)
+	}
+	roundTrip, err := decodeLifecycleConfigXML(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatalf("decode roundtrip lifecycle xml: %v", err)
+	}
+	if len(roundTrip.Rules) != 2 {
+		t.Fatalf("expected 2 roundtrip rules, got %d", len(roundTrip.Rules))
+	}
+	rt0 := roundTrip.Rules[0]
+	if len(rt0.Transitions) != 1 || rt0.Transitions[0].StorageClass != s3types.TransitionStorageClassGlacier {
+		t.Fatalf("roundtrip transition mismatch: %+v", rt0.Transitions)
+	}
+	if rt0.Filter == nil || rt0.Filter.And == nil || len(rt0.Filter.And.Tags) != 1 {
+		t.Fatalf("roundtrip filter mismatch: %+v", rt0.Filter)
+	}
+	if rt0.NoncurrentVersionExpiration == nil || rt0.AbortIncompleteMultipartUpload == nil {
+		t.Fatalf("roundtrip noncurrent/abort mismatch: noncurrent=%+v abort=%+v", rt0.NoncurrentVersionExpiration, rt0.AbortIncompleteMultipartUpload)
+	}
+	rt1 := roundTrip.Rules[1]
+	if rt1.Expiration == nil || !aws.ToBool(rt1.Expiration.ExpiredObjectDeleteMarker) {
+		t.Fatalf("roundtrip expired delete marker mismatch: %+v", rt1.Expiration)
+	}
+}
+
+func TestDecodeBodyForS3WriteAWSChunked(t *testing.T) {
+	t.Run("valid aws-chunked payload", func(t *testing.T) {
+		const encoded = "5;chunk-signature=abc\r\nhello\r\n6;chunk-signature=def\r\n world\r\n0;chunk-signature=ghi\r\nx-amz-checksum-crc32:AAAAAA==\r\n\r\n"
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/object.txt", strings.NewReader(encoded))
+		req.Header.Set("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
+		req.Header.Set("x-amz-decoded-content-length", "11")
+
+		body, cl, err := decodeBodyForS3Write(req)
+		if err != nil {
+			t.Fatalf("decodeBodyForS3Write returned error: %v", err)
+		}
+		defer body.Close()
+		if cl != 11 {
+			t.Fatalf("decoded content length mismatch: got=%d want=11", cl)
+		}
+
+		got, err := io.ReadAll(body)
+		if err != nil {
+			t.Fatalf("read decoded aws-chunked body: %v", err)
+		}
+		if string(got) != "hello world" {
+			t.Fatalf("decoded body mismatch: got=%q want=%q", string(got), "hello world")
+		}
+	})
+
+	t.Run("missing decoded length header", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/object.txt", strings.NewReader(""))
+		req.Header.Set("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
+		if _, _, err := decodeBodyForS3Write(req); err == nil {
+			t.Fatalf("expected decodeBodyForS3Write to fail for missing x-amz-decoded-content-length")
+		}
+	})
+}
+
+func TestGatewayPreservesUpstreamErrorStatusAndHeaders(t *testing.T) {
+	ctx := context.Background()
+
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.Header().Set("x-amz-request-id", "req-123")
+		w.Header().Set("x-amz-id-2", "id2-abc")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>SlowDown</Code><Message>please retry</Message></Error>`))
+	}))
+	defer upstreamSrv.Close()
+
+	upstreamClient := newS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
+	gw := &server{
+		up: upstreamClient,
+	}
+	gwSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), ctxRulesKey, []Rule{{BucketPrefix: "team2-", Perm: PermReadWrite}})
+		gw.ServeHTTP(w, r.WithContext(ctx))
+	}))
+	defer gwSrv.Close()
+
+	resp, err := http.Get(gwSrv.URL + "/team2-chaos/missing-object.txt")
+	if err != nil {
+		t.Fatalf("get object through gateway: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read gateway error body: %v", err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status mismatch: got=%d want=%d body=%s", resp.StatusCode, http.StatusServiceUnavailable, string(body))
+	}
+	if got := resp.Header.Get("x-amz-request-id"); got != "req-123" {
+		t.Fatalf("x-amz-request-id mismatch: got=%q want=%q", got, "req-123")
+	}
+	if got := resp.Header.Get("x-amz-id-2"); got != "id2-abc" {
+		t.Fatalf("x-amz-id-2 mismatch: got=%q want=%q", got, "id2-abc")
+	}
+	if !strings.Contains(string(body), "<Code>SlowDown</Code>") {
+		t.Fatalf("expected SlowDown error code, body=%s", string(body))
+	}
+}
+
+func TestGatewayHandlesUpstreamLatencySpike(t *testing.T) {
+	ctx := context.Background()
+
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(1500 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Buckets></Buckets></ListAllMyBucketsResult>`))
+	}))
+	defer upstreamSrv.Close()
+
+	upstreamClient := newS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
+	gw := &server{
+		up: upstreamClient,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	timeoutCtx, cancel := context.WithTimeout(req.Context(), 150*time.Millisecond)
+	defer cancel()
+	req = req.WithContext(context.WithValue(timeoutCtx, ctxRulesKey, []Rule{{BucketPrefix: "team2-", Perm: PermReadWrite}}))
+
+	rr := httptest.NewRecorder()
+	start := time.Now()
+	gw.ServeHTTP(rr, req)
+	elapsed := time.Since(start)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 on upstream timeout, got=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if elapsed > 1200*time.Millisecond {
+		t.Fatalf("gateway took too long to fail on latency spike: elapsed=%s", elapsed)
+	}
+}
+
+func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	ldapCfgPath := writeGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapStopped := false
+	stopLDAPOnce := func() {
+		if ldapStopped {
+			return
+		}
+		stopLDAP()
+		ldapStopped = true
+	}
+	defer stopLDAPOnce()
+
+	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	defer stopMinio()
+
+	cfg := Config{
+		LDAPURL:                ldapURL,
+		BaseDN:                 "dc=glauth,dc=com",
+		GroupTTL:               2 * time.Minute,
+		UpstreamEndpoint:       minioURL,
+		UpstreamRegion:         "us-east-1",
+		UpstreamAccessKey:      "minioadmin",
+		UpstreamSecretKey:      "minioadmin",
+		UpstreamForcePathStyle: true,
+		SigV4Secret:            "password",
+		SigV4Service:           "s3",
+	}
+
+	up, err := newUpstreamS3(ctx, cfg)
+	if err != nil {
+		t.Fatalf("init upstream s3: %v", err)
+	}
+
+	gw := &server{
+		cfg:    cfg,
+		up:     up,
+		gcache: newGroupCache(cfg.GroupTTL),
+	}
+	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	defer gwSrv.Close()
+
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+
+	bucket := fmt.Sprintf("team2-ldap-cache-%d", time.Now().UnixNano())
+	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("create bucket via gateway for cache warm-up: %v", err)
+	}
+
+	stopLDAPOnce()
+
+	if _, err := rwClient.ListBuckets(ctx, &s3.ListBucketsInput{}); err != nil {
+		t.Fatalf("cached rw user should continue to work while ldap is down: %v", err)
+	}
+
+	putBody := []byte("ldap cache survives outage")
+	if _, err := rwClient.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String("cache/probe.txt"),
+		Body:          bytes.NewReader(putBody),
+		ContentLength: aws.Int64(int64(len(putBody))),
+	}); err != nil {
+		t.Fatalf("cached rw user put object should work while ldap is down: %v", err)
+	}
+
+	if _, err := roClient.ListBuckets(ctx, &s3.ListBucketsInput{}); err == nil {
+		t.Fatalf("expected uncached readonly user auth to fail while ldap is down")
+	} else {
+		var apiErr smithy.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("expected smithy API error for readonly auth failure, got: %v", err)
+		}
+		if apiErr.ErrorCode() != "AccessDenied" {
+			t.Fatalf("expected AccessDenied for readonly auth failure, got code=%q err=%v", apiErr.ErrorCode(), err)
+		}
 	}
 }
 
