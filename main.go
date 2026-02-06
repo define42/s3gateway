@@ -708,6 +708,9 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		s.handlePutObject(w, r, bucket, key)
 		return
+	case http.MethodDelete:
+		s.handleDeleteObject(w, r, bucket, key)
+		return
 	default:
 		writeXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 		return
@@ -871,6 +874,24 @@ func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		w.Header().Set("ETag", *out.ETag)
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *server) handleDeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	rules := rulesFromCtx(r)
+	if !canWrite(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	_, err := s.up.DeleteObject(r.Context(), &s3.DeleteObjectInput{
+		Bucket: &bucket,
+		Key:    &key,
+	})
+	if err != nil {
+		writeXMLError(w, http.StatusBadGateway, "BadGateway", "Upstream error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func extractAmzMeta(h http.Header) map[string]string {

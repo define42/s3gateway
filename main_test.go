@@ -107,6 +107,20 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	if !bytes.Equal(gotBody, wantBody) {
 		t.Fatalf("upstream object mismatch: got %q want %q", string(gotBody), string(wantBody))
 	}
+
+	if _, err := gatewayClient.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}); err != nil {
+		t.Fatalf("delete object via gateway: %v", err)
+	}
+
+	if _, err := upstreamClient.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}); err == nil {
+		t.Fatalf("expected upstream object to be deleted, but get object succeeded")
+	}
 }
 
 func startGlauthWithConfig(ctx context.Context, t *testing.T, cfg string, scheme string) (string, func()) {
