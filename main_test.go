@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	minio "github.com/minio/minio-go/v7"
 	minioCredentials "github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/testcontainers/testcontainers-go"
@@ -354,6 +355,265 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 	}
 	if roNames[deniedBucket] {
 		t.Fatalf("readonly list unexpectedly included denied bucket %q: got=%v", deniedBucket, mapBoolKeys(roNames))
+	}
+}
+
+func TestLdapS3upstreamListObjectsV2(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	ldapCfgPath := writeGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	defer stopLDAP()
+
+	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	defer stopMinio()
+
+	cfg := Config{
+		LDAPURL:                ldapURL,
+		BaseDN:                 "dc=glauth,dc=com",
+		GroupTTL:               30 * time.Second,
+		UpstreamEndpoint:       minioURL,
+		UpstreamRegion:         "us-east-1",
+		UpstreamAccessKey:      "minioadmin",
+		UpstreamSecretKey:      "minioadmin",
+		UpstreamForcePathStyle: true,
+		SigV4Secret:            "password",
+		SigV4Service:           "s3",
+	}
+
+	up, err := newUpstreamS3(ctx, cfg)
+	if err != nil {
+		t.Fatalf("init upstream s3: %v", err)
+	}
+
+	gw := &server{
+		cfg:    cfg,
+		up:     up,
+		gcache: newGroupCache(cfg.GroupTTL),
+	}
+	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	defer gwSrv.Close()
+
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+
+	bucket := fmt.Sprintf("team2-listobj-%d", time.Now().UnixNano())
+	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("create bucket via gateway: %v", err)
+	}
+
+	objects := map[string][]byte{
+		"docs/a.txt":   []byte("alpha"),
+		"docs/b.txt":   []byte("bravo"),
+		"images/c.jpg": []byte("charlie"),
+	}
+	for key, body := range objects {
+		if _, err := rwClient.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:        aws.String(bucket),
+			Key:           aws.String(key),
+			Body:          bytes.NewReader(body),
+			ContentLength: aws.Int64(int64(len(body))),
+			ContentType:   aws.String("application/octet-stream"),
+		}); err != nil {
+			t.Fatalf("put object %q via gateway: %v", key, err)
+		}
+	}
+
+	assertListObjectsV2WithPrefix := func(client *s3.Client, userLabel string) {
+		t.Helper()
+		out, err := client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket: aws.String(bucket),
+			Prefix: aws.String("docs/"),
+		})
+		if err != nil {
+			t.Fatalf("list objects v2 via gateway (%s): %v", userLabel, err)
+		}
+
+		got := map[string]bool{}
+		for _, o := range out.Contents {
+			if o.Key != nil {
+				got[*o.Key] = true
+			}
+		}
+		if !got["docs/a.txt"] || !got["docs/b.txt"] {
+			t.Fatalf("%s list objects missing docs keys: got=%v", userLabel, mapBoolKeys(got))
+		}
+		if got["images/c.jpg"] {
+			t.Fatalf("%s list objects unexpectedly included non-prefix key: got=%v", userLabel, mapBoolKeys(got))
+		}
+	}
+
+	assertListObjectsV2WithPrefix(rwClient, "rw")
+	assertListObjectsV2WithPrefix(roClient, "readonly")
+}
+
+func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	ldapCfgPath := writeGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	defer stopLDAP()
+
+	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	defer stopMinio()
+
+	cfg := Config{
+		LDAPURL:                ldapURL,
+		BaseDN:                 "dc=glauth,dc=com",
+		GroupTTL:               30 * time.Second,
+		UpstreamEndpoint:       minioURL,
+		UpstreamRegion:         "us-east-1",
+		UpstreamAccessKey:      "minioadmin",
+		UpstreamSecretKey:      "minioadmin",
+		UpstreamForcePathStyle: true,
+		SigV4Secret:            "password",
+		SigV4Service:           "s3",
+	}
+
+	up, err := newUpstreamS3(ctx, cfg)
+	if err != nil {
+		t.Fatalf("init upstream s3: %v", err)
+	}
+
+	gw := &server{
+		cfg:    cfg,
+		up:     up,
+		gcache: newGroupCache(cfg.GroupTTL),
+	}
+	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	defer gwSrv.Close()
+
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	gatewayClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+
+	bucket := fmt.Sprintf("team2-multipart-%d", time.Now().UnixNano())
+	if _, err := gatewayClient.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("create bucket via gateway: %v", err)
+	}
+
+	completeKey := "multi/complete.txt"
+	part1Body := bytes.Repeat([]byte("a"), 5*1024*1024)
+	part2Body := []byte("multipart")
+
+	createOut, err := gatewayClient.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(completeKey),
+	})
+	if err != nil {
+		t.Fatalf("create multipart upload via gateway: %v", err)
+	}
+	if createOut.UploadId == nil || *createOut.UploadId == "" {
+		t.Fatalf("create multipart upload returned empty upload id")
+	}
+
+	part1Out, err := gatewayClient.UploadPart(ctx, &s3.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(completeKey),
+		UploadId:      createOut.UploadId,
+		PartNumber:    aws.Int32(1),
+		Body:          bytes.NewReader(part1Body),
+		ContentLength: aws.Int64(int64(len(part1Body))),
+	})
+	if err != nil {
+		t.Fatalf("upload part 1 via gateway: %v", err)
+	}
+	if part1Out.ETag == nil || *part1Out.ETag == "" {
+		t.Fatalf("upload part 1 returned empty etag")
+	}
+
+	part2Out, err := gatewayClient.UploadPart(ctx, &s3.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(completeKey),
+		UploadId:      createOut.UploadId,
+		PartNumber:    aws.Int32(2),
+		Body:          bytes.NewReader(part2Body),
+		ContentLength: aws.Int64(int64(len(part2Body))),
+	})
+	if err != nil {
+		t.Fatalf("upload part 2 via gateway: %v", err)
+	}
+	if part2Out.ETag == nil || *part2Out.ETag == "" {
+		t.Fatalf("upload part 2 returned empty etag")
+	}
+
+	if _, err := gatewayClient.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(completeKey),
+		UploadId: createOut.UploadId,
+		MultipartUpload: &s3types.CompletedMultipartUpload{
+			Parts: []s3types.CompletedPart{
+				{PartNumber: aws.Int32(1), ETag: part1Out.ETag},
+				{PartNumber: aws.Int32(2), ETag: part2Out.ETag},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("complete multipart upload via gateway: %v", err)
+	}
+
+	completeObj, err := upstreamClient.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(completeKey),
+	})
+	if err != nil {
+		t.Fatalf("get completed multipart object from upstream: %v", err)
+	}
+	defer completeObj.Body.Close()
+
+	completeBody, err := io.ReadAll(completeObj.Body)
+	if err != nil {
+		t.Fatalf("read completed multipart object body: %v", err)
+	}
+	wantComplete := append(append([]byte{}, part1Body...), part2Body...)
+	if !bytes.Equal(completeBody, wantComplete) {
+		t.Fatalf("completed multipart body mismatch: gotLen=%d wantLen=%d", len(completeBody), len(wantComplete))
+	}
+
+	abortKey := "multi/abort.txt"
+	abortCreateOut, err := gatewayClient.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(abortKey),
+	})
+	if err != nil {
+		t.Fatalf("create multipart upload for abort via gateway: %v", err)
+	}
+	if abortCreateOut.UploadId == nil || *abortCreateOut.UploadId == "" {
+		t.Fatalf("create multipart upload for abort returned empty upload id")
+	}
+
+	abortPartBody := []byte("to be aborted")
+	if _, err := gatewayClient.UploadPart(ctx, &s3.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(abortKey),
+		UploadId:      abortCreateOut.UploadId,
+		PartNumber:    aws.Int32(1),
+		Body:          bytes.NewReader(abortPartBody),
+		ContentLength: aws.Int64(int64(len(abortPartBody))),
+	}); err != nil {
+		t.Fatalf("upload part for abort via gateway: %v", err)
+	}
+
+	if _, err := gatewayClient.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(abortKey),
+		UploadId: abortCreateOut.UploadId,
+	}); err != nil {
+		t.Fatalf("abort multipart upload via gateway: %v", err)
+	}
+
+	if _, err := upstreamClient.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(abortKey),
+	}); err == nil {
+		t.Fatalf("expected aborted multipart object to be absent in upstream")
 	}
 }
 

@@ -1011,9 +1011,15 @@ func (s *server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 
 	parts := make([]types.CompletedPart, 0, len(cmu.Parts))
 	for _, p := range cmu.Parts {
-		etag := strings.Trim(strings.TrimSpace(p.ETag), `"`)
+		etag := strings.TrimSpace(p.ETag)
 		if p.PartNumber <= 0 || etag == "" {
 			continue
+		}
+		if !strings.HasPrefix(etag, `"`) {
+			etag = `"` + etag
+		}
+		if !strings.HasSuffix(etag, `"`) {
+			etag = etag + `"`
 		}
 		pn := p.PartNumber
 		parts = append(parts, types.CompletedPart{
