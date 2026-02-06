@@ -276,6 +276,8 @@ func newUpstreamS3(ctx context.Context, cfg Config) (*s3.Client, error) {
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.UpstreamAccessKey, cfg.UpstreamSecretKey, "")),
 		// Gateway forwards request bodies as non-seekable streams; avoid optional precomputed request checksums.
 		config.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+		// Upstream responses may not include optional checksum headers.
+		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 	)
 	if err != nil {
 		return nil, err

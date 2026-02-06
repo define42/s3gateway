@@ -499,6 +499,7 @@ func newS3Client(t *testing.T, ctx context.Context, endpoint, region, accessKey,
 		config.WithRegion(region),
 		config.WithEndpointResolverWithOptions(resolver),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
+		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 	)
 	if err != nil {
 		t.Fatalf("load aws config for %s: %v", endpoint, err)
