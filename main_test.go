@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -452,6 +453,394 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 	assertListObjectsV2WithPrefix(roClient, "readonly")
 }
 
+func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	ldapCfgPath := writeGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	defer stopLDAP()
+
+	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	defer stopMinio()
+
+	cfg := Config{
+		LDAPURL:                ldapURL,
+		BaseDN:                 "dc=glauth,dc=com",
+		GroupTTL:               30 * time.Second,
+		UpstreamEndpoint:       minioURL,
+		UpstreamRegion:         "us-east-1",
+		UpstreamAccessKey:      "minioadmin",
+		UpstreamSecretKey:      "minioadmin",
+		UpstreamForcePathStyle: true,
+		SigV4Secret:            "password",
+		SigV4Service:           "s3",
+	}
+
+	up, err := newUpstreamS3(ctx, cfg)
+	if err != nil {
+		t.Fatalf("init upstream s3: %v", err)
+	}
+
+	gw := &server{
+		cfg:    cfg,
+		up:     up,
+		gcache: newGroupCache(cfg.GroupTTL),
+	}
+	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	defer gwSrv.Close()
+
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+
+	bucket := fmt.Sprintf("team2-listmpu-%d", time.Now().UnixNano())
+	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("create bucket via gateway: %v", err)
+	}
+
+	type uploadRef struct {
+		key      string
+		uploadID *string
+	}
+	var uploads []uploadRef
+	for _, key := range []string{"uploads/a.bin", "uploads/b.bin", "other/c.bin"} {
+		out, err := rwClient.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(key),
+		})
+		if err != nil {
+			t.Fatalf("create multipart upload %q via gateway: %v", key, err)
+		}
+		partBody := []byte("x")
+		if _, err := rwClient.UploadPart(ctx, &s3.UploadPartInput{
+			Bucket:        aws.String(bucket),
+			Key:           aws.String(key),
+			UploadId:      out.UploadId,
+			PartNumber:    aws.Int32(1),
+			Body:          bytes.NewReader(partBody),
+			ContentLength: aws.Int64(int64(len(partBody))),
+		}); err != nil {
+			t.Fatalf("upload part for multipart upload %q via gateway: %v", key, err)
+		}
+		uploads = append(uploads, uploadRef{key: key, uploadID: out.UploadId})
+	}
+	defer func() {
+		for _, up := range uploads {
+			if up.uploadID == nil {
+				continue
+			}
+			_, _ = rwClient.AbortMultipartUpload(context.Background(), &s3.AbortMultipartUploadInput{
+				Bucket:   aws.String(bucket),
+				Key:      aws.String(up.key),
+				UploadId: up.uploadID,
+			})
+		}
+	}()
+
+	type listMultipartResult struct {
+		keys        map[string]bool
+		isTruncated bool
+		keyMarker   string
+		uploadID    string
+	}
+	extractListMultipartResult := func(out *s3.ListMultipartUploadsOutput) listMultipartResult {
+		keys := map[string]bool{}
+		for _, u := range out.Uploads {
+			if u.Key != nil {
+				keys[*u.Key] = true
+			}
+		}
+		return listMultipartResult{
+			keys:        keys,
+			isTruncated: aws.ToBool(out.IsTruncated),
+			keyMarker:   aws.ToString(out.NextKeyMarker),
+			uploadID:    aws.ToString(out.NextUploadIdMarker),
+		}
+	}
+	assertListUploadsMatchesUpstream := func(client *s3.Client, label string) {
+		t.Helper()
+		upstreamOut, err := upstreamClient.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+			Bucket: aws.String(bucket),
+			Prefix: aws.String("uploads/"),
+		})
+		if err != nil {
+			t.Fatalf("list multipart uploads via upstream: %v", err)
+		}
+		gatewayOut, err := client.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+			Bucket: aws.String(bucket),
+			Prefix: aws.String("uploads/"),
+		})
+		if err != nil {
+			t.Fatalf("list multipart uploads via gateway (%s): %v", label, err)
+		}
+		upstreamRes := extractListMultipartResult(upstreamOut)
+		gatewayRes := extractListMultipartResult(gatewayOut)
+		if strings.Join(mapBoolKeys(gatewayRes.keys), ",") != strings.Join(mapBoolKeys(upstreamRes.keys), ",") {
+			t.Fatalf("%s list multipart uploads keys mismatch: gateway=%v upstream=%v", label, mapBoolKeys(gatewayRes.keys), mapBoolKeys(upstreamRes.keys))
+		}
+		if gatewayRes.isTruncated != upstreamRes.isTruncated {
+			t.Fatalf("%s list multipart uploads truncation mismatch: gateway=%v upstream=%v", label, gatewayRes.isTruncated, upstreamRes.isTruncated)
+		}
+	}
+
+	assertListUploadsMatchesUpstream(rwClient, "rw")
+	assertListUploadsMatchesUpstream(roClient, "readonly")
+
+	upstreamPage1, err := upstreamClient.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+		Bucket:     aws.String(bucket),
+		Prefix:     aws.String("uploads/"),
+		MaxUploads: aws.Int32(1),
+	})
+	if err != nil {
+		t.Fatalf("list multipart uploads page 1 via upstream: %v", err)
+	}
+	gatewayPage1, err := rwClient.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+		Bucket:     aws.String(bucket),
+		Prefix:     aws.String("uploads/"),
+		MaxUploads: aws.Int32(1),
+	})
+	if err != nil {
+		t.Fatalf("list multipart uploads page 1 via gateway: %v", err)
+	}
+
+	upstreamPage1Res := extractListMultipartResult(upstreamPage1)
+	gatewayPage1Res := extractListMultipartResult(gatewayPage1)
+	if strings.Join(mapBoolKeys(gatewayPage1Res.keys), ",") != strings.Join(mapBoolKeys(upstreamPage1Res.keys), ",") {
+		t.Fatalf("list multipart uploads page 1 keys mismatch: gateway=%v upstream=%v", mapBoolKeys(gatewayPage1Res.keys), mapBoolKeys(upstreamPage1Res.keys))
+	}
+	if gatewayPage1Res.isTruncated != upstreamPage1Res.isTruncated {
+		t.Fatalf("list multipart uploads page 1 truncation mismatch: gateway=%v upstream=%v", gatewayPage1Res.isTruncated, upstreamPage1Res.isTruncated)
+	}
+
+	upstreamPage2, err := upstreamClient.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+		Bucket:         aws.String(bucket),
+		Prefix:         aws.String("uploads/"),
+		MaxUploads:     aws.Int32(1),
+		KeyMarker:      upstreamPage1.NextKeyMarker,
+		UploadIdMarker: upstreamPage1.NextUploadIdMarker,
+	})
+	if err != nil {
+		t.Fatalf("list multipart uploads page 2 via upstream: %v", err)
+	}
+	gatewayPage2, err := rwClient.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+		Bucket:         aws.String(bucket),
+		Prefix:         aws.String("uploads/"),
+		MaxUploads:     aws.Int32(1),
+		KeyMarker:      gatewayPage1.NextKeyMarker,
+		UploadIdMarker: gatewayPage1.NextUploadIdMarker,
+	})
+	if err != nil {
+		t.Fatalf("list multipart uploads page 2 via gateway: %v", err)
+	}
+	upstreamPage2Res := extractListMultipartResult(upstreamPage2)
+	gatewayPage2Res := extractListMultipartResult(gatewayPage2)
+	if strings.Join(mapBoolKeys(gatewayPage2Res.keys), ",") != strings.Join(mapBoolKeys(upstreamPage2Res.keys), ",") {
+		t.Fatalf("list multipart uploads page 2 keys mismatch: gateway=%v upstream=%v", mapBoolKeys(gatewayPage2Res.keys), mapBoolKeys(upstreamPage2Res.keys))
+	}
+	if gatewayPage2Res.isTruncated != upstreamPage2Res.isTruncated {
+		t.Fatalf("list multipart uploads page 2 truncation mismatch: gateway=%v upstream=%v", gatewayPage2Res.isTruncated, upstreamPage2Res.isTruncated)
+	}
+}
+
+func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	ldapCfgPath := writeGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	defer stopLDAP()
+
+	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	defer stopMinio()
+
+	cfg := Config{
+		LDAPURL:                ldapURL,
+		BaseDN:                 "dc=glauth,dc=com",
+		GroupTTL:               30 * time.Second,
+		UpstreamEndpoint:       minioURL,
+		UpstreamRegion:         "us-east-1",
+		UpstreamAccessKey:      "minioadmin",
+		UpstreamSecretKey:      "minioadmin",
+		UpstreamForcePathStyle: true,
+		SigV4Secret:            "password",
+		SigV4Service:           "s3",
+	}
+
+	up, err := newUpstreamS3(ctx, cfg)
+	if err != nil {
+		t.Fatalf("init upstream s3: %v", err)
+	}
+
+	gw := &server{
+		cfg:    cfg,
+		up:     up,
+		gcache: newGroupCache(cfg.GroupTTL),
+	}
+	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	defer gwSrv.Close()
+
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+
+	bucket := fmt.Sprintf("team2-getattrs-%d", time.Now().UnixNano())
+	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("create bucket via gateway: %v", err)
+	}
+
+	simpleKey := "attrs/simple.txt"
+	simpleBody := []byte("simple attrs body")
+	if _, err := rwClient.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(simpleKey),
+		Body:          bytes.NewReader(simpleBody),
+		ContentLength: aws.Int64(int64(len(simpleBody))),
+		ContentType:   aws.String("text/plain"),
+	}); err != nil {
+		t.Fatalf("put simple object via gateway: %v", err)
+	}
+
+	simpleAttrs, err := rwClient.GetObjectAttributes(ctx, &s3.GetObjectAttributesInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(simpleKey),
+		ObjectAttributes: []s3types.ObjectAttributes{
+			s3types.ObjectAttributesEtag,
+			s3types.ObjectAttributesObjectSize,
+		},
+	})
+	if err != nil {
+		t.Fatalf("get object attributes (rw) via gateway: %v", err)
+	}
+	if simpleAttrs.ETag == nil || *simpleAttrs.ETag == "" {
+		t.Fatalf("expected etag in get object attributes response")
+	}
+	if aws.ToInt64(simpleAttrs.ObjectSize) != int64(len(simpleBody)) {
+		t.Fatalf("unexpected object size from attributes: got=%d want=%d", aws.ToInt64(simpleAttrs.ObjectSize), len(simpleBody))
+	}
+
+	if _, err := roClient.GetObjectAttributes(ctx, &s3.GetObjectAttributesInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(simpleKey),
+		ObjectAttributes: []s3types.ObjectAttributes{
+			s3types.ObjectAttributesEtag,
+			s3types.ObjectAttributesObjectSize,
+		},
+	}); err != nil {
+		t.Fatalf("get object attributes (readonly) via gateway: %v", err)
+	}
+
+	multiKey := "attrs/multi.txt"
+	part1Body := bytes.Repeat([]byte("m"), 5*1024*1024)
+	part2Body := []byte("tail")
+
+	createOut, err := rwClient.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(multiKey),
+	})
+	if err != nil {
+		t.Fatalf("create multipart for attrs via gateway: %v", err)
+	}
+
+	part1Out, err := rwClient.UploadPart(ctx, &s3.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(multiKey),
+		UploadId:      createOut.UploadId,
+		PartNumber:    aws.Int32(1),
+		Body:          bytes.NewReader(part1Body),
+		ContentLength: aws.Int64(int64(len(part1Body))),
+	})
+	if err != nil {
+		t.Fatalf("upload part 1 for attrs via gateway: %v", err)
+	}
+	part2Out, err := rwClient.UploadPart(ctx, &s3.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(multiKey),
+		UploadId:      createOut.UploadId,
+		PartNumber:    aws.Int32(2),
+		Body:          bytes.NewReader(part2Body),
+		ContentLength: aws.Int64(int64(len(part2Body))),
+	})
+	if err != nil {
+		t.Fatalf("upload part 2 for attrs via gateway: %v", err)
+	}
+	if _, err := rwClient.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(multiKey),
+		UploadId: createOut.UploadId,
+		MultipartUpload: &s3types.CompletedMultipartUpload{
+			Parts: []s3types.CompletedPart{
+				{PartNumber: aws.Int32(1), ETag: part1Out.ETag},
+				{PartNumber: aws.Int32(2), ETag: part2Out.ETag},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("complete multipart for attrs via gateway: %v", err)
+	}
+
+	attrsPage1, err := rwClient.GetObjectAttributes(ctx, &s3.GetObjectAttributesInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(multiKey),
+		MaxParts: aws.Int32(1),
+		ObjectAttributes: []s3types.ObjectAttributes{
+			s3types.ObjectAttributesObjectParts,
+			s3types.ObjectAttributesObjectSize,
+		},
+	})
+	if err != nil {
+		t.Fatalf("get multipart object attributes page 1 via gateway: %v", err)
+	}
+	if aws.ToInt64(attrsPage1.ObjectSize) != int64(len(part1Body)+len(part2Body)) {
+		t.Fatalf("unexpected multipart object size from attributes: got=%d want=%d", aws.ToInt64(attrsPage1.ObjectSize), len(part1Body)+len(part2Body))
+	}
+	if attrsPage1.ObjectParts == nil || len(attrsPage1.ObjectParts.Parts) != 1 {
+		gotLen := 0
+		if attrsPage1.ObjectParts != nil {
+			gotLen = len(attrsPage1.ObjectParts.Parts)
+		}
+		t.Fatalf("expected 1 part in attrs page 1, got %d", gotLen)
+	}
+	if !aws.ToBool(attrsPage1.ObjectParts.IsTruncated) {
+		t.Fatalf("expected attrs page 1 to be truncated")
+	}
+	if attrsPage1.ObjectParts.NextPartNumberMarker == nil || *attrsPage1.ObjectParts.NextPartNumberMarker == "" {
+		t.Fatalf("expected attrs page 1 next part number marker")
+	}
+
+	attrsPage2, err := rwClient.GetObjectAttributes(ctx, &s3.GetObjectAttributesInput{
+		Bucket:           aws.String(bucket),
+		Key:              aws.String(multiKey),
+		MaxParts:         aws.Int32(1),
+		PartNumberMarker: attrsPage1.ObjectParts.NextPartNumberMarker,
+		ObjectAttributes: []s3types.ObjectAttributes{
+			s3types.ObjectAttributesObjectParts,
+		},
+	})
+	if err != nil {
+		t.Fatalf("get multipart object attributes page 2 via gateway: %v", err)
+	}
+	if attrsPage2.ObjectParts == nil || len(attrsPage2.ObjectParts.Parts) != 1 {
+		gotLen := 0
+		if attrsPage2.ObjectParts != nil {
+			gotLen = len(attrsPage2.ObjectParts.Parts)
+		}
+		t.Fatalf("expected 1 part in attrs page 2, got %d", gotLen)
+	}
+	if aws.ToBool(attrsPage2.ObjectParts.IsTruncated) {
+		t.Fatalf("expected attrs page 2 to be non-truncated")
+	}
+	if aws.ToInt32(attrsPage2.ObjectParts.Parts[0].PartNumber) != 2 {
+		t.Fatalf("expected page 2 to return part number 2, got %d", aws.ToInt32(attrsPage2.ObjectParts.Parts[0].PartNumber))
+	}
+}
+
 func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -543,6 +932,73 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	}
 	if part2Out.ETag == nil || *part2Out.ETag == "" {
 		t.Fatalf("upload part 2 returned empty etag")
+	}
+
+	listOut, err := gatewayClient.ListParts(ctx, &s3.ListPartsInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(completeKey),
+		UploadId: createOut.UploadId,
+	})
+	if err != nil {
+		t.Fatalf("list parts via gateway: %v", err)
+	}
+	if len(listOut.Parts) != 2 {
+		t.Fatalf("expected 2 parts in list parts, got %d", len(listOut.Parts))
+	}
+	if aws.ToInt32(listOut.Parts[0].PartNumber) != 1 || aws.ToInt32(listOut.Parts[1].PartNumber) != 2 {
+		t.Fatalf("unexpected part order from list parts: got [%d, %d]",
+			aws.ToInt32(listOut.Parts[0].PartNumber),
+			aws.ToInt32(listOut.Parts[1].PartNumber))
+	}
+	if aws.ToInt64(listOut.Parts[0].Size) != int64(len(part1Body)) || aws.ToInt64(listOut.Parts[1].Size) != int64(len(part2Body)) {
+		t.Fatalf("unexpected part sizes from list parts: got [%d, %d] want [%d, %d]",
+			aws.ToInt64(listOut.Parts[0].Size),
+			aws.ToInt64(listOut.Parts[1].Size),
+			len(part1Body),
+			len(part2Body))
+	}
+
+	listPage1, err := gatewayClient.ListParts(ctx, &s3.ListPartsInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(completeKey),
+		UploadId: createOut.UploadId,
+		MaxParts: aws.Int32(1),
+	})
+	if err != nil {
+		t.Fatalf("list parts page 1 via gateway: %v", err)
+	}
+	firstPartNumPage1 := int32(-1)
+	if len(listPage1.Parts) > 0 {
+		firstPartNumPage1 = aws.ToInt32(listPage1.Parts[0].PartNumber)
+	}
+	if len(listPage1.Parts) != 1 || firstPartNumPage1 != 1 {
+		t.Fatalf("unexpected list parts page 1: len=%d firstPart=%d",
+			len(listPage1.Parts), firstPartNumPage1)
+	}
+	if !aws.ToBool(listPage1.IsTruncated) {
+		t.Fatalf("expected list parts page 1 to be truncated")
+	}
+
+	listPage2, err := gatewayClient.ListParts(ctx, &s3.ListPartsInput{
+		Bucket:           aws.String(bucket),
+		Key:              aws.String(completeKey),
+		UploadId:         createOut.UploadId,
+		MaxParts:         aws.Int32(1),
+		PartNumberMarker: listPage1.NextPartNumberMarker,
+	})
+	if err != nil {
+		t.Fatalf("list parts page 2 via gateway: %v", err)
+	}
+	firstPartNumPage2 := int32(-1)
+	if len(listPage2.Parts) > 0 {
+		firstPartNumPage2 = aws.ToInt32(listPage2.Parts[0].PartNumber)
+	}
+	if len(listPage2.Parts) != 1 || firstPartNumPage2 != 2 {
+		t.Fatalf("unexpected list parts page 2: len=%d firstPart=%d",
+			len(listPage2.Parts), firstPartNumPage2)
+	}
+	if aws.ToBool(listPage2.IsTruncated) {
+		t.Fatalf("expected list parts page 2 to be non-truncated")
 	}
 
 	if _, err := gatewayClient.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
@@ -740,6 +1196,7 @@ func mapBoolKeys(in map[string]bool) []string {
 	for k := range in {
 		out = append(out, k)
 	}
+	sort.Strings(out)
 	return out
 }
 

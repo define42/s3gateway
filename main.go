@@ -636,8 +636,8 @@ func rulesFromCtx(r *http.Request) []Rule {
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Path-style only:
 	//   /                 => ListBuckets
-	//   /bucket           => CreateBucket, ListObjects (v2)
-	//   /bucket/key       => GetObject, PutObject, Multipart ops via query
+	//   /bucket           => CreateBucket, ListObjects (v2), ListMultipartUploads
+	//   /bucket/key       => GetObject, PutObject, DeleteObject, GetObjectAttributes, Multipart ops via query
 
 	p := r.URL.Path
 	if p == "" {
@@ -655,17 +655,27 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.SplitN(rest, "/", 2)
+	if len(parts) == 2 && parts[1] == "" {
+		parts = parts[:1]
+	}
 	bucket := parts[0]
 
 	// /bucket
 	if len(parts) == 1 {
+		q := r.URL.Query()
 		if r.Method == http.MethodPut {
 			s.handleCreateBucket(w, r, bucket)
 			return
 		}
-		if r.Method == http.MethodGet && r.URL.Query().Get("list-type") == "2" {
-			s.handleListObjectsV2(w, r, bucket)
-			return
+		if r.Method == http.MethodGet {
+			if q.Get("list-type") == "2" {
+				s.handleListObjectsV2(w, r, bucket)
+				return
+			}
+			if _, ok := q["uploads"]; ok {
+				s.handleListMultipartUploads(w, r, bucket)
+				return
+			}
 		}
 		writeXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 		return
@@ -680,8 +690,15 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleCreateMultipart(w, r, bucket, key)
 		return
 	}
+	if _, ok := q["attributes"]; ok && r.Method == http.MethodGet {
+		s.handleGetObjectAttributes(w, r, bucket, key)
+		return
+	}
 	if uploadID := q.Get("uploadId"); uploadID != "" {
 		switch r.Method {
+		case http.MethodGet:
+			s.handleListParts(w, r, bucket, key, uploadID)
+			return
 		case http.MethodPut:
 			pnStr := q.Get("partNumber")
 			pn, err := strconv.Atoi(pnStr)
@@ -809,6 +826,132 @@ func (s *server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 	_, _ = w.Write([]byte(b.String()))
 }
 
+func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Request, bucket string) {
+	rules := rulesFromCtx(r)
+	if !canRead(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	in := &s3.ListMultipartUploadsInput{Bucket: &bucket}
+	q := r.URL.Query()
+	if v := q.Get("prefix"); v != "" {
+		in.Prefix = &v
+	}
+	if v := q.Get("delimiter"); v != "" {
+		in.Delimiter = &v
+	}
+	if v := q.Get("key-marker"); v != "" {
+		in.KeyMarker = &v
+	}
+	if v := q.Get("upload-id-marker"); v != "" {
+		in.UploadIdMarker = &v
+	}
+	if v := q.Get("encoding-type"); v != "" {
+		in.EncodingType = types.EncodingType(v)
+	}
+	if v := q.Get("max-uploads"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-uploads")
+			return
+		}
+		in.MaxUploads = aws.Int32(int32(n))
+	}
+
+	out, err := s.up.ListMultipartUploads(r.Context(), in)
+	if err != nil {
+		writeXMLError(w, http.StatusBadGateway, "BadGateway", "Upstream error")
+		return
+	}
+
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+	b.WriteString(`<ListMultipartUploadsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	b.WriteString("<Bucket>" + xmlEscape(bucket) + "</Bucket>")
+	if out.KeyMarker != nil {
+		b.WriteString("<KeyMarker>" + xmlEscape(*out.KeyMarker) + "</KeyMarker>")
+	}
+	if out.UploadIdMarker != nil {
+		b.WriteString("<UploadIdMarker>" + xmlEscape(*out.UploadIdMarker) + "</UploadIdMarker>")
+	}
+	if out.NextKeyMarker != nil {
+		b.WriteString("<NextKeyMarker>" + xmlEscape(*out.NextKeyMarker) + "</NextKeyMarker>")
+	}
+	if out.NextUploadIdMarker != nil {
+		b.WriteString("<NextUploadIdMarker>" + xmlEscape(*out.NextUploadIdMarker) + "</NextUploadIdMarker>")
+	}
+	if out.Prefix != nil {
+		b.WriteString("<Prefix>" + xmlEscape(*out.Prefix) + "</Prefix>")
+	}
+	if out.Delimiter != nil {
+		b.WriteString("<Delimiter>" + xmlEscape(*out.Delimiter) + "</Delimiter>")
+	}
+	if out.MaxUploads != nil {
+		b.WriteString("<MaxUploads>" + strconv.Itoa(int(*out.MaxUploads)) + "</MaxUploads>")
+	}
+	b.WriteString("<IsTruncated>")
+	if aws.ToBool(out.IsTruncated) {
+		b.WriteString("true")
+	} else {
+		b.WriteString("false")
+	}
+	b.WriteString("</IsTruncated>")
+	for _, cp := range out.CommonPrefixes {
+		if cp.Prefix == nil {
+			continue
+		}
+		b.WriteString("<CommonPrefixes><Prefix>" + xmlEscape(*cp.Prefix) + "</Prefix></CommonPrefixes>")
+	}
+	for _, u := range out.Uploads {
+		b.WriteString("<Upload>")
+		if u.Key != nil {
+			b.WriteString("<Key>" + xmlEscape(*u.Key) + "</Key>")
+		}
+		if u.UploadId != nil {
+			b.WriteString("<UploadId>" + xmlEscape(*u.UploadId) + "</UploadId>")
+		}
+		if u.Initiated != nil {
+			b.WriteString("<Initiated>" + u.Initiated.UTC().Format("2006-01-02T15:04:05.000Z") + "</Initiated>")
+		}
+		if u.StorageClass != "" {
+			b.WriteString("<StorageClass>" + xmlEscape(string(u.StorageClass)) + "</StorageClass>")
+		}
+		if u.ChecksumAlgorithm != "" {
+			b.WriteString("<ChecksumAlgorithm>" + xmlEscape(string(u.ChecksumAlgorithm)) + "</ChecksumAlgorithm>")
+		}
+		if u.ChecksumType != "" {
+			b.WriteString("<ChecksumType>" + xmlEscape(string(u.ChecksumType)) + "</ChecksumType>")
+		}
+		if u.Owner != nil {
+			b.WriteString("<Owner>")
+			if u.Owner.DisplayName != nil {
+				b.WriteString("<DisplayName>" + xmlEscape(*u.Owner.DisplayName) + "</DisplayName>")
+			}
+			if u.Owner.ID != nil {
+				b.WriteString("<ID>" + xmlEscape(*u.Owner.ID) + "</ID>")
+			}
+			b.WriteString("</Owner>")
+		}
+		if u.Initiator != nil {
+			b.WriteString("<Initiator>")
+			if u.Initiator.DisplayName != nil {
+				b.WriteString("<DisplayName>" + xmlEscape(*u.Initiator.DisplayName) + "</DisplayName>")
+			}
+			if u.Initiator.ID != nil {
+				b.WriteString("<ID>" + xmlEscape(*u.Initiator.ID) + "</ID>")
+			}
+			b.WriteString("</Initiator>")
+		}
+		b.WriteString("</Upload>")
+	}
+	b.WriteString(`</ListMultipartUploadsResult>`)
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(b.String()))
+}
+
 func (s *server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := rulesFromCtx(r)
 	if !canRead(rules, bucket) {
@@ -834,6 +977,190 @@ func (s *server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, out.Body)
+}
+
+func parseObjectAttributesHeader(h http.Header) ([]types.ObjectAttributes, error) {
+	values := h.Values("x-amz-object-attributes")
+	if len(values) == 0 {
+		return nil, errors.New("missing x-amz-object-attributes")
+	}
+
+	seen := map[types.ObjectAttributes]struct{}{}
+	out := make([]types.ObjectAttributes, 0, len(values))
+	for _, raw := range values {
+		for _, token := range strings.Split(raw, ",") {
+			v := strings.Trim(strings.TrimSpace(token), `"`)
+			if v == "" {
+				continue
+			}
+			var attr types.ObjectAttributes
+			switch strings.ToLower(v) {
+			case "etag":
+				attr = types.ObjectAttributesEtag
+			case "checksum":
+				attr = types.ObjectAttributesChecksum
+			case "objectparts":
+				attr = types.ObjectAttributesObjectParts
+			case "storageclass":
+				attr = types.ObjectAttributesStorageClass
+			case "objectsize":
+				attr = types.ObjectAttributesObjectSize
+			default:
+				return nil, fmt.Errorf("unsupported object attribute %q", v)
+			}
+			if _, ok := seen[attr]; ok {
+				continue
+			}
+			seen[attr] = struct{}{}
+			out = append(out, attr)
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no object attributes requested")
+	}
+	return out, nil
+}
+
+func (s *server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	rules := rulesFromCtx(r)
+	if !canRead(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	attrs, err := parseObjectAttributesHeader(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-object-attributes")
+		return
+	}
+
+	in := &s3.GetObjectAttributesInput{
+		Bucket:           &bucket,
+		Key:              &key,
+		ObjectAttributes: attrs,
+	}
+	if versionID := r.URL.Query().Get("versionId"); versionID != "" {
+		in.VersionId = &versionID
+	}
+	if mpStr := strings.TrimSpace(r.Header.Get("x-amz-max-parts")); mpStr != "" {
+		mp, err := strconv.Atoi(mpStr)
+		if err != nil || mp <= 0 {
+			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-max-parts")
+			return
+		}
+		in.MaxParts = aws.Int32(int32(mp))
+	}
+	if marker := strings.TrimSpace(r.Header.Get("x-amz-part-number-marker")); marker != "" {
+		if _, err := strconv.Atoi(marker); err != nil {
+			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-part-number-marker")
+			return
+		}
+		in.PartNumberMarker = &marker
+	}
+
+	out, err := s.up.GetObjectAttributes(r.Context(), in)
+	if err != nil {
+		writeXMLError(w, http.StatusBadGateway, "BadGateway", "Upstream error")
+		return
+	}
+
+	if out.LastModified != nil {
+		w.Header().Set("Last-Modified", out.LastModified.UTC().Format(http.TimeFormat))
+	}
+	if out.VersionId != nil {
+		w.Header().Set("x-amz-version-id", *out.VersionId)
+	}
+	if out.DeleteMarker != nil {
+		w.Header().Set("x-amz-delete-marker", strconv.FormatBool(*out.DeleteMarker))
+	}
+
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+	b.WriteString(`<GetObjectAttributesOutput xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	if out.ETag != nil {
+		b.WriteString("<ETag>" + xmlEscape(*out.ETag) + "</ETag>")
+	}
+	if out.ObjectSize != nil {
+		b.WriteString("<ObjectSize>" + strconv.FormatInt(*out.ObjectSize, 10) + "</ObjectSize>")
+	}
+	if out.StorageClass != "" {
+		b.WriteString("<StorageClass>" + xmlEscape(string(out.StorageClass)) + "</StorageClass>")
+	}
+	if out.Checksum != nil {
+		b.WriteString("<Checksum>")
+		if out.Checksum.ChecksumCRC32 != nil {
+			b.WriteString("<ChecksumCRC32>" + xmlEscape(*out.Checksum.ChecksumCRC32) + "</ChecksumCRC32>")
+		}
+		if out.Checksum.ChecksumCRC32C != nil {
+			b.WriteString("<ChecksumCRC32C>" + xmlEscape(*out.Checksum.ChecksumCRC32C) + "</ChecksumCRC32C>")
+		}
+		if out.Checksum.ChecksumCRC64NVME != nil {
+			b.WriteString("<ChecksumCRC64NVME>" + xmlEscape(*out.Checksum.ChecksumCRC64NVME) + "</ChecksumCRC64NVME>")
+		}
+		if out.Checksum.ChecksumSHA1 != nil {
+			b.WriteString("<ChecksumSHA1>" + xmlEscape(*out.Checksum.ChecksumSHA1) + "</ChecksumSHA1>")
+		}
+		if out.Checksum.ChecksumSHA256 != nil {
+			b.WriteString("<ChecksumSHA256>" + xmlEscape(*out.Checksum.ChecksumSHA256) + "</ChecksumSHA256>")
+		}
+		if out.Checksum.ChecksumType != "" {
+			b.WriteString("<ChecksumType>" + xmlEscape(string(out.Checksum.ChecksumType)) + "</ChecksumType>")
+		}
+		b.WriteString("</Checksum>")
+	}
+	if out.ObjectParts != nil {
+		b.WriteString("<ObjectParts>")
+		if out.ObjectParts.PartNumberMarker != nil {
+			b.WriteString("<PartNumberMarker>" + xmlEscape(*out.ObjectParts.PartNumberMarker) + "</PartNumberMarker>")
+		}
+		if out.ObjectParts.NextPartNumberMarker != nil {
+			b.WriteString("<NextPartNumberMarker>" + xmlEscape(*out.ObjectParts.NextPartNumberMarker) + "</NextPartNumberMarker>")
+		}
+		if out.ObjectParts.MaxParts != nil {
+			b.WriteString("<MaxParts>" + strconv.Itoa(int(*out.ObjectParts.MaxParts)) + "</MaxParts>")
+		}
+		if out.ObjectParts.TotalPartsCount != nil {
+			b.WriteString("<PartsCount>" + strconv.Itoa(int(*out.ObjectParts.TotalPartsCount)) + "</PartsCount>")
+		}
+		b.WriteString("<IsTruncated>")
+		if aws.ToBool(out.ObjectParts.IsTruncated) {
+			b.WriteString("true")
+		} else {
+			b.WriteString("false")
+		}
+		b.WriteString("</IsTruncated>")
+		for _, p := range out.ObjectParts.Parts {
+			b.WriteString("<Part>")
+			if p.PartNumber != nil {
+				b.WriteString("<PartNumber>" + strconv.Itoa(int(*p.PartNumber)) + "</PartNumber>")
+			}
+			if p.Size != nil {
+				b.WriteString("<Size>" + strconv.FormatInt(*p.Size, 10) + "</Size>")
+			}
+			if p.ChecksumCRC32 != nil {
+				b.WriteString("<ChecksumCRC32>" + xmlEscape(*p.ChecksumCRC32) + "</ChecksumCRC32>")
+			}
+			if p.ChecksumCRC32C != nil {
+				b.WriteString("<ChecksumCRC32C>" + xmlEscape(*p.ChecksumCRC32C) + "</ChecksumCRC32C>")
+			}
+			if p.ChecksumCRC64NVME != nil {
+				b.WriteString("<ChecksumCRC64NVME>" + xmlEscape(*p.ChecksumCRC64NVME) + "</ChecksumCRC64NVME>")
+			}
+			if p.ChecksumSHA1 != nil {
+				b.WriteString("<ChecksumSHA1>" + xmlEscape(*p.ChecksumSHA1) + "</ChecksumSHA1>")
+			}
+			if p.ChecksumSHA256 != nil {
+				b.WriteString("<ChecksumSHA256>" + xmlEscape(*p.ChecksumSHA256) + "</ChecksumSHA256>")
+			}
+			b.WriteString("</Part>")
+		}
+		b.WriteString("</ObjectParts>")
+	}
+	b.WriteString(`</GetObjectAttributesOutput>`)
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(b.String()))
 }
 
 func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
@@ -993,6 +1320,77 @@ func (s *server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 		w.Header().Set("ETag", *out.ETag)
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *server) handleListParts(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
+	rules := rulesFromCtx(r)
+	if !canRead(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	in := &s3.ListPartsInput{
+		Bucket:   &bucket,
+		Key:      &key,
+		UploadId: &uploadID,
+	}
+
+	if pnmStr := r.URL.Query().Get("part-number-marker"); pnmStr != "" {
+		pnm, err := strconv.Atoi(pnmStr)
+		if err != nil || pnm < 0 {
+			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid part-number-marker")
+			return
+		}
+		in.PartNumberMarker = aws.String(strconv.Itoa(pnm))
+	}
+	if mpStr := r.URL.Query().Get("max-parts"); mpStr != "" {
+		mp, err := strconv.Atoi(mpStr)
+		if err != nil || mp <= 0 {
+			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-parts")
+			return
+		}
+		in.MaxParts = aws.Int32(int32(mp))
+	}
+
+	out, err := s.up.ListParts(r.Context(), in)
+	if err != nil {
+		writeXMLError(w, http.StatusBadGateway, "BadGateway", "Upstream error")
+		return
+	}
+
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+	b.WriteString(`<ListPartsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	b.WriteString("<Bucket>" + xmlEscape(bucket) + "</Bucket>")
+	b.WriteString("<Key>" + xmlEscape(key) + "</Key>")
+	b.WriteString("<UploadId>" + xmlEscape(uploadID) + "</UploadId>")
+	b.WriteString("<PartNumberMarker>" + xmlEscape(aws.ToString(out.PartNumberMarker)) + "</PartNumberMarker>")
+	b.WriteString("<NextPartNumberMarker>" + xmlEscape(aws.ToString(out.NextPartNumberMarker)) + "</NextPartNumberMarker>")
+	b.WriteString("<MaxParts>" + strconv.Itoa(int(aws.ToInt32(out.MaxParts))) + "</MaxParts>")
+	b.WriteString("<IsTruncated>")
+	if aws.ToBool(out.IsTruncated) {
+		b.WriteString("true")
+	} else {
+		b.WriteString("false")
+	}
+	b.WriteString("</IsTruncated>")
+	for _, p := range out.Parts {
+		b.WriteString("<Part>")
+		b.WriteString("<PartNumber>" + strconv.Itoa(int(aws.ToInt32(p.PartNumber))) + "</PartNumber>")
+		if p.LastModified != nil {
+			b.WriteString("<LastModified>" + p.LastModified.UTC().Format("2006-01-02T15:04:05.000Z") + "</LastModified>")
+		}
+		if p.ETag != nil {
+			b.WriteString("<ETag>" + xmlEscape(*p.ETag) + "</ETag>")
+		}
+		b.WriteString("<Size>" + strconv.FormatInt(aws.ToInt64(p.Size), 10) + "</Size>")
+		b.WriteString("</Part>")
+	}
+	b.WriteString(`</ListPartsResult>`)
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(b.String()))
 }
 
 // CompleteMultipartUpload requires PartNumber + ETag for each part. :contentReference[oaicite:12]{index=12}
