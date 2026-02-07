@@ -1,4 +1,4 @@
-package main
+package main_test
 
 import (
 	"bytes"
@@ -15,17 +15,18 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	s3gateway "github.com/define42/s3gateway"
 )
 
 func TestBootS3GatewayFullIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	ldapCfgPath := writeGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapCfgPath := s3gateway.WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := s3gateway.StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
 	defer stopLDAP()
 
-	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	minioURL, stopMinio := s3gateway.StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
 	t.Setenv("LISTEN_ADDR", "127.0.0.1:0")
@@ -46,7 +47,7 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "13s")
 	t.Setenv("HTTP_MAX_HEADER_BYTES", "65536")
 
-	httpSrv, cfg, err := bootS3Gateway()
+	httpSrv, cfg, err := s3gateway.BootS3Gateway()
 	if err != nil {
 		t.Fatalf("bootS3Gateway returned error: %v", err)
 	}
@@ -118,9 +119,9 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
 	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
 
-	rwClient := newS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roClient := newS3Client(t, ctx, gatewayURL, "us-east-1", roAccessKey, cfg.SigV4Secret)
-	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+	rwClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	roClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	upstreamClient := s3gateway.NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-boot-%d", time.Now().UnixNano())
 	key := "boot/object.txt"

@@ -1,4 +1,4 @@
-module s3gateway
+module github.com/define42/s3gateway
 
 go 1.24.0
 

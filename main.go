@@ -4646,7 +4646,7 @@ func newHTTPServer(cfg Config, handler http.Handler) *http.Server {
 	}
 }
 
-func bootS3Gateway() (*http.Server, Config, error) {
+func BootS3Gateway() (*http.Server, Config, error) {
 	cfg := loadConfig()
 
 	up, err := newUpstreamS3(context.Background(), cfg)
@@ -4662,7 +4662,7 @@ func bootS3Gateway() (*http.Server, Config, error) {
 
 func main() {
 
-	httpSrv, cfg, err := bootS3Gateway()
+	httpSrv, cfg, err := BootS3Gateway()
 	if err != nil {
 		log.Fatalf("failed to boot s3 gateway: %v", err)
 	}

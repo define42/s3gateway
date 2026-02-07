@@ -34,11 +34,11 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	ldapCfgPath := writeGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapCfgPath := WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
 	defer stopLDAP()
 
-	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
 	cfg := Config{
@@ -81,10 +81,10 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	defer gwSrv.Close()
 
 	gatewayAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
-	gatewayClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, cfg.SigV4Secret)
+	gatewayClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, cfg.SigV4Secret)
 	readonlyAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
-	readonlyClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", readonlyAccessKey, cfg.SigV4Secret)
-	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+	readonlyClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", readonlyAccessKey, cfg.SigV4Secret)
+	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-integration-%d", time.Now().UnixNano())
 	key := "smoke/hello.txt"
@@ -208,11 +208,11 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	ldapCfgPath := writeGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapCfgPath := WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
 	defer stopLDAP()
 
-	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
 	cfg := Config{
@@ -238,9 +238,9 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 	defer gwSrv.Close()
 
 	gatewayAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
-	gatewayAwsClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, cfg.SigV4Secret)
+	gatewayAwsClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, cfg.SigV4Secret)
 	gatewayMinioClient := newMinioGatewayClient(t, gwSrv.URL, gatewayAccessKey, cfg.SigV4Secret)
-	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-minio-client-%d", time.Now().UnixNano())
 	key := "smoke/minio-client.txt"
@@ -299,11 +299,11 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	ldapCfgPath := writeGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapCfgPath := WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
 	defer stopLDAP()
 
-	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
 	cfg := Config{
@@ -329,10 +329,10 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
-	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
-	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
-	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	suffix := time.Now().UnixNano()
 	allowedBucketA := fmt.Sprintf("team2-list-%d-a", suffix)
@@ -388,11 +388,11 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	ldapCfgPath := writeGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapCfgPath := WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
 	defer stopLDAP()
 
-	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
 	cfg := Config{
@@ -418,9 +418,9 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
-	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
-	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 
 	bucket := fmt.Sprintf("team2-listobj-%d", time.Now().UnixNano())
 	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
@@ -478,11 +478,11 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	ldapCfgPath := writeGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapCfgPath := WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
 	defer stopLDAP()
 
-	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
 	cfg := Config{
@@ -508,10 +508,10 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
-	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
-	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
-	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-listmpu-%d", time.Now().UnixNano())
 	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
@@ -668,11 +668,11 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	ldapCfgPath := writeGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapCfgPath := WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
 	defer stopLDAP()
 
-	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
 	cfg := Config{
@@ -698,9 +698,9 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
-	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
-	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 
 	bucket := fmt.Sprintf("team2-getattrs-%d", time.Now().UnixNano())
 	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
@@ -858,11 +858,11 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	ldapCfgPath := writeGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapCfgPath := WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
 	defer stopLDAP()
 
-	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
 	cfg := Config{
@@ -888,8 +888,8 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
-	gatewayClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+	gatewayClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-multipart-%d", time.Now().UnixNano())
 	if _, err := gatewayClient.CreateBucket(ctx, &s3.CreateBucketInput{
@@ -1086,11 +1086,11 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	ldapCfgPath := writeGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapCfgPath := WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
 	defer stopLDAP()
 
-	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
 	cfg := Config{
@@ -1116,10 +1116,10 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
-	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
-	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
-	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-lifecycle-%d", time.Now().UnixNano())
 	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
@@ -1605,7 +1605,7 @@ func TestGatewayPreservesUpstreamErrorStatusAndHeaders(t *testing.T) {
 	}))
 	defer upstreamSrv.Close()
 
-	upstreamClient := newS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
+	upstreamClient := NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
 	gw := newServer(Config{}, upstreamClient)
 	gwSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithValue(r.Context(), ctxRulesKey, []Rule{{BucketPrefix: "team2-", Perm: PermReadWrite}})
@@ -1648,7 +1648,7 @@ func TestGatewayHandlesUpstreamLatencySpike(t *testing.T) {
 	}))
 	defer upstreamSrv.Close()
 
-	upstreamClient := newS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
+	upstreamClient := NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
 	gw := newServer(Config{}, upstreamClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -1673,8 +1673,8 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	ldapCfgPath := writeGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapCfgPath := WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
 	ldapStopped := false
 	stopLDAPOnce := func() {
 		if ldapStopped {
@@ -1685,7 +1685,7 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 	}
 	defer stopLDAPOnce()
 
-	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
 	cfg := Config{
@@ -1711,9 +1711,9 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
-	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
-	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 
 	bucket := fmt.Sprintf("team2-ldap-cache-%d", time.Now().UnixNano())
 	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
@@ -1764,9 +1764,9 @@ func setupIntegrationEnv(t *testing.T) *integrationEnv {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	ldapCfgPath := writeGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
-	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	ldapCfgPath := WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 
 	cfg := Config{
 		LDAPURL:                ldapURL,
@@ -1792,10 +1792,10 @@ func setupIntegrationEnv(t *testing.T) *integrationEnv {
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
-	rwClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
-	roClient := newS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
-	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	env := &integrationEnv{
 		ctx:            ctx,
@@ -2222,6 +2222,34 @@ func TestLdapS3upstreamDeleteObjectsVersioningAndListObjectVersions(t *testing.T
 		t.Fatalf("list object versions mismatch: gateway=%q upstream=%q", got, want)
 	}
 
+	newListVersionsWithOptionalAttrsInput := func() *s3.ListObjectVersionsInput {
+		return &s3.ListObjectVersionsInput{
+			Bucket: aws.String(bucket),
+			Prefix: aws.String("versions/"),
+			OptionalObjectAttributes: []s3types.OptionalObjectAttributes{
+				s3types.OptionalObjectAttributesRestoreStatus,
+			},
+		}
+	}
+
+	upstreamWithOptionalAttrs, upstreamWithOptionalAttrsErr := env.upstreamClient.ListObjectVersions(env.ctx, newListVersionsWithOptionalAttrsInput())
+	gatewayWithOptionalAttrs, gatewayWithOptionalAttrsErr := env.rwClient.ListObjectVersions(env.ctx, newListVersionsWithOptionalAttrsInput())
+	if (upstreamWithOptionalAttrsErr != nil) != (gatewayWithOptionalAttrsErr != nil) {
+		t.Fatalf("list object versions with optional-object-attributes error mismatch: gatewayErr=%v upstreamErr=%v", gatewayWithOptionalAttrsErr, upstreamWithOptionalAttrsErr)
+	}
+	if upstreamWithOptionalAttrsErr != nil {
+		var upstreamAPIErr smithy.APIError
+		var gatewayAPIErr smithy.APIError
+		if !errors.As(upstreamWithOptionalAttrsErr, &upstreamAPIErr) || !errors.As(gatewayWithOptionalAttrsErr, &gatewayAPIErr) {
+			t.Fatalf("list object versions with optional-object-attributes expected smithy errors: gatewayErr=%v upstreamErr=%v", gatewayWithOptionalAttrsErr, upstreamWithOptionalAttrsErr)
+		}
+		if gatewayAPIErr.ErrorCode() != upstreamAPIErr.ErrorCode() {
+			t.Fatalf("list object versions with optional-object-attributes error code mismatch: gateway=%q upstream=%q", gatewayAPIErr.ErrorCode(), upstreamAPIErr.ErrorCode())
+		}
+	} else if got, want := strings.Join(makeVersionSigs(gatewayWithOptionalAttrs), ","), strings.Join(makeVersionSigs(upstreamWithOptionalAttrs), ","); got != want {
+		t.Fatalf("list object versions with optional-object-attributes mismatch: gateway=%q upstream=%q", got, want)
+	}
+
 	if _, err := env.roClient.DeleteObjects(env.ctx, &s3.DeleteObjectsInput{
 		Bucket: aws.String(bucket),
 		Delete: &s3types.Delete{
@@ -2387,7 +2415,7 @@ func TestLdapS3upstreamListObjectsV2FullSemantics(t *testing.T) {
 	}, "start-after")
 }
 
-func startGlauthWithConfig(ctx context.Context, t *testing.T, cfg string, scheme string) (string, func()) {
+func StartGlauthWithConfig(ctx context.Context, t *testing.T, cfg string, scheme string) (string, func()) {
 	t.Helper()
 
 	cert := pathRelative(t, "testldap", "cert.pem")
@@ -2438,7 +2466,7 @@ func startGlauthWithConfig(ctx context.Context, t *testing.T, cfg string, scheme
 	}
 }
 
-func writeGatewayGlauthConfig(t *testing.T) string {
+func WriteGatewayGlauthConfig(t *testing.T) string {
 	t.Helper()
 
 	const cfg = `
@@ -2577,7 +2605,7 @@ func tamperFirstChunkSignatureForTest(t *testing.T, encoded string) string {
 	return string(out)
 }
 
-func newS3Client(t *testing.T, ctx context.Context, endpoint, region, accessKey, secretKey string) *s3.Client {
+func NewS3Client(t *testing.T, ctx context.Context, endpoint, region, accessKey, secretKey string) *s3.Client {
 	t.Helper()
 
 	awsCfg, err := config.LoadDefaultConfig(ctx,
@@ -2624,7 +2652,7 @@ func pathRelative(t *testing.T, elems ...string) string {
 	return abs
 }
 
-func startMinio(ctx context.Context, t *testing.T, accessKey string, secretKey string) (string, func()) {
+func StartMinio(ctx context.Context, t *testing.T, accessKey string, secretKey string) (string, func()) {
 	t.Helper()
 
 	req := testcontainers.ContainerRequest{
