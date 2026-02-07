@@ -682,7 +682,7 @@ func extractUpstreamErrorInfo(err error) upstreamErrorInfo {
 
 	var respErr *smithyhttp.ResponseError
 	if errors.As(err, &respErr) {
-		if sc := respErr.HTTPStatusCode(); sc >= 400 {
+		if sc := respErr.HTTPStatusCode(); sc > 0 {
 			info.status = sc
 		}
 		if hr := respErr.HTTPResponse(); hr != nil {

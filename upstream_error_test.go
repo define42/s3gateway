@@ -69,6 +69,28 @@ func TestWriteUpstreamHeadError(t *testing.T) {
 			unwantedHeaderKey: []string{"Content-Type"},
 		},
 		{
+			name: "propagates upstream not-modified status",
+			err: &smithyhttp.ResponseError{
+				Response: &smithyhttp.Response{
+					Response: &http.Response{
+						StatusCode: http.StatusNotModified,
+						Header: http.Header{
+							"x-amz-request-id": {"req-304"},
+						},
+					},
+				},
+				Err: stubAPIError{
+					code:    "NotModified",
+					message: "not modified",
+					fault:   smithy.FaultClient,
+				},
+			},
+			wantStatus: http.StatusNotModified,
+			wantHeader: map[string]string{
+				"x-amz-request-id": "req-304",
+			},
+		},
+		{
 			name: "client fault without upstream response maps to 400",
 			err: stubAPIError{
 				code:    "AccessDenied",

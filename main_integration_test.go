@@ -756,6 +756,149 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 		}
 	}
 	assertGetObjectPartExpectedOwnerMatchesUpstream("123456789012")
+	assertHeadObjectPartMatchesUpstream := func(
+		partNumber int32,
+		label string,
+		expectErr bool,
+		wantContentLength int64,
+		mutate func(*s3.HeadObjectInput),
+	) {
+		t.Helper()
+		newInput := func() *s3.HeadObjectInput {
+			in := &s3.HeadObjectInput{
+				Bucket:     aws.String(bucket),
+				Key:        aws.String(getPartKey),
+				PartNumber: aws.Int32(partNumber),
+			}
+			if mutate != nil {
+				mutate(in)
+			}
+			return in
+		}
+		upstreamHeadOut, upstreamHeadErr := upstreamClient.HeadObject(ctx, newInput())
+		gatewayHeadOut, gatewayHeadErr := rwClient.HeadObject(ctx, newInput())
+		if (upstreamHeadErr != nil) != (gatewayHeadErr != nil) {
+			t.Fatalf("%s head object with partNumber=%d error mismatch: gatewayErr=%v upstreamErr=%v", label, partNumber, gatewayHeadErr, upstreamHeadErr)
+		}
+		if expectErr != (upstreamHeadErr != nil) {
+			t.Fatalf("%s head object with partNumber=%d error expectation mismatch: gotErr=%v wantErr=%v", label, partNumber, upstreamHeadErr != nil, expectErr)
+		}
+		if upstreamHeadErr != nil {
+			var upstreamAPIErr smithy.APIError
+			var gatewayAPIErr smithy.APIError
+			if !errors.As(upstreamHeadErr, &upstreamAPIErr) || !errors.As(gatewayHeadErr, &gatewayAPIErr) {
+				t.Fatalf("%s head object with partNumber=%d expected smithy errors: gatewayErr=%v upstreamErr=%v", label, partNumber, gatewayHeadErr, upstreamHeadErr)
+			}
+			if gatewayAPIErr.ErrorCode() != upstreamAPIErr.ErrorCode() {
+				t.Fatalf("%s head object with partNumber=%d error code mismatch: gateway=%q upstream=%q", label, partNumber, gatewayAPIErr.ErrorCode(), upstreamAPIErr.ErrorCode())
+			}
+			return
+		}
+		if aws.ToInt64(gatewayHeadOut.ContentLength) != aws.ToInt64(upstreamHeadOut.ContentLength) {
+			t.Fatalf("%s head object with partNumber=%d content-length mismatch: gateway=%d upstream=%d", label, partNumber, aws.ToInt64(gatewayHeadOut.ContentLength), aws.ToInt64(upstreamHeadOut.ContentLength))
+		}
+		if aws.ToInt64(gatewayHeadOut.ContentLength) != wantContentLength {
+			t.Fatalf("%s head object with partNumber=%d content-length mismatch: got=%d want=%d", label, partNumber, aws.ToInt64(gatewayHeadOut.ContentLength), wantContentLength)
+		}
+		if aws.ToInt32(gatewayHeadOut.PartsCount) != aws.ToInt32(upstreamHeadOut.PartsCount) {
+			t.Fatalf("%s head object with partNumber=%d parts-count mismatch: gateway=%d upstream=%d", label, partNumber, aws.ToInt32(gatewayHeadOut.PartsCount), aws.ToInt32(upstreamHeadOut.PartsCount))
+		}
+		if aws.ToString(gatewayHeadOut.ETag) != aws.ToString(upstreamHeadOut.ETag) {
+			t.Fatalf("%s head object with partNumber=%d etag mismatch: gateway=%q upstream=%q", label, partNumber, aws.ToString(gatewayHeadOut.ETag), aws.ToString(upstreamHeadOut.ETag))
+		}
+	}
+	assertHeadObjectPartMatchesUpstream(1, "baseline part 1", false, int64(len(part1Body)), nil)
+	assertHeadObjectPartMatchesUpstream(2, "baseline part 2", false, int64(len(part2Body)), nil)
+	assertHeadObjectPartMatchesUpstream(
+		1,
+		"If-Match match",
+		false,
+		int64(len(part1Body)),
+		func(in *s3.HeadObjectInput) {
+			in.IfMatch = aws.String(multipartETag)
+		},
+	)
+	assertHeadObjectPartMatchesUpstream(
+		1,
+		"If-Match mismatch",
+		true,
+		0,
+		func(in *s3.HeadObjectInput) {
+			in.IfMatch = aws.String(nonMatchingETag)
+		},
+	)
+	assertHeadObjectPartMatchesUpstream(
+		1,
+		"If-None-Match match",
+		true,
+		0,
+		func(in *s3.HeadObjectInput) {
+			in.IfNoneMatch = aws.String(multipartETag)
+		},
+	)
+	assertHeadObjectPartMatchesUpstream(
+		1,
+		"If-None-Match mismatch",
+		false,
+		int64(len(part1Body)),
+		func(in *s3.HeadObjectInput) {
+			in.IfNoneMatch = aws.String(nonMatchingETag)
+		},
+	)
+	assertHeadObjectPartMatchesUpstream(
+		1,
+		"If-Modified-Since old",
+		false,
+		int64(len(part1Body)),
+		func(in *s3.HeadObjectInput) {
+			in.IfModifiedSince = aws.Time(farPast)
+		},
+	)
+	assertHeadObjectPartMatchesUpstream(
+		1,
+		"If-Modified-Since future",
+		true,
+		0,
+		func(in *s3.HeadObjectInput) {
+			in.IfModifiedSince = aws.Time(farFuture)
+		},
+	)
+	assertHeadObjectPartMatchesUpstream(
+		1,
+		"If-Unmodified-Since old",
+		true,
+		0,
+		func(in *s3.HeadObjectInput) {
+			in.IfUnmodifiedSince = aws.Time(farPast)
+		},
+	)
+	assertHeadObjectPartMatchesUpstream(
+		1,
+		"If-Unmodified-Since future",
+		false,
+		int64(len(part1Body)),
+		func(in *s3.HeadObjectInput) {
+			in.IfUnmodifiedSince = aws.Time(farFuture)
+		},
+	)
+	assertHeadObjectPartMatchesUpstream(
+		1,
+		"checksum mode enabled",
+		false,
+		int64(len(part1Body)),
+		func(in *s3.HeadObjectInput) {
+			in.ChecksumMode = s3types.ChecksumModeEnabled
+		},
+	)
+	assertHeadObjectPartMatchesUpstream(
+		1,
+		"expected bucket owner",
+		false,
+		int64(len(part1Body)),
+		func(in *s3.HeadObjectInput) {
+			in.ExpectedBucketOwner = aws.String("123456789012")
+		},
+	)
 
 	roObj, err := roClient.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
