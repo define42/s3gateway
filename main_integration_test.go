@@ -1,0 +1,224 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
+)
+
+func TestBootS3GatewayFullIntegration(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	ldapCfgPath := writeGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := startGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	defer stopLDAP()
+
+	minioURL, stopMinio := startMinio(ctx, t, "minioadmin", "minioadmin")
+	defer stopMinio()
+
+	t.Setenv("LISTEN_ADDR", "127.0.0.1:0")
+	t.Setenv("LDAP_URL", ldapURL)
+	t.Setenv("LDAP_BASE_DN", "dc=glauth,dc=com")
+	t.Setenv("LDAP_GROUP_TTL", "45s")
+	t.Setenv("LDAP_GROUP_CACHE_MAX_ENTRIES", "256")
+	t.Setenv("S3_ENDPOINT", minioURL)
+	t.Setenv("S3_REGION", "us-east-1")
+	t.Setenv("S3_ACCESS_KEY", "minioadmin")
+	t.Setenv("S3_SECRET_KEY", "minioadmin")
+	t.Setenv("S3_FORCE_PATH_STYLE", "true")
+	t.Setenv("SIGV4_SECRET", "password")
+	t.Setenv("SIGV4_SERVICE", "s3")
+	t.Setenv("SIGV4_MAX_SKEW", "20m")
+	t.Setenv("HTTP_READ_HEADER_TIMEOUT", "3s")
+	t.Setenv("HTTP_IDLE_TIMEOUT", "11s")
+	t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "13s")
+	t.Setenv("HTTP_MAX_HEADER_BYTES", "65536")
+
+	httpSrv, cfg, err := bootS3Gateway()
+	if err != nil {
+		t.Fatalf("bootS3Gateway returned error: %v", err)
+	}
+
+	if cfg.LDAPURL != ldapURL {
+		t.Fatalf("cfg.LDAPURL mismatch: got=%q want=%q", cfg.LDAPURL, ldapURL)
+	}
+	if cfg.UpstreamEndpoint != minioURL {
+		t.Fatalf("cfg.UpstreamEndpoint mismatch: got=%q want=%q", cfg.UpstreamEndpoint, minioURL)
+	}
+	if cfg.GroupCacheMaxEntries != 256 {
+		t.Fatalf("cfg.GroupCacheMaxEntries mismatch: got=%d want=256", cfg.GroupCacheMaxEntries)
+	}
+	if cfg.SigV4MaxSkew != 20*time.Minute {
+		t.Fatalf("cfg.SigV4MaxSkew mismatch: got=%s want=20m", cfg.SigV4MaxSkew)
+	}
+	if cfg.ReadHeaderTimeout != 3*time.Second {
+		t.Fatalf("cfg.ReadHeaderTimeout mismatch: got=%s want=3s", cfg.ReadHeaderTimeout)
+	}
+	if cfg.IdleTimeout != 11*time.Second {
+		t.Fatalf("cfg.IdleTimeout mismatch: got=%s want=11s", cfg.IdleTimeout)
+	}
+	if cfg.ShutdownTimeout != 13*time.Second {
+		t.Fatalf("cfg.ShutdownTimeout mismatch: got=%s want=13s", cfg.ShutdownTimeout)
+	}
+	if cfg.MaxHeaderBytes != 65536 {
+		t.Fatalf("cfg.MaxHeaderBytes mismatch: got=%d want=65536", cfg.MaxHeaderBytes)
+	}
+	if httpSrv.Handler == nil {
+		t.Fatalf("booted server handler should not be nil")
+	}
+	if httpSrv.ReadHeaderTimeout != cfg.ReadHeaderTimeout {
+		t.Fatalf("http server read header timeout mismatch: got=%s want=%s", httpSrv.ReadHeaderTimeout, cfg.ReadHeaderTimeout)
+	}
+	if httpSrv.IdleTimeout != cfg.IdleTimeout {
+		t.Fatalf("http server idle timeout mismatch: got=%s want=%s", httpSrv.IdleTimeout, cfg.IdleTimeout)
+	}
+	if httpSrv.MaxHeaderBytes != cfg.MaxHeaderBytes {
+		t.Fatalf("http server max header bytes mismatch: got=%d want=%d", httpSrv.MaxHeaderBytes, cfg.MaxHeaderBytes)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for booted gateway: %v", err)
+	}
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- httpSrv.Serve(ln)
+	}()
+	t.Cleanup(func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("shutdown booted gateway: %v", err)
+		}
+		select {
+		case err := <-serveErr:
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				t.Errorf("booted gateway serve error: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Errorf("timeout waiting for booted gateway to stop")
+		}
+	})
+
+	gatewayURL := "http://" + ln.Addr().String()
+	waitForGatewayReady(t, gatewayURL)
+
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+
+	rwClient := newS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	roClient := newS3Client(t, ctx, gatewayURL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	upstreamClient := newS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+
+	bucket := fmt.Sprintf("team2-boot-%d", time.Now().UnixNano())
+	key := "boot/object.txt"
+	payload := []byte("bootS3Gateway integration payload")
+
+	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	}); err != nil {
+		t.Fatalf("create bucket through booted gateway: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = rwClient.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(key),
+		})
+		_, _ = rwClient.DeleteBucket(ctx, &s3.DeleteBucketInput{
+			Bucket: aws.String(bucket),
+		})
+	})
+
+	if _, err := roClient.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(fmt.Sprintf("team2-boot-ro-%d", time.Now().UnixNano())),
+	}); err == nil {
+		t.Fatalf("expected readonly CreateBucket to fail")
+	} else {
+		var apiErr smithy.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("expected smithy api error for readonly create bucket, got: %v", err)
+		}
+		if apiErr.ErrorCode() != "AccessDenied" {
+			t.Fatalf("readonly CreateBucket error code mismatch: got=%q want=%q", apiErr.ErrorCode(), "AccessDenied")
+		}
+	}
+
+	if _, err := rwClient.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(key),
+		Body:          bytes.NewReader(payload),
+		ContentLength: aws.Int64(int64(len(payload))),
+		ContentType:   aws.String("text/plain"),
+	}); err != nil {
+		t.Fatalf("put object through booted gateway: %v", err)
+	}
+
+	roObj, err := roClient.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("readonly get object through booted gateway: %v", err)
+	}
+	defer roObj.Body.Close()
+	roBody, err := io.ReadAll(roObj.Body)
+	if err != nil {
+		t.Fatalf("read readonly object body: %v", err)
+	}
+	if !bytes.Equal(roBody, payload) {
+		t.Fatalf("readonly object body mismatch: got=%q want=%q", string(roBody), string(payload))
+	}
+
+	upObj, err := upstreamClient.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("get object from upstream after gateway write: %v", err)
+	}
+	defer upObj.Body.Close()
+	upBody, err := io.ReadAll(upObj.Body)
+	if err != nil {
+		t.Fatalf("read upstream object body: %v", err)
+	}
+	if !bytes.Equal(upBody, payload) {
+		t.Fatalf("upstream object body mismatch: got=%q want=%q", string(upBody), string(payload))
+	}
+}
+
+func waitForGatewayReady(t *testing.T, gatewayURL string) {
+	t.Helper()
+
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		req, err := http.NewRequest(http.MethodGet, gatewayURL+"/", nil)
+		if err != nil {
+			t.Fatalf("build readiness request: %v", err)
+		}
+		resp, err := client.Do(req)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("gateway did not become ready in time: lastErr=%v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}

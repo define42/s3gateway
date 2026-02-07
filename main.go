@@ -132,10 +132,6 @@ type groupCache struct {
 	maxEntries int
 }
 
-func newGroupCache(ttl time.Duration) *groupCache {
-	return newGroupCacheWithMaxEntries(ttl, defaultGroupCacheMaxEntries)
-}
-
 func newGroupCacheWithMaxEntries(ttl time.Duration, maxEntries int) *groupCache {
 	if maxEntries <= 0 {
 		maxEntries = defaultGroupCacheMaxEntries
@@ -4650,19 +4646,26 @@ func newHTTPServer(cfg Config, handler http.Handler) *http.Server {
 	}
 }
 
-func main() {
+func bootS3Gateway() (*http.Server, Config, error) {
 	cfg := loadConfig()
 
 	up, err := newUpstreamS3(context.Background(), cfg)
 	if err != nil {
-		log.Fatalf("init upstream s3: %v", err)
+		return nil, cfg, fmt.Errorf("init upstream s3: %w", err)
 	}
 
 	s := newServer(cfg, up)
 
 	httpSrv := newHTTPServer(cfg, s.withAuth(s))
+	return httpSrv, cfg, nil
+}
 
-	log.Printf("listening on %s", cfg.ListenAddr)
+func main() {
+
+	httpSrv, cfg, err := bootS3Gateway()
+	if err != nil {
+		log.Fatalf("failed to boot s3 gateway: %v", err)
+	}
 
 	serverErr := make(chan error, 1)
 	go func() {
