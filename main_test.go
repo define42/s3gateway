@@ -136,11 +136,15 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	if gotObj.Metadata["owner"] != metadata["owner"] || gotObj.Metadata["purpose"] != metadata["purpose"] {
 		t.Fatalf("upstream metadata mismatch: got=%v want=%v", gotObj.Metadata, metadata)
 	}
-	if gotObj.Expires == nil {
-		t.Fatalf("expected upstream object Expires to be set")
+	if gotObj.ExpiresString == nil {
+		t.Fatalf("expected upstream object ExpiresString to be set")
 	}
-	if gotObj.Expires.UTC().Unix() != expiresAt.Unix() {
-		t.Fatalf("upstream expires mismatch: got=%s want=%s", gotObj.Expires.UTC().Format(time.RFC3339), expiresAt.Format(time.RFC3339))
+	gotObjExpires, err := http.ParseTime(*gotObj.ExpiresString)
+	if err != nil {
+		t.Fatalf("parse upstream expires header %q: %v", *gotObj.ExpiresString, err)
+	}
+	if gotObjExpires.UTC().Unix() != expiresAt.Unix() {
+		t.Fatalf("upstream expires mismatch: got=%s want=%s", gotObjExpires.UTC().Format(time.RFC3339), expiresAt.Format(time.RFC3339))
 	}
 	readonlyObj, err := readonlyClient.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
@@ -161,11 +165,15 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	if readonlyObj.Metadata["owner"] != metadata["owner"] || readonlyObj.Metadata["purpose"] != metadata["purpose"] {
 		t.Fatalf("readonly metadata mismatch through gateway: got=%v want=%v", readonlyObj.Metadata, metadata)
 	}
-	if readonlyObj.Expires == nil {
-		t.Fatalf("expected readonly get through gateway to include Expires")
+	if readonlyObj.ExpiresString == nil {
+		t.Fatalf("expected readonly get through gateway to include ExpiresString")
 	}
-	if readonlyObj.Expires.UTC().Unix() != expiresAt.Unix() {
-		t.Fatalf("readonly expires mismatch through gateway: got=%s want=%s", readonlyObj.Expires.UTC().Format(time.RFC3339), expiresAt.Format(time.RFC3339))
+	readonlyExpires, err := http.ParseTime(*readonlyObj.ExpiresString)
+	if err != nil {
+		t.Fatalf("parse readonly expires header %q: %v", *readonlyObj.ExpiresString, err)
+	}
+	if readonlyExpires.UTC().Unix() != expiresAt.Unix() {
+		t.Fatalf("readonly expires mismatch through gateway: got=%s want=%s", readonlyExpires.UTC().Format(time.RFC3339), expiresAt.Format(time.RFC3339))
 	}
 
 	readonlyDeniedKey := "smoke/readonly-put-should-fail.txt"
@@ -1157,7 +1165,9 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 			{
 				ID:     aws.String("expire-logs"),
 				Status: s3types.ExpirationStatusEnabled,
-				Prefix: aws.String("logs/"),
+				Filter: &s3types.LifecycleRuleFilter{
+					Prefix: aws.String("logs/"),
+				},
 				Expiration: &s3types.LifecycleExpiration{
 					Days: aws.Int32(7),
 				},
@@ -1187,8 +1197,6 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 			prefix := ""
 			if r.Filter != nil && r.Filter.Prefix != nil {
 				prefix = *r.Filter.Prefix
-			} else if r.Prefix != nil {
-				prefix = *r.Prefix
 			}
 			expDays := int32(0)
 			if r.Expiration != nil && r.Expiration.Days != nil {
@@ -2616,18 +2624,9 @@ func tamperFirstChunkSignatureForTest(t *testing.T, encoded string) string {
 func newS3Client(t *testing.T, ctx context.Context, endpoint, region, accessKey, secretKey string) *s3.Client {
 	t.Helper()
 
-	resolver := aws.EndpointResolverWithOptionsFunc(
-		func(service, _ string, _ ...interface{}) (aws.Endpoint, error) {
-			if service == s3.ServiceID {
-				return aws.Endpoint{URL: endpoint, HostnameImmutable: true}, nil
-			}
-			return aws.Endpoint{}, &aws.EndpointNotFoundError{}
-		},
-	)
-
 	awsCfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion(region),
-		config.WithEndpointResolverWithOptions(resolver),
+		config.WithBaseEndpoint(endpoint),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
 		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 	)

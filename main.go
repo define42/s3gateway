@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -431,15 +432,6 @@ func canWrite(rules []Rule, bucket string) bool { return bucketPerm(rules, bucke
 // Key point: for PutObject/UploadPart with unseekable bodies, use
 // v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware and provide ContentLength. :contentReference[oaicite:6]{index=6}
 func newUpstreamS3(ctx context.Context, cfg Config) (*s3.Client, error) {
-	resolver := aws.EndpointResolverWithOptionsFunc(
-		func(service, region string, _ ...interface{}) (aws.Endpoint, error) {
-			if service == s3.ServiceID {
-				return aws.Endpoint{URL: cfg.UpstreamEndpoint, HostnameImmutable: true}, nil
-			}
-			return aws.Endpoint{}, &aws.EndpointNotFoundError{}
-		},
-	)
-
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = http.ProxyFromEnvironment
 	transport.DialContext = (&net.Dialer{
@@ -458,7 +450,7 @@ func newUpstreamS3(ctx context.Context, cfg Config) (*s3.Client, error) {
 
 	awsCfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion(cfg.UpstreamRegion),
-		config.WithEndpointResolverWithOptions(resolver),
+		config.WithBaseEndpoint(cfg.UpstreamEndpoint),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.UpstreamAccessKey, cfg.UpstreamSecretKey, "")),
 		config.WithHTTPClient(upHTTP),
 		// Gateway forwards request bodies as non-seekable streams; avoid optional precomputed request checksums.
@@ -1661,16 +1653,17 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		case http.MethodPut:
 			pnStr := q.Get("partNumber")
-			pn, err := strconv.Atoi(pnStr)
+			pn, err := strconv.ParseInt(pnStr, 10, 32)
 			if err != nil || pn <= 0 {
 				writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "partNumber required")
 				return
 			}
+			partNum := int32(pn)
 			if strings.TrimSpace(r.Header.Get("x-amz-copy-source")) != "" {
-				s.handleUploadPartCopy(w, r, bucket, key, uploadID, int32(pn))
+				s.handleUploadPartCopy(w, r, bucket, key, uploadID, partNum)
 				return
 			}
-			s.handleUploadPart(w, r, bucket, key, uploadID, int32(pn))
+			s.handleUploadPart(w, r, bucket, key, uploadID, partNum)
 			return
 		case http.MethodPost:
 			s.handleCompleteMultipart(w, r, bucket, key, uploadID)
@@ -2345,12 +2338,14 @@ func decodeLifecycleConfigXML(r io.Reader) (*types.BucketLifecycleConfiguration,
 		if xr.Prefix != nil && xr.Filter != nil {
 			return nil, fmt.Errorf("rule %d cannot contain both Prefix and Filter", i)
 		}
-		if xr.Prefix != nil {
-			rule.Prefix = aws.String(strings.TrimSpace(*xr.Prefix))
-		}
 		filter, err := decodeLifecycleFilter(xr.Filter)
 		if err != nil {
 			return nil, fmt.Errorf("rule %d has invalid filter: %w", i, err)
+		}
+		if xr.Prefix != nil {
+			filter = &types.LifecycleRuleFilter{
+				Prefix: aws.String(strings.TrimSpace(*xr.Prefix)),
+			}
 		}
 		rule.Filter = filter
 		exp, err := decodeLifecycleExpiration(xr.Expiration)
@@ -2409,10 +2404,15 @@ func encodeLifecycleConfigXML(rules []types.LifecycleRule) ([]byte, error) {
 			ID:     r.ID,
 			Status: string(r.Status),
 		}
-		if r.Prefix != nil {
-			xr.Prefix = aws.String(aws.ToString(r.Prefix))
+		filter := r.Filter
+		if filter == nil {
+			if legacyPrefix := lifecycleRuleLegacyPrefix(r); legacyPrefix != nil {
+				filter = &types.LifecycleRuleFilter{
+					Prefix: legacyPrefix,
+				}
+			}
 		}
-		xr.Filter = encodeLifecycleFilter(r.Filter)
+		xr.Filter = encodeLifecycleFilter(filter)
 		xr.Expiration = encodeLifecycleExpiration(r.Expiration)
 		if len(r.Transitions) > 0 {
 			xr.Transition = make([]lifecycleTransitionXML, 0, len(r.Transitions))
@@ -2435,6 +2435,18 @@ func encodeLifecycleConfigXML(rules []types.LifecycleRule) ([]byte, error) {
 		return nil, err
 	}
 	return append([]byte(xml.Header), body...), nil
+}
+
+func lifecycleRuleLegacyPrefix(r types.LifecycleRule) *string {
+	field := reflect.ValueOf(r).FieldByName("Prefix")
+	if !field.IsValid() || field.Kind() != reflect.Pointer || field.IsNil() {
+		return nil
+	}
+	legacy, ok := field.Interface().(*string)
+	if !ok || legacy == nil {
+		return nil
+	}
+	return aws.String(strings.TrimSpace(*legacy))
 }
 
 func (s *server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
@@ -2757,7 +2769,7 @@ func (s *server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 		in.VersionIdMarker = &v
 	}
 	if v := q.Get("max-keys"); v != "" {
-		n, err := strconv.Atoi(v)
+		n, err := strconv.ParseInt(v, 10, 32)
 		if err != nil || n < 0 {
 			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-keys")
 			return
@@ -2932,7 +2944,7 @@ func (s *server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 		in.StartAfter = &v
 	}
 	if v := q.Get("max-keys"); v != "" {
-		n, err := strconv.Atoi(v)
+		n, err := strconv.ParseInt(v, 10, 32)
 		if err != nil || n < 0 {
 			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-keys")
 			return
@@ -3093,7 +3105,7 @@ func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 		in.EncodingType = types.EncodingType(v)
 	}
 	if v := q.Get("max-uploads"); v != "" {
-		n, err := strconv.Atoi(v)
+		n, err := strconv.ParseInt(v, 10, 32)
 		if err != nil || n <= 0 {
 			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-uploads")
 			return
@@ -3206,7 +3218,7 @@ func (s *server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 		in.VersionId = &versionID
 	}
 	if partNumStr := strings.TrimSpace(r.URL.Query().Get("partNumber")); partNumStr != "" {
-		partNum, err := strconv.Atoi(partNumStr)
+		partNum, err := strconv.ParseInt(partNumStr, 10, 32)
 		if err != nil || partNum <= 0 {
 			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid partNumber")
 			return
@@ -3313,9 +3325,7 @@ func (s *server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 	if out.DeleteMarker != nil {
 		w.Header().Set("x-amz-delete-marker", strconv.FormatBool(*out.DeleteMarker))
 	}
-	if out.Expires != nil {
-		w.Header().Set("Expires", out.Expires.UTC().Format(http.TimeFormat))
-	} else if out.ExpiresString != nil {
+	if out.ExpiresString != nil {
 		w.Header().Set("Expires", *out.ExpiresString)
 	}
 	if out.AcceptRanges != nil {
@@ -3417,7 +3427,7 @@ func (s *server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket
 		in.VersionId = &versionID
 	}
 	if partNumStr := strings.TrimSpace(q.Get("partNumber")); partNumStr != "" {
-		partNum, err := strconv.Atoi(partNumStr)
+		partNum, err := strconv.ParseInt(partNumStr, 10, 32)
 		if err != nil || partNum <= 0 {
 			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid partNumber")
 			return
@@ -3530,9 +3540,7 @@ func (s *server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket
 	if out.ContentLanguage != nil {
 		w.Header().Set("Content-Language", *out.ContentLanguage)
 	}
-	if out.Expires != nil {
-		w.Header().Set("Expires", out.Expires.UTC().Format(http.TimeFormat))
-	} else if out.ExpiresString != nil {
+	if out.ExpiresString != nil {
 		w.Header().Set("Expires", *out.ExpiresString)
 	}
 	if out.VersionId != nil {
@@ -3680,7 +3688,7 @@ func (s *server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Reques
 		in.VersionId = &versionID
 	}
 	if mpStr := strings.TrimSpace(r.Header.Get("x-amz-max-parts")); mpStr != "" {
-		mp, err := strconv.Atoi(mpStr)
+		mp, err := strconv.ParseInt(mpStr, 10, 32)
 		if err != nil || mp <= 0 {
 			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-max-parts")
 			return
@@ -4614,7 +4622,7 @@ func (s *server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 		in.PartNumberMarker = aws.String(strconv.Itoa(pnm))
 	}
 	if mpStr := r.URL.Query().Get("max-parts"); mpStr != "" {
-		mp, err := strconv.Atoi(mpStr)
+		mp, err := strconv.ParseInt(mpStr, 10, 32)
 		if err != nil || mp <= 0 {
 			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-parts")
 			return

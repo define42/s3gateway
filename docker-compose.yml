@@ -1,0 +1,41 @@
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+  ldapserver:
+    image: glauth/glauth:latest
+    volumes:
+      - ./testldap/gateway-config.cfg:/app/config/config.cfg:ro
+
+  s3gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      LISTEN_ADDR: :8080
+      LDAP_URL: ldap://ldapserver:389
+      LDAP_BASE_DN: dc=glauth,dc=com
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_FORCE_PATH_STYLE: "true"
+      SIGV4_SECRET: password
+      SIGV4_SERVICE: s3
+    depends_on:
+      - minio
+      - ldapserver
+    ports:
+      - "8080:8080"
+
+volumes:
+  minio-data:
