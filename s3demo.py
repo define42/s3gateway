@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+
+import boto3
+import base64
+import uuid
+from botocore.exceptions import NoCredentialsError, ClientError, EndpointConnectionError
+
+S3_REGION = "eu-west-1"
+S3_ENDPOINT_URL = "http://localhost:8080"
+SIGV4_SECRET = "password"
+
+def get_s3_client(user_upn, user_password):
+    access_key = base64.b64encode(f"{user_upn}:{user_password}".encode("utf-8")).decode("utf-8")
+    return boto3.client(
+        "s3",
+        aws_access_key_id=access_key,  # base64("user@example.com:ldap-password")
+        aws_secret_access_key=SIGV4_SECRET,
+        region_name=S3_REGION,
+        endpoint_url=S3_ENDPOINT_URL,
+    )
+
+def list_s3_buckets(s3):
+    try:
+        response = s3.list_buckets()
+
+        print("S3 Buckets:")
+        for bucket in response.get("Buckets", []):
+            print(f"- {bucket['Name']}")
+
+    except NoCredentialsError:
+        print("ERROR: Invalid or missing AWS credentials.")
+    except EndpointConnectionError as e:
+        print(f"ERROR: Could not connect to S3 endpoint: {e}")
+    except ClientError as e:
+        print(f"AWS Client error: {e.response['Error']['Message']}")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+
+def create_bucket_and_upload_file(s3):
+    bucket_name = "team2-data"
+    object_key = f"team2-data-upload-{uuid.uuid4().hex}.txt"
+    content = f"Sample data uploaded by s3demo.py [{object_key}]\n"
+
+    try:
+        create_bucket_args = {"Bucket": bucket_name}
+        region = s3.meta.region_name
+        if region and region != "us-east-1":
+            create_bucket_args["CreateBucketConfiguration"] = {
+                "LocationConstraint": region
+            }
+        s3.create_bucket(**create_bucket_args)
+        print(f"Created bucket: {bucket_name}")
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "")
+        if error_code in {"BucketAlreadyOwnedByYou", "BucketAlreadyExists"}:
+            print(f"Bucket already exists: {bucket_name}")
+        else:
+            raise
+
+    uploaded_content = content
+    s3.put_object(
+        Bucket=bucket_name,
+        Key=object_key,
+        Body=uploaded_content.encode("utf-8"),
+        ContentType="text/plain",
+    )
+    print(f"Uploaded object to s3://{bucket_name}/{object_key} from memory")
+    downloaded_object = s3.get_object(Bucket=bucket_name, Key=object_key)
+    try:
+        downloaded_content = downloaded_object["Body"].read().decode("utf-8")
+    finally:
+        downloaded_object["Body"].close()
+    print(f"Downloaded s3://{bucket_name}/{object_key} into memory")
+
+    if uploaded_content != downloaded_content:
+        raise ValueError("Uploaded and downloaded file contents do not match")
+    print("Validation passed: uploaded and downloaded file contents are identical")
+
+    objects_response = s3.list_objects_v2(Bucket=bucket_name)
+    object_keys = [obj["Key"] for obj in objects_response.get("Contents", [])]
+    print(f"Objects in bucket '{bucket_name}':")
+    for key in object_keys:
+        print(f"- {key}")
+
+    if object_key not in object_keys:
+        raise FileNotFoundError(f"Uploaded object '{object_key}' not found in bucket listing")
+    print(f"Validation passed: '{object_key}' exists in bucket '{bucket_name}'")
+    return bucket_name, object_key, uploaded_content
+
+def check_bucket_name_creation(s3, bucket_name):
+    try:
+        create_bucket_args = {"Bucket": bucket_name}
+        region = s3.meta.region_name
+        if region and region != "us-east-1":
+            create_bucket_args["CreateBucketConfiguration"] = {
+                "LocationConstraint": region
+            }
+        s3.create_bucket(**create_bucket_args)
+        print(f"Bucket creation check passed: created '{bucket_name}'")
+
+        # Clean up the probe bucket so repeated runs do not leave extra state.
+        s3.delete_bucket(Bucket=bucket_name)
+        print(f"Cleanup complete: deleted '{bucket_name}'")
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "")
+        if error_code in {
+            "BucketAlreadyOwnedByYou",
+            "BucketAlreadyExists",
+            "AccessDenied",
+        }:
+            print(
+                f"Bucket creation check could not create '{bucket_name}': "
+                f"{error_code}"
+            )
+        else:
+            raise
+
+def check_readonly_access(bucket_name, object_key, expected_content):
+    readonly_client = get_s3_client("readonly@example.com", "dogood")
+
+    buckets_response = readonly_client.list_buckets()
+    bucket_names = {bucket["Name"] for bucket in buckets_response.get("Buckets", [])}
+    if bucket_name not in bucket_names:
+        raise PermissionError(f"Readonly user cannot see bucket '{bucket_name}' in list_buckets")
+    print(f"Readonly check passed: bucket '{bucket_name}' is visible")
+
+    readonly_object = readonly_client.get_object(Bucket=bucket_name, Key=object_key)
+    try:
+        readonly_content = readonly_object["Body"].read().decode("utf-8")
+    finally:
+        readonly_object["Body"].close()
+    print(f"Readonly check: downloaded s3://{bucket_name}/{object_key} into memory")
+
+    if readonly_content != expected_content:
+        raise ValueError("Readonly downloaded content does not match the uploaded content")
+    print("Readonly check passed: downloaded content matches uploaded content")
+
+    readonly_upload_key = f"readonly-upload-attempt-{uuid.uuid4().hex}.txt"
+    try:
+        readonly_client.put_object(
+            Bucket=bucket_name,
+            Key=readonly_upload_key,
+            Body=b"readonly upload should fail\n",
+            ContentType="text/plain",
+        )
+        raise PermissionError(
+            f"Readonly upload unexpectedly succeeded for s3://{bucket_name}/{readonly_upload_key}"
+        )
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "")
+        if error_code != "AccessDenied":
+            raise
+        print(f"Readonly check passed: upload denied with {error_code}")
+
+if __name__ == "__main__":
+    s3_client = get_s3_client("testuser@example.com", "dogood")
+    list_s3_buckets(s3_client)
+    bucket_name, object_key, uploaded_content = create_bucket_and_upload_file(s3_client)
+    check_bucket_name_creation(s3_client, "donotexist-what")
+    check_readonly_access(bucket_name, object_key, uploaded_content)
