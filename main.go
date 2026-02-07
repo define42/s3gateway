@@ -1394,6 +1394,11 @@ func newServer(cfg Config, up *s3.Client) *server {
 
 func (s *server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		auth, err := parseSigV4Authorization(r)
 		if err != nil || auth.Service != s.cfg.SigV4Service {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
@@ -1458,6 +1463,14 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
 	if p == "" {
 		p = "/"
+	}
+	if p == "/healthz" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodHead {
+			_, _ = w.Write([]byte("ok\n"))
+		}
+		return
 	}
 
 	if p == "/" && r.Method == http.MethodGet {

@@ -1177,6 +1177,8 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 			want   int
 		}{
 			{method: http.MethodPost, target: "/", want: http.StatusNotFound},
+			{method: http.MethodGet, target: "/healthz", want: http.StatusOK},
+			{method: http.MethodHead, target: "/healthz", want: http.StatusOK},
 			{method: http.MethodPatch, target: "/team2-bucket?lifecycle", want: http.StatusNotImplemented},
 			{method: http.MethodDelete, target: "/team2-bucket?versioning", want: http.StatusNotImplemented},
 			{method: http.MethodGet, target: "/team2-bucket", want: http.StatusNotImplemented},
@@ -1196,6 +1198,15 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 	})
 
 	t.Run("withAuth error and success branches", func(t *testing.T) {
+		healthHandler := gw.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		rrHealth := httptest.NewRecorder()
+		healthHandler.ServeHTTP(rrHealth, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		if rrHealth.Code != http.StatusNoContent {
+			t.Fatalf("healthz should bypass auth and reach next handler: got=%d body=%s", rrHealth.Code, rrHealth.Body.String())
+		}
+
 		handler := gw.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if rulesFromCtx(r) == nil {
 				t.Fatalf("expected rules in request context")
