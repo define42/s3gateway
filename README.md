@@ -1,5 +1,7 @@
 # s3gateway
 
+[![codecov](https://codecov.io/gh/define42/s3gateway/graph/badge.svg?token=GVN99Z1NQC)](https://codecov.io/gh/define42/s3gateway)
+
 An S3-compatible gateway that:
 
 - Authenticates clients with AWS SigV4.
