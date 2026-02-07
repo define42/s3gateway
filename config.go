@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"log"
 	"os"
 	"strconv"
@@ -45,6 +46,64 @@ const (
 	defaultMaxHeaderBytes       = 1 << 20 // 1 MiB
 )
 
+func (cfg *Config) ApplyDefaults() {
+	if cfg.ListenAddr == "" {
+		cfg.ListenAddr = ":8080"
+	}
+	if cfg.GroupTTL == 0 {
+		cfg.GroupTTL = 2 * time.Minute
+	}
+	if cfg.GroupCacheMaxEntries == 0 {
+		cfg.GroupCacheMaxEntries = defaultGroupCacheMaxEntries
+	}
+	if cfg.UpstreamRegion == "" {
+		cfg.UpstreamRegion = "us-east-1"
+	}
+	if cfg.SigV4Secret == "" {
+		cfg.SigV4Secret = "password"
+	}
+	if cfg.SigV4Service == "" {
+		cfg.SigV4Service = "s3"
+	}
+	if cfg.SigV4MaxSkew == 0 {
+		cfg.SigV4MaxSkew = defaultSigV4MaxSkew
+	}
+	if cfg.ReadHeaderTimeout == 0 {
+		cfg.ReadHeaderTimeout = defaultReadHeaderTimeout
+	}
+	if cfg.IdleTimeout == 0 {
+		cfg.IdleTimeout = defaultIdleTimeout
+	}
+	if cfg.ShutdownTimeout == 0 {
+		cfg.ShutdownTimeout = defaultShutdownTimeout
+	}
+	if cfg.MaxHeaderBytes == 0 {
+		cfg.MaxHeaderBytes = defaultMaxHeaderBytes
+	}
+}
+
+func (cfg Config) Validate() error {
+	if cfg.GroupCacheMaxEntries <= 0 {
+		return errors.New("LDAP_GROUP_CACHE_MAX_ENTRIES must be > 0")
+	}
+	if cfg.SigV4MaxSkew <= 0 {
+		return errors.New("SIGV4_MAX_SKEW must be > 0")
+	}
+	if cfg.ReadHeaderTimeout <= 0 {
+		return errors.New("HTTP_READ_HEADER_TIMEOUT must be > 0")
+	}
+	if cfg.IdleTimeout <= 0 {
+		return errors.New("HTTP_IDLE_TIMEOUT must be > 0")
+	}
+	if cfg.ShutdownTimeout <= 0 {
+		return errors.New("HTTP_SHUTDOWN_TIMEOUT must be > 0")
+	}
+	if cfg.MaxHeaderBytes <= 0 {
+		return errors.New("HTTP_MAX_HEADER_BYTES must be > 0")
+	}
+	return nil
+}
+
 func env(key, def string) string {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
@@ -86,44 +145,13 @@ func envInt(key string, def int) int {
 }
 
 func loadConfig() Config {
-	ttl := envDuration("LDAP_GROUP_TTL", 2*time.Minute)
-	groupCacheMaxEntries := envInt("LDAP_GROUP_CACHE_MAX_ENTRIES", defaultGroupCacheMaxEntries)
-	if groupCacheMaxEntries <= 0 {
-		log.Fatalf("LDAP_GROUP_CACHE_MAX_ENTRIES must be > 0")
-	}
-
-	sigV4MaxSkew := envDuration("SIGV4_MAX_SKEW", defaultSigV4MaxSkew)
-	if sigV4MaxSkew <= 0 {
-		log.Fatalf("SIGV4_MAX_SKEW must be > 0")
-	}
-
-	readHeaderTimeout := envDuration("HTTP_READ_HEADER_TIMEOUT", defaultReadHeaderTimeout)
-	if readHeaderTimeout <= 0 {
-		log.Fatalf("HTTP_READ_HEADER_TIMEOUT must be > 0")
-	}
-
-	idleTimeout := envDuration("HTTP_IDLE_TIMEOUT", defaultIdleTimeout)
-	if idleTimeout <= 0 {
-		log.Fatalf("HTTP_IDLE_TIMEOUT must be > 0")
-	}
-
-	shutdownTimeout := envDuration("HTTP_SHUTDOWN_TIMEOUT", defaultShutdownTimeout)
-	if shutdownTimeout <= 0 {
-		log.Fatalf("HTTP_SHUTDOWN_TIMEOUT must be > 0")
-	}
-
-	maxHeaderBytes := envInt("HTTP_MAX_HEADER_BYTES", defaultMaxHeaderBytes)
-	if maxHeaderBytes <= 0 {
-		log.Fatalf("HTTP_MAX_HEADER_BYTES must be > 0")
-	}
-
-	return Config{
+	cfg := Config{
 		ListenAddr: env("LISTEN_ADDR", ":8080"),
 
 		LDAPURL:              envRequired("LDAP_URL"),
 		BaseDN:               envRequired("LDAP_BASE_DN"),
-		GroupTTL:             ttl,
-		GroupCacheMaxEntries: groupCacheMaxEntries,
+		GroupTTL:             envDuration("LDAP_GROUP_TTL", 2*time.Minute),
+		GroupCacheMaxEntries: envInt("LDAP_GROUP_CACHE_MAX_ENTRIES", defaultGroupCacheMaxEntries),
 
 		UpstreamEndpoint:       envRequired("S3_ENDPOINT"),
 		UpstreamRegion:         env("S3_REGION", "us-east-1"),
@@ -133,13 +161,18 @@ func loadConfig() Config {
 
 		SigV4Secret:  env("SIGV4_SECRET", "password"),
 		SigV4Service: env("SIGV4_SERVICE", "s3"),
-		SigV4MaxSkew: sigV4MaxSkew,
+		SigV4MaxSkew: envDuration("SIGV4_MAX_SKEW", defaultSigV4MaxSkew),
 
-		ReadHeaderTimeout: readHeaderTimeout,
+		ReadHeaderTimeout: envDuration("HTTP_READ_HEADER_TIMEOUT", defaultReadHeaderTimeout),
 		ReadTimeout:       envDuration("HTTP_READ_TIMEOUT", defaultReadTimeout),
 		WriteTimeout:      envDuration("HTTP_WRITE_TIMEOUT", defaultWriteTimeout),
-		IdleTimeout:       idleTimeout,
-		ShutdownTimeout:   shutdownTimeout,
-		MaxHeaderBytes:    maxHeaderBytes,
+		IdleTimeout:       envDuration("HTTP_IDLE_TIMEOUT", defaultIdleTimeout),
+		ShutdownTimeout:   envDuration("HTTP_SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
+		MaxHeaderBytes:    envInt("HTTP_MAX_HEADER_BYTES", defaultMaxHeaderBytes),
 	}
+	if err := cfg.Validate(); err != nil {
+		log.Fatal(err)
+	}
+	cfg.ApplyDefaults()
+	return cfg
 }

@@ -76,11 +76,7 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := &server{
-		cfg:    cfg,
-		up:     up,
-		gcache: newGroupCache(cfg.GroupTTL),
-	}
+	gw := newServer(cfg, up)
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
@@ -237,11 +233,7 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := &server{
-		cfg:    cfg,
-		up:     up,
-		gcache: newGroupCache(cfg.GroupTTL),
-	}
+	gw := newServer(cfg, up)
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
@@ -332,11 +324,7 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := &server{
-		cfg:    cfg,
-		up:     up,
-		gcache: newGroupCache(cfg.GroupTTL),
-	}
+	gw := newServer(cfg, up)
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
@@ -425,11 +413,7 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := &server{
-		cfg:    cfg,
-		up:     up,
-		gcache: newGroupCache(cfg.GroupTTL),
-	}
+	gw := newServer(cfg, up)
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
@@ -519,11 +503,7 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := &server{
-		cfg:    cfg,
-		up:     up,
-		gcache: newGroupCache(cfg.GroupTTL),
-	}
+	gw := newServer(cfg, up)
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
@@ -713,11 +693,7 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := &server{
-		cfg:    cfg,
-		up:     up,
-		gcache: newGroupCache(cfg.GroupTTL),
-	}
+	gw := newServer(cfg, up)
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
@@ -907,11 +883,7 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := &server{
-		cfg:    cfg,
-		up:     up,
-		gcache: newGroupCache(cfg.GroupTTL),
-	}
+	gw := newServer(cfg, up)
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
@@ -1139,11 +1111,7 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := &server{
-		cfg:    cfg,
-		up:     up,
-		gcache: newGroupCache(cfg.GroupTTL),
-	}
+	gw := newServer(cfg, up)
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
@@ -1638,9 +1606,7 @@ func TestGatewayPreservesUpstreamErrorStatusAndHeaders(t *testing.T) {
 	defer upstreamSrv.Close()
 
 	upstreamClient := newS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := &server{
-		up: upstreamClient,
-	}
+	gw := newServer(Config{}, upstreamClient)
 	gwSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithValue(r.Context(), ctxRulesKey, []Rule{{BucketPrefix: "team2-", Perm: PermReadWrite}})
 		gw.ServeHTTP(w, r.WithContext(ctx))
@@ -1683,9 +1649,7 @@ func TestGatewayHandlesUpstreamLatencySpike(t *testing.T) {
 	defer upstreamSrv.Close()
 
 	upstreamClient := newS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := &server{
-		up: upstreamClient,
-	}
+	gw := newServer(Config{}, upstreamClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	timeoutCtx, cancel := context.WithTimeout(req.Context(), 150*time.Millisecond)
@@ -1742,11 +1706,7 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := &server{
-		cfg:    cfg,
-		up:     up,
-		gcache: newGroupCache(cfg.GroupTTL),
-	}
+	gw := newServer(cfg, up)
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
@@ -1828,11 +1788,7 @@ func setupIntegrationEnv(t *testing.T) *integrationEnv {
 		cancel()
 		t.Fatalf("init upstream s3: %v", err)
 	}
-	gw := &server{
-		cfg:    cfg,
-		up:     up,
-		gcache: newGroupCache(cfg.GroupTTL),
-	}
+	gw := newServer(cfg, up)
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))

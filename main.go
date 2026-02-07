@@ -357,13 +357,6 @@ var (
 	errSigV4RequestOutsideMaxSkew = errors.New("request outside allowed time skew")
 )
 
-func effectiveSigV4MaxSkew(cfg Config) time.Duration {
-	if cfg.SigV4MaxSkew <= 0 {
-		return defaultSigV4MaxSkew
-	}
-	return cfg.SigV4MaxSkew
-}
-
 func validateSigV4RequestTime(auth *sigv4Auth, now time.Time, maxSkew time.Duration) error {
 	amzTime, err := time.Parse("20060102T150405Z", strings.TrimSpace(auth.AmzDate))
 	if err != nil {
@@ -1353,6 +1346,15 @@ type server struct {
 	gcache *groupCache
 }
 
+func newServer(cfg Config, up *s3.Client) *server {
+	cfg.ApplyDefaults()
+	return &server{
+		cfg:    cfg,
+		up:     up,
+		gcache: newGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
+	}
+}
+
 func (s *server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth, err := parseSigV4Authorization(r)
@@ -1360,7 +1362,7 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
-		if err := validateSigV4RequestTime(auth, time.Now(), effectiveSigV4MaxSkew(s.cfg)); err != nil {
+		if err := validateSigV4RequestTime(auth, time.Now(), s.cfg.SigV4MaxSkew); err != nil {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
@@ -4630,34 +4632,21 @@ func (s *server) handleAbortMultipart(w http.ResponseWriter, r *http.Request, bu
 }
 
 func effectiveShutdownTimeout(cfg Config) time.Duration {
-	if cfg.ShutdownTimeout <= 0 {
-		return defaultShutdownTimeout
-	}
+	cfg.ApplyDefaults()
 	return cfg.ShutdownTimeout
 }
 
 func newHTTPServer(cfg Config, handler http.Handler) *http.Server {
-	readHeaderTimeout := cfg.ReadHeaderTimeout
-	if readHeaderTimeout <= 0 {
-		readHeaderTimeout = defaultReadHeaderTimeout
-	}
-	idleTimeout := cfg.IdleTimeout
-	if idleTimeout <= 0 {
-		idleTimeout = defaultIdleTimeout
-	}
-	maxHeaderBytes := cfg.MaxHeaderBytes
-	if maxHeaderBytes <= 0 {
-		maxHeaderBytes = defaultMaxHeaderBytes
-	}
+	cfg.ApplyDefaults()
 
 	return &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           handler,
-		ReadHeaderTimeout: readHeaderTimeout,
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.ReadTimeout,
 		WriteTimeout:      cfg.WriteTimeout,
-		IdleTimeout:       idleTimeout,
-		MaxHeaderBytes:    maxHeaderBytes,
+		IdleTimeout:       cfg.IdleTimeout,
+		MaxHeaderBytes:    cfg.MaxHeaderBytes,
 	}
 }
 
@@ -4669,11 +4658,7 @@ func main() {
 		log.Fatalf("init upstream s3: %v", err)
 	}
 
-	s := &server{
-		cfg:    cfg,
-		up:     up,
-		gcache: newGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
-	}
+	s := newServer(cfg, up)
 
 	httpSrv := newHTTPServer(cfg, s.withAuth(s))
 
