@@ -1681,6 +1681,63 @@ func TestGatewayHandlesUpstreamLatencySpike(t *testing.T) {
 	}
 }
 
+func TestHandleGetObjectAttributesIncludesChecksum(t *testing.T) {
+	ctx := context.Background()
+
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("upstream expected method GET, got %s", r.Method)
+		}
+		if _, ok := r.URL.Query()["attributes"]; !ok {
+			t.Fatalf("upstream expected ?attributes query, got raw query %q", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<GetObjectAttributesOutput xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <ETag>"etag-1"</ETag>
+  <Checksum>
+    <ChecksumCRC32>AAAAAA==</ChecksumCRC32>
+    <ChecksumCRC32C>BBBBBB==</ChecksumCRC32C>
+    <ChecksumCRC64NVME>CCCCCC==</ChecksumCRC64NVME>
+    <ChecksumSHA1>DDDDDD==</ChecksumSHA1>
+    <ChecksumSHA256>EEEEEE==</ChecksumSHA256>
+    <ChecksumType>FULL_OBJECT</ChecksumType>
+  </Checksum>
+</GetObjectAttributesOutput>`))
+	}))
+	defer upstreamSrv.Close()
+
+	upstreamClient := NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
+	gw := newServer(Config{}, upstreamClient)
+
+	req := httptest.NewRequest(http.MethodGet, "/team2-checksum/object.txt?attributes", nil)
+	req.Header.Set("x-amz-object-attributes", "Checksum")
+	req = req.WithContext(context.WithValue(req.Context(), ctxRulesKey, []Rule{{BucketPrefix: "team2-", Perm: PermRead}}))
+
+	rr := httptest.NewRecorder()
+	gw.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 from get object attributes, got=%d body=%s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		"<Checksum>",
+		"<ChecksumCRC32>AAAAAA==</ChecksumCRC32>",
+		"<ChecksumCRC32C>BBBBBB==</ChecksumCRC32C>",
+		"<ChecksumCRC64NVME>CCCCCC==</ChecksumCRC64NVME>",
+		"<ChecksumSHA1>DDDDDD==</ChecksumSHA1>",
+		"<ChecksumSHA256>EEEEEE==</ChecksumSHA256>",
+		"<ChecksumType>FULL_OBJECT</ChecksumType>",
+		"</Checksum>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected checksum element %q in response body=%s", want, body)
+		}
+	}
+}
+
 func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
