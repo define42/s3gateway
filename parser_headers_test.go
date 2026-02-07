@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -288,4 +292,123 @@ func TestParseChecksumAlgorithmHeader(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDecodeVersioningConfigXMLMFADeleteValues(t *testing.T) {
+	allowed := types.MFADelete("").Values()
+	if len(allowed) == 0 {
+		t.Fatalf("expected MFADelete values to be non-empty")
+	}
+
+	for _, v := range allowed {
+		v := v
+		t.Run("exact_"+string(v), func(t *testing.T) {
+			cfg, err := decodeVersioningConfigXML(strings.NewReader(
+				`<VersioningConfiguration><MfaDelete>` + string(v) + `</MfaDelete></VersioningConfiguration>`,
+			))
+			if err != nil {
+				t.Fatalf("decodeVersioningConfigXML() error = %v", err)
+			}
+			if cfg.MFADelete != v {
+				t.Fatalf("decodeVersioningConfigXML() MFADelete = %q, want %q", cfg.MFADelete, v)
+			}
+		})
+
+		t.Run("trimmed_case_insensitive_"+string(v), func(t *testing.T) {
+			cfg, err := decodeVersioningConfigXML(strings.NewReader(
+				`<VersioningConfiguration><MfaDelete>  ` + strings.ToLower(string(v)) + ` </MfaDelete></VersioningConfiguration>`,
+			))
+			if err != nil {
+				t.Fatalf("decodeVersioningConfigXML() error = %v", err)
+			}
+			if cfg.MFADelete != v {
+				t.Fatalf("decodeVersioningConfigXML() MFADelete = %q, want %q", cfg.MFADelete, v)
+			}
+		})
+	}
+
+	if _, err := decodeVersioningConfigXML(strings.NewReader(
+		`<VersioningConfiguration><MfaDelete>invalid</MfaDelete></VersioningConfiguration>`,
+	)); err == nil {
+		t.Fatalf("decodeVersioningConfigXML() expected error for invalid MfaDelete")
+	}
+}
+
+func TestSigV4AuthFromCtx(t *testing.T) {
+	t.Run("missing context value", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil)
+		if got := sigV4AuthFromCtx(req); got != nil {
+			t.Fatalf("sigV4AuthFromCtx() = %+v, want nil", got)
+		}
+	})
+
+	t.Run("wrong context value type", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
+			context.WithValue(context.Background(), ctxSigV4AuthKey, "not-auth"),
+		)
+		if got := sigV4AuthFromCtx(req); got != nil {
+			t.Fatalf("sigV4AuthFromCtx() = %+v, want nil for wrong context type", got)
+		}
+	})
+
+	t.Run("valid auth value", func(t *testing.T) {
+		want := &sigv4Auth{
+			AccessKey:    "access",
+			Date:         "20260207",
+			Region:       "us-east-1",
+			Service:      "s3",
+			SignatureHex: strings.Repeat("a", 64),
+			AmzDate:      "20260207T010203Z",
+		}
+		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
+			context.WithValue(context.Background(), ctxSigV4AuthKey, want),
+		)
+		got := sigV4AuthFromCtx(req)
+		if got != want {
+			t.Fatalf("sigV4AuthFromCtx() pointer mismatch: got=%p want=%p", got, want)
+		}
+	})
+}
+
+func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
+	const mode = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
+
+	t.Run("missing sigv4 auth context", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil)
+		req.Header.Set("x-amz-content-sha256", mode)
+
+		verifier, err := chunkSignatureVerifierFromRequest(req, "secret")
+		if !errors.Is(err, errMissingSigV4AuthContext) {
+			t.Fatalf("chunkSignatureVerifierFromRequest() error = %v, want %v", err, errMissingSigV4AuthContext)
+		}
+		if verifier != nil {
+			t.Fatalf("chunkSignatureVerifierFromRequest() verifier = %+v, want nil on missing context", verifier)
+		}
+	})
+
+	t.Run("with sigv4 auth context", func(t *testing.T) {
+		auth := &sigv4Auth{
+			AccessKey:    "access",
+			Date:         "20260207",
+			Region:       "us-east-1",
+			Service:      "s3",
+			SignatureHex: strings.Repeat("b", 64),
+			AmzDate:      "20260207T010203Z",
+		}
+		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
+			context.WithValue(context.Background(), ctxSigV4AuthKey, auth),
+		)
+		req.Header.Set("x-amz-content-sha256", mode)
+
+		verifier, err := chunkSignatureVerifierFromRequest(req, "secret")
+		if err != nil {
+			t.Fatalf("chunkSignatureVerifierFromRequest() error = %v", err)
+		}
+		if verifier == nil {
+			t.Fatalf("chunkSignatureVerifierFromRequest() verifier is nil")
+		}
+		if verifier.prevSig != auth.SignatureHex {
+			t.Fatalf("chunkSignatureVerifierFromRequest() prevSig = %q, want %q", verifier.prevSig, auth.SignatureHex)
+		}
+	})
 }
