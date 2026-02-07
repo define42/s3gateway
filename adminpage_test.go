@@ -824,6 +824,103 @@ func TestAdminBucketUploadAndDeleteRequirePermissions(t *testing.T) {
 	}
 }
 
+func TestAdminBucketUpload100MB(t *testing.T) {
+	const uploadSize = int64(100 * 1024 * 1024)
+
+	var putBytes int64
+	var putUploadedBy string
+
+	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/team2-logs/uploads/large-100mb.bin" {
+			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		putUploadedBy = r.Header.Get("x-amz-meta-uploaded-by")
+		n, err := io.Copy(io.Discard, r.Body)
+		if err != nil {
+			t.Fatalf("read upstream put body: %v", err)
+		}
+		putBytes = n
+		w.Header().Set("ETag", `"etag-100mb"`)
+		w.WriteHeader(http.StatusOK)
+	})
+	defer cleanup()
+
+	gw.gcache.set("alice", "secret", map[string]struct{}{
+		"team2-w": {},
+	})
+	handler := adminWebpageHandler(gw)
+	sessionCookie := adminLoginSessionCookie(t, handler, "alice", "secret")
+
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
+	writeErr := make(chan error, 1)
+	go func() {
+		defer close(writeErr)
+		defer pw.Close()
+		defer writer.Close()
+
+		fields := map[string]string{
+			"name":    "team2-logs",
+			"key":     "uploads/large-100mb.bin",
+			"cursor":  "",
+			"history": "",
+		}
+		for k, v := range fields {
+			if err := writer.WriteField(k, v); err != nil {
+				writeErr <- err
+				return
+			}
+		}
+
+		filePart, err := writer.CreateFormFile("file", "large-100mb.bin")
+		if err != nil {
+			writeErr <- err
+			return
+		}
+
+		chunk := bytes.Repeat([]byte("z"), 1<<20) // 1 MiB
+		var remaining = uploadSize
+		for remaining > 0 {
+			writeLen := int64(len(chunk))
+			if remaining < writeLen {
+				writeLen = remaining
+			}
+			if _, err := filePart.Write(chunk[:writeLen]); err != nil {
+				writeErr <- err
+				return
+			}
+			remaining -= writeLen
+		}
+		writeErr <- nil
+	}()
+
+	uploadReq := httptest.NewRequest(http.MethodPost, "/admin/bucket/upload", pr)
+	uploadReq.Header.Set("Content-Type", writer.FormDataContentType())
+	uploadReq.AddCookie(sessionCookie)
+	uploadRR := httptest.NewRecorder()
+	handler.ServeHTTP(uploadRR, uploadReq)
+
+	if err := <-writeErr; err != nil {
+		t.Fatalf("stream multipart upload payload: %v", err)
+	}
+	if uploadRR.Code != http.StatusSeeOther {
+		t.Fatalf("upload status mismatch: got=%d want=%d body=%s", uploadRR.Code, http.StatusSeeOther, uploadRR.Body.String())
+	}
+	loc, err := url.Parse(uploadRR.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse upload location: %v", err)
+	}
+	if loc.Query().Get("msg") != "Uploaded object: uploads/large-100mb.bin" {
+		t.Fatalf("upload success message mismatch: got=%q", loc.Query().Get("msg"))
+	}
+	if putBytes != uploadSize {
+		t.Fatalf("uploaded bytes mismatch: got=%d want=%d", putBytes, uploadSize)
+	}
+	if putUploadedBy != "alice" {
+		t.Fatalf("uploaded-by metadata mismatch: got=%q want=%q", putUploadedBy, "alice")
+	}
+}
+
 func TestAdminLogoutClearsCookieAndRedirects(t *testing.T) {
 	s := newServer(Config{}, nil)
 	s.gcache.set("alice", "secret", map[string]struct{}{

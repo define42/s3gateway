@@ -3,14 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
@@ -32,6 +36,67 @@ func fullTeam2Rule() []Rule {
 		BucketPrefix: "team2-",
 		Perm:         PermRead | PermWrite | PermCreateBucket | PermDeleteObject | PermDeleteBucket,
 	}}
+}
+
+func TestS3ClientUpload100MBThroughGateway(t *testing.T) {
+	const uploadSize = int64(100 * 1024 * 1024)
+
+	var uploadedBytes int64
+	var uploadedBy string
+
+	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/team2-large/objects/100mb.bin" {
+			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		uploadedBy = r.Header.Get("x-amz-meta-uploaded-by")
+		n, err := io.Copy(io.Discard, r.Body)
+		if err != nil {
+			t.Fatalf("read upstream put body: %v", err)
+		}
+		uploadedBytes = n
+		w.Header().Set("ETag", `"etag-100mb"`)
+		w.WriteHeader(http.StatusOK)
+	})
+	defer cleanup()
+
+	gw.gcache.set("testuser", "dogood", map[string]struct{}{
+		"team2-rw": {},
+	})
+
+	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
+	defer gwSrv.Close()
+
+	accessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
+	client := NewS3Client(t, context.Background(), gwSrv.URL, "us-east-1", accessKey, "password")
+
+	tmpFile, err := os.CreateTemp(t.TempDir(), "gateway-upload-100mb-*")
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	defer tmpFile.Close()
+	if err := tmpFile.Truncate(uploadSize); err != nil {
+		t.Fatalf("truncate temp file to %d bytes: %v", uploadSize, err)
+	}
+	if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("seek temp file start: %v", err)
+	}
+
+	if _, err := client.PutObject(context.Background(), &s3.PutObjectInput{
+		Bucket:        aws.String("team2-large"),
+		Key:           aws.String("objects/100mb.bin"),
+		Body:          tmpFile,
+		ContentLength: aws.Int64(uploadSize),
+		ContentType:   aws.String("application/octet-stream"),
+	}); err != nil {
+		t.Fatalf("put object 100MB via gateway client: %v", err)
+	}
+
+	if uploadedBytes != uploadSize {
+		t.Fatalf("uploaded bytes mismatch: got=%d want=%d", uploadedBytes, uploadSize)
+	}
+	if uploadedBy != "testuser" {
+		t.Fatalf("uploaded-by metadata mismatch: got=%q want=%q", uploadedBy, "testuser")
+	}
 }
 
 func TestGatewayGetAndHeadObjectRichHeaderMatrix(t *testing.T) {
