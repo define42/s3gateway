@@ -9,7 +9,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +20,8 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	s3gateway "github.com/define42/s3gateway"
+	minio "github.com/minio/minio-go/v7"
+	minioCredentials "github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 func TestBootS3GatewayFullIntegration(t *testing.T) {
@@ -124,6 +128,19 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	rwClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	roClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 	upstreamClient := s3gateway.NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+	parsedGatewayURL, err := url.Parse(gatewayURL)
+	if err != nil {
+		t.Fatalf("parse gateway url %q: %v", gatewayURL, err)
+	}
+	minioGatewayClient, err := minio.New(parsedGatewayURL.Host, &minio.Options{
+		Creds:        minioCredentials.NewStaticV4(rwAccessKey, cfg.SigV4Secret, ""),
+		Secure:       strings.EqualFold(parsedGatewayURL.Scheme, "https"),
+		Region:       "us-east-1",
+		BucketLookup: minio.BucketLookupPath,
+	})
+	if err != nil {
+		t.Fatalf("init minio gateway client: %v", err)
+	}
 
 	bucket := fmt.Sprintf("team2-boot-%d", time.Now().UnixNano())
 	key := "boot/object.txt"
@@ -294,6 +311,22 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 		); got != want {
 			t.Fatalf("list objects v2 with optional-object-attributes mismatch: gateway=%q upstream=%q", got, want)
 		}
+	}
+
+	minioListOpts := minio.ListObjectsOptions{
+		Prefix:    "boot/",
+		Recursive: true,
+	}
+	minioListOpts.Set("x-amz-optional-object-attributes", string(s3types.OptionalObjectAttributesRestoreStatus))
+	minioSeen := map[string]bool{}
+	for obj := range minioGatewayClient.ListObjects(ctx, bucket, minioListOpts) {
+		if obj.Err != nil {
+			t.Fatalf("minio list objects with optional attributes via gateway: %v", obj.Err)
+		}
+		minioSeen[obj.Key] = true
+	}
+	if !minioSeen[key] {
+		t.Fatalf("minio list objects via gateway missing %q; got=%v", key, minioSeen)
 	}
 
 	roObj, err := roClient.GetObject(ctx, &s3.GetObjectInput{

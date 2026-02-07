@@ -2650,7 +2650,11 @@ func (s *server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 	} else if et != "" {
 		in.EncodingType = et
 	}
-	if attrs, err := parseOptionalObjectAttributes(q.Get("optional-object-attributes")); err != nil {
+	optionalObjectAttrs := q.Get("optional-object-attributes")
+	if optionalObjectAttrs == "" {
+		optionalObjectAttrs = strings.TrimSpace(r.Header.Get("x-amz-optional-object-attributes"))
+	}
+	if attrs, err := parseOptionalObjectAttributes(optionalObjectAttrs); err != nil {
 		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid optional-object-attributes")
 		return
 	} else if len(attrs) > 0 {
@@ -2831,7 +2835,11 @@ func (s *server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 	} else if et != "" {
 		in.EncodingType = et
 	}
-	if attrs, err := parseOptionalObjectAttributes(q.Get("optional-object-attributes")); err != nil {
+	optionalObjectAttrs := q.Get("optional-object-attributes")
+	if optionalObjectAttrs == "" {
+		optionalObjectAttrs = strings.TrimSpace(r.Header.Get("x-amz-optional-object-attributes"))
+	}
+	if attrs, err := parseOptionalObjectAttributes(optionalObjectAttrs); err != nil {
 		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid optional-object-attributes")
 		return
 	} else if len(attrs) > 0 {
