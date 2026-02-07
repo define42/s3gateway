@@ -13,10 +13,10 @@ An S3-compatible gateway that:
 ## Authentication Model (By Design)
 
 - Client signs requests with SigV4.
-- `AWS_ACCESS_KEY_ID` must be `base64("<upn-or-username>:<password>")`.
+- `AWS_ACCESS_KEY_ID` must be `base64("<username>:<password>")` (username only, no `@domain`).
 - `AWS_SECRET_ACCESS_KEY` must match `SIGV4_SECRET`.
 - Gateway verifies SigV4 signature and request time window (`SIGV4_MAX_SKEW`).
-- Gateway decodes access key to LDAP credentials and binds to LDAP.
+- Gateway appends `@LDAP_DOMAIN` and binds to LDAP with `<username>@<LDAP_DOMAIN>`.
 
 Important:
 
@@ -112,6 +112,7 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 ### Optional
 
 - `LISTEN_ADDR` (default `:8080`)
+- `LDAP_DOMAIN` (default `example.com`)
 - `LDAP_GROUP_TTL` (default `2m`)
 - `LDAP_GROUP_CACHE_MAX_ENTRIES` (default `10000`)
 - `S3_REGION` (default `us-east-1`)
@@ -157,8 +158,9 @@ readinessProbe:
 
 ```bash
 # Designed credential mapping:
-# AccessKey = base64("user@example.com:ldap-password")
-export AWS_ACCESS_KEY_ID="$(printf 'user@example.com:ldap-password' | base64)"
+# AccessKey = base64("user:ldap-password")
+# Gateway LDAP bind identity = "user@${LDAP_DOMAIN}"
+export AWS_ACCESS_KEY_ID="$(printf 'user:ldap-password' | base64)"
 export AWS_SECRET_ACCESS_KEY="your-sigv4-secret"
 export AWS_REGION="us-east-1"
 
