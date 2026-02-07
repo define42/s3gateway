@@ -1239,7 +1239,7 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 	t.Run("withAuth error and success branches", func(t *testing.T) {
 		healthHandler := gw.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
-		}))
+		}), adminWebpageHandler(gw))
 		rrHealth := httptest.NewRecorder()
 		healthHandler.ServeHTTP(rrHealth, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 		if rrHealth.Code != http.StatusNoContent {
@@ -1256,7 +1256,7 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 				t.Fatalf("expected rules in request context")
 			}
 			w.WriteHeader(http.StatusNoContent)
-		}))
+		}), adminWebpageHandler(gw))
 
 		newSignedReq := func(accessKey, amzDate, service string) *http.Request {
 			req := httptest.NewRequest(http.MethodGet, "/team2-bucket/key.txt", nil)
@@ -1296,7 +1296,7 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 		}, nil)
 		handlerFetch := gwFetch.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
-		}))
+		}), adminWebpageHandler(gwFetch))
 		handlerFetch.ServeHTTP(rrBadCreds, newSignedReq("dXNlcjpwYXNz", fixedAmzDate, "s3"))
 		if rrBadCreds.Code != http.StatusUnauthorized {
 			t.Fatalf("bad creds status mismatch: got=%d body=%s", rrBadCreds.Code, rrBadCreds.Body.String())

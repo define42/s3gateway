@@ -11,6 +11,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 	github.com/aws/smithy-go v1.24.0
 	github.com/go-ldap/ldap/v3 v3.4.12
+	github.com/gorilla/securecookie v1.1.2
+	github.com/gorilla/sessions v1.4.0
 	github.com/minio/minio-go/v7 v7.0.85
 	github.com/testcontainers/testcontainers-go v0.40.0
 )

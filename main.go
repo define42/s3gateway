@@ -1389,24 +1389,52 @@ const ctxRulesKey ctxKey = "rules"
 const ctxSigV4AuthKey ctxKey = "sigv4-auth"
 
 type server struct {
-	cfg    Config
-	up     *s3.Client
-	gcache *groupCache
+	cfg              Config
+	up               *s3.Client
+	gcache           *groupCache
+	adminSessions    *adminSessionStore
+	adminWebSessions *adminGorillaStore
 }
 
 func newServer(cfg Config, up *s3.Client) *server {
 	cfg.ApplyDefaults()
+	adminSessions := newAdminSessionStore(defaultAdminSessionTTL, cfg.GroupCacheMaxEntries)
 	return &server{
-		cfg:    cfg,
-		up:     up,
-		gcache: newGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
+		cfg:              cfg,
+		up:               up,
+		gcache:           newGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
+		adminSessions:    adminSessions,
+		adminWebSessions: newAdminGorillaStore(cfg.SigV4Secret, defaultAdminSessionTTL, adminSessions),
 	}
 }
 
-func (s *server) withAuth(next http.Handler) http.Handler {
+func (s *server) groupsForCredentials(upn, pass string) (map[string]struct{}, error) {
+	if upn == "" || pass == "" {
+		return nil, errors.New("missing credentials")
+	}
+
+	grps, ok := s.gcache.get(upn, pass)
+	if ok {
+		return grps, nil
+	}
+
+	grps, err := fetchGroupsUPN(s.cfg, upn, pass)
+	if err != nil {
+		return nil, err
+	}
+
+	s.gcache.set(upn, pass, grps)
+	return grps, nil
+}
+
+func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
 			next.ServeHTTP(w, r)
+			return
+		}
+		if isBrowser(r) && isAdminRoute(r.URL.Path) {
+			adminHandler.ServeHTTP(w, r)
 			return
 		}
 
@@ -1430,14 +1458,10 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		grps, ok := s.gcache.get(upn, pass)
-		if !ok {
-			grps, err = fetchGroupsUPN(s.cfg, upn, pass)
-			if err != nil {
-				writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Bad credentials")
-				return
-			}
-			s.gcache.set(upn, pass, grps)
+		grps, err := s.groupsForCredentials(upn, pass)
+		if err != nil {
+			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Bad credentials")
+			return
 		}
 
 		rules := rulesFromGroups(grps)
@@ -4828,7 +4852,9 @@ func BootS3Gateway() (*http.Server, Config, error) {
 
 	s := newServer(cfg, up)
 
-	httpSrv := newHTTPServer(cfg, s.withAuth(s))
+	adminWebpageHandler := adminWebpageHandler(s)
+
+	httpSrv := newHTTPServer(cfg, s.withAuth(s, adminWebpageHandler))
 	return httpSrv, cfg, nil
 }
 

@@ -90,7 +90,7 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	}
 
 	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	gatewayAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -248,7 +248,7 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 	}
 
 	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	gatewayAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -340,7 +340,7 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 	}
 
 	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -430,7 +430,7 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 	}
 
 	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -521,7 +521,7 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 	}
 
 	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -712,7 +712,7 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 	}
 
 	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -903,7 +903,7 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	}
 
 	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -1132,7 +1132,7 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 	}
 
 	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -1785,7 +1785,7 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 	}
 
 	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -1868,7 +1868,7 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 		tb.Fatalf("init upstream s3: %v", err)
 	}
 	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw))
+	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
