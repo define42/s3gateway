@@ -9,11 +9,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	s3gateway "github.com/define42/s3gateway"
 )
@@ -164,6 +166,69 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 		ContentType:   aws.String("text/plain"),
 	}); err != nil {
 		t.Fatalf("put object through booted gateway: %v", err)
+	}
+
+	newListInputWithOptionalAttrs := func() *s3.ListObjectsV2Input {
+		return &s3.ListObjectsV2Input{
+			Bucket: aws.String(bucket),
+			Prefix: aws.String("boot/"),
+			OptionalObjectAttributes: []s3types.OptionalObjectAttributes{
+				s3types.OptionalObjectAttributesRestoreStatus,
+			},
+		}
+	}
+	upstreamListWithOptionalAttrs, upstreamListWithOptionalAttrsErr := upstreamClient.ListObjectsV2(ctx, newListInputWithOptionalAttrs())
+	gatewayListWithOptionalAttrs, gatewayListWithOptionalAttrsErr := rwClient.ListObjectsV2(ctx, newListInputWithOptionalAttrs())
+	if (upstreamListWithOptionalAttrsErr != nil) != (gatewayListWithOptionalAttrsErr != nil) {
+		t.Fatalf("list objects v2 with optional-object-attributes error mismatch: gatewayErr=%v upstreamErr=%v", gatewayListWithOptionalAttrsErr, upstreamListWithOptionalAttrsErr)
+	}
+	if upstreamListWithOptionalAttrsErr != nil {
+		var upstreamAPIErr smithy.APIError
+		var gatewayAPIErr smithy.APIError
+		if !errors.As(upstreamListWithOptionalAttrsErr, &upstreamAPIErr) || !errors.As(gatewayListWithOptionalAttrsErr, &gatewayAPIErr) {
+			t.Fatalf("list objects v2 with optional-object-attributes expected smithy errors: gatewayErr=%v upstreamErr=%v", gatewayListWithOptionalAttrsErr, upstreamListWithOptionalAttrsErr)
+		}
+		if gatewayAPIErr.ErrorCode() != upstreamAPIErr.ErrorCode() {
+			t.Fatalf("list objects v2 with optional-object-attributes error code mismatch: gateway=%q upstream=%q", gatewayAPIErr.ErrorCode(), upstreamAPIErr.ErrorCode())
+		}
+	} else {
+		makeObjectSigs := func(objs []s3types.Object) []string {
+			out := make([]string, 0, len(objs))
+			for _, o := range objs {
+				restoreInProgress := "<nil>"
+				restoreExpiry := "<nil>"
+				if o.RestoreStatus != nil {
+					if o.RestoreStatus.IsRestoreInProgress != nil {
+						restoreInProgress = fmt.Sprintf("%t", aws.ToBool(o.RestoreStatus.IsRestoreInProgress))
+					}
+					if o.RestoreStatus.RestoreExpiryDate != nil {
+						restoreExpiry = o.RestoreStatus.RestoreExpiryDate.UTC().Format(time.RFC3339Nano)
+					}
+				}
+				out = append(out, fmt.Sprintf(
+					"%s|%d|%s|%s",
+					aws.ToString(o.Key),
+					aws.ToInt64(o.Size),
+					restoreInProgress,
+					restoreExpiry,
+				))
+			}
+			sort.Strings(out)
+			return out
+		}
+		if got, want := fmt.Sprintf(
+			"%v|%v|%v",
+			makeObjectSigs(gatewayListWithOptionalAttrs.Contents),
+			aws.ToInt32(gatewayListWithOptionalAttrs.KeyCount),
+			aws.ToBool(gatewayListWithOptionalAttrs.IsTruncated),
+		), fmt.Sprintf(
+			"%v|%v|%v",
+			makeObjectSigs(upstreamListWithOptionalAttrs.Contents),
+			aws.ToInt32(upstreamListWithOptionalAttrs.KeyCount),
+			aws.ToBool(upstreamListWithOptionalAttrs.IsTruncated),
+		); got != want {
+			t.Fatalf("list objects v2 with optional-object-attributes mismatch: gateway=%q upstream=%q", got, want)
+		}
 	}
 
 	roObj, err := roClient.GetObject(ctx, &s3.GetObjectInput{
