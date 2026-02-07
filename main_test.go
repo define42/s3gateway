@@ -44,6 +44,7 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	cfg := Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
 		UpstreamRegion:         "us-east-1",
@@ -55,7 +56,7 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	}
 
 	// Sanity-check LDAP bind + group mapping used by gateway authz.
-	grps, err := fetchGroupsUPN(cfg, "testuser@example.com", "dogood")
+	grps, err := fetchGroupsUPN(cfg, "testuser", "dogood")
 	if err != nil {
 		t.Fatalf("ldap auth/group lookup failed: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	if !canDeleteBucket(rulesFromGroups(grps), "team2-integration-check") {
 		t.Fatalf("expected team2-rwcdb delete-bucket permission, got groups: %v", mapKeys(grps))
 	}
-	roGrps, err := fetchGroupsUPN(cfg, "readonly@example.com", "dogood")
+	roGrps, err := fetchGroupsUPN(cfg, "readonly", "dogood")
 	if err != nil {
 		t.Fatalf("ldap auth/group lookup failed for readonly user: %v", err)
 	}
@@ -92,9 +93,9 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
-	gatewayAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	gatewayAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	gatewayClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, cfg.SigV4Secret)
-	readonlyAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	readonlyAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	readonlyClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", readonlyAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
@@ -230,6 +231,7 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 	cfg := Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
 		UpstreamRegion:         "us-east-1",
@@ -249,7 +251,7 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
-	gatewayAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	gatewayAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	gatewayAwsClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, cfg.SigV4Secret)
 	gatewayMinioClient := newMinioGatewayClient(t, gwSrv.URL, gatewayAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
@@ -321,6 +323,7 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 	cfg := Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
 		UpstreamRegion:         "us-east-1",
@@ -340,9 +343,9 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
@@ -410,6 +413,7 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 	cfg := Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
 		UpstreamRegion:         "us-east-1",
@@ -429,9 +433,9 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 
 	bucket := fmt.Sprintf("team2-listobj-%d", time.Now().UnixNano())
@@ -500,6 +504,7 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 	cfg := Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
 		UpstreamRegion:         "us-east-1",
@@ -519,9 +524,9 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
@@ -690,6 +695,7 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 	cfg := Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
 		UpstreamRegion:         "us-east-1",
@@ -709,9 +715,9 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 
 	bucket := fmt.Sprintf("team2-getattrs-%d", time.Now().UnixNano())
@@ -880,6 +886,7 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	cfg := Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
 		UpstreamRegion:         "us-east-1",
@@ -899,7 +906,7 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	gatewayClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
@@ -1108,6 +1115,7 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 	cfg := Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
 		UpstreamRegion:         "us-east-1",
@@ -1127,9 +1135,9 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
@@ -1760,6 +1768,7 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 	cfg := Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPDomain:             "example.com",
 		GroupTTL:               2 * time.Minute,
 		UpstreamEndpoint:       minioURL,
 		UpstreamRegion:         "us-east-1",
@@ -1779,9 +1788,9 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 
 	bucket := fmt.Sprintf("team2-ldap-cache-%d", time.Now().UnixNano())
@@ -1840,6 +1849,7 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 	cfg := Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
 		UpstreamRegion:         "us-east-1",
@@ -1860,9 +1870,9 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 	gw := newServer(cfg, up)
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(tb, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 

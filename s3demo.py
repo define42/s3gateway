@@ -13,7 +13,7 @@ def get_s3_client(user_upn, user_password):
     access_key = base64.b64encode(f"{user_upn}:{user_password}".encode("utf-8")).decode("utf-8")
     return boto3.client(
         "s3",
-        aws_access_key_id=access_key,  # base64("user@example.com:ldap-password")
+        aws_access_key_id=access_key,  # base64("user:ldap-password")
         aws_secret_access_key=SIGV4_SECRET,
         region_name=S3_REGION,
         endpoint_url=S3_ENDPOINT_URL,
@@ -116,7 +116,7 @@ def check_bucket_name_creation(s3, bucket_name):
             raise
 
 def check_readonly_access(bucket_name, object_key, expected_content):
-    readonly_client = get_s3_client("readonly@example.com", "dogood")
+    readonly_client = get_s3_client("readonly", "dogood")
 
     buckets_response = readonly_client.list_buckets()
     bucket_names = {bucket["Name"] for bucket in buckets_response.get("Buckets", [])}
@@ -153,7 +153,7 @@ def check_readonly_access(bucket_name, object_key, expected_content):
         print(f"Readonly check passed: upload denied with {error_code}")
 
 if __name__ == "__main__":
-    s3_client = get_s3_client("testuser@example.com", "dogood")
+    s3_client = get_s3_client("testuser", "dogood")
     list_s3_buckets(s3_client)
     bucket_name, object_key, uploaded_content = create_bucket_and_upload_file(s3_client)
     check_bucket_name_creation(s3_client, "donotexist-what")

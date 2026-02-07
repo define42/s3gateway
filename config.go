@@ -13,6 +13,7 @@ type Config struct {
 	ListenAddr string
 
 	LDAPURL              string
+	LDAPDomain           string
 	BaseDN               string
 	GroupTTL             time.Duration
 	GroupCacheMaxEntries int
@@ -151,6 +152,7 @@ func loadConfig() Config {
 		LDAPURL:              envRequired("LDAP_URL"),
 		BaseDN:               envRequired("LDAP_BASE_DN"),
 		GroupTTL:             envDuration("LDAP_GROUP_TTL", 2*time.Minute),
+		LDAPDomain:           env("LDAP_DOMAIN", "example.com"),
 		GroupCacheMaxEntries: envInt("LDAP_GROUP_CACHE_MAX_ENTRIES", defaultGroupCacheMaxEntries),
 
 		UpstreamEndpoint:       envRequired("S3_ENDPOINT"),

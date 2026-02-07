@@ -81,11 +81,13 @@ func fetchGroupsUPN(cfg Config, upn, password string) (map[string]struct{}, erro
 	}
 	defer conn.Close()
 
-	if err := conn.Bind(upn, password); err != nil {
+	upnWithDomain := upn + "@" + ldap.EscapeFilter(cfg.LDAPDomain)
+
+	if err := conn.Bind(upnWithDomain, password); err != nil {
 		return nil, fmt.Errorf("ldap bind failed: %w", err)
 	}
 
-	filter := fmt.Sprintf("(userPrincipalName=%s)", ldap.EscapeFilter(upn))
+	filter := fmt.Sprintf("(userPrincipalName=%s)", ldap.EscapeFilter(upnWithDomain))
 	req := ldap.NewSearchRequest(
 		cfg.BaseDN,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases,

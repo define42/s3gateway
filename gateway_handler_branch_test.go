@@ -1257,6 +1257,7 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 			SigV4MaxSkew: 0,
 			LDAPURL:      "ldap://127.0.0.1:1",
 			BaseDN:       "dc=example,dc=com",
+			LDAPDomain:   "example.com",
 		}, nil)
 		handlerFetch := gwFetch.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)

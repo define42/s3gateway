@@ -48,10 +48,11 @@ func TestFetchGroupsUPNLDAPBindFailed(t *testing.T) {
 	}()
 
 	cfg := Config{
-		LDAPURL: "ldap://" + ln.Addr().String(),
-		BaseDN:  "dc=example,dc=com",
+		LDAPURL:    "ldap://" + ln.Addr().String(),
+		BaseDN:     "dc=example,dc=com",
+		LDAPDomain: "example.com",
 	}
-	_, err = fetchGroupsUPN(cfg, "user@example.com", "wrongpass")
+	_, err = fetchGroupsUPN(cfg, "user", "wrongpass")
 	if err == nil {
 		t.Fatalf("expected ldap bind failure error")
 	}

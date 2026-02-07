@@ -38,6 +38,7 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	t.Setenv("LISTEN_ADDR", "127.0.0.1:0")
 	t.Setenv("LDAP_URL", ldapURL)
 	t.Setenv("LDAP_BASE_DN", "dc=glauth,dc=com")
+	t.Setenv("LDAP_DOMAIN", "example.com")
 	t.Setenv("LDAP_GROUP_TTL", "45s")
 	t.Setenv("LDAP_GROUP_CACHE_MAX_ENTRIES", "256")
 	t.Setenv("S3_ENDPOINT", minioURL)
@@ -137,8 +138,8 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 		}
 	}
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
+	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 
 	rwClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	roClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", roAccessKey, cfg.SigV4Secret)
