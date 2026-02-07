@@ -1838,6 +1838,42 @@ func TestBucketLifecycleHandlersBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("delete lifecycle forbidden with write-only permission", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?lifecycle", nil)
+		req = reqWithRules(req, []Rule{{
+			BucketPrefix: "team2-",
+			Perm:         PermWrite,
+		}})
+		rr := httptest.NewRecorder()
+		gw.handleDeleteBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("delete lifecycle success with delete-bucket-only permission", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?lifecycle", nil)
+		req = reqWithRules(req, []Rule{{
+			BucketPrefix: "team2-",
+			Perm:         PermDeleteBucket,
+		}})
+		rr := httptest.NewRecorder()
+		gw.handleDeleteBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusNoContent {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
 	t.Run("delete lifecycle success", func(t *testing.T) {
 		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)

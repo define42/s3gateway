@@ -1,4 +1,4 @@
-# s3gateway
+# S3gateway
 
 [![codecov](https://codecov.io/gh/define42/s3gateway/graph/badge.svg?token=GVN99Z1NQC)](https://codecov.io/gh/define42/s3gateway)
 
@@ -67,7 +67,7 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 | Bucket | `GET /<bucket>?versioning` | Get bucket versioning | `r` on target bucket prefix |
 | Bucket | `PUT /<bucket>?lifecycle` | Put lifecycle configuration | `c` on target bucket prefix |
 | Bucket | `GET /<bucket>?lifecycle` | Get lifecycle configuration | `r` on target bucket prefix |
-| Bucket | `DELETE /<bucket>?lifecycle` | Delete lifecycle configuration | `w` on target bucket prefix |
+| Bucket | `DELETE /<bucket>?lifecycle` | Delete lifecycle configuration | `b` on target bucket prefix |
 | Bucket | `GET /<bucket>?uploads` | List multipart uploads | `r` on target bucket prefix |
 | Object | `GET /<bucket>/<key>` | Get object | `r` on target bucket prefix |
 | Object | `HEAD /<bucket>/<key>` | Head object | `r` on target bucket prefix |

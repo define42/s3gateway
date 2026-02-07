@@ -2505,7 +2505,7 @@ func (s *server) handleGetBucketLifecycleConfiguration(w http.ResponseWriter, r 
 
 func (s *server) handleDeleteBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
-	if !canWrite(rules, bucket) {
+	if !canDeleteBucket(rules, bucket) {
 		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
