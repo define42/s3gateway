@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -92,11 +93,24 @@ type adminBucketPageData struct {
 	BucketName  string
 	Error       string
 	GeneratedAt string
-	ObjectKeys  []string
+	Objects     []adminBucketObjectView
 	HasNext     bool
 	HasPrev     bool
 	NextURL     string
 	PrevURL     string
+}
+
+type adminBucketObjectView struct {
+	Key         string
+	SizeBytes   int64
+	LastModUTC  string
+	Metadata    []adminMetadataPair
+	MetadataErr string
+}
+
+type adminMetadataPair struct {
+	Key   string
+	Value string
 }
 
 type adminPageData struct {
@@ -571,7 +585,46 @@ func (s *server) listAllBuckets(ctx context.Context) ([]string, error) {
 	return names, nil
 }
 
-func (s *server) listBucketObjectKeys(ctx context.Context, bucket, continuationToken string, maxKeys int32) ([]string, string, bool, error) {
+func metadataPairsFromMap(meta map[string]string) []adminMetadataPair {
+	if len(meta) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(meta))
+	for k := range meta {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	pairs := make([]adminMetadataPair, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, adminMetadataPair{
+			Key:   k,
+			Value: meta[k],
+		})
+	}
+	return pairs
+}
+
+func (s *server) headObjectMetadata(ctx context.Context, bucket, key string) ([]adminMetadataPair, string) {
+	out, err := s.up.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: &bucket,
+		Key:    &key,
+	})
+	if err != nil {
+		return nil, "Could not load metadata."
+	}
+	return metadataPairsFromMap(out.Metadata), ""
+}
+
+func formatObjectLastModifiedUTC(lastModified *time.Time) string {
+	if lastModified == nil || lastModified.IsZero() {
+		return ""
+	}
+	return lastModified.UTC().Format(time.RFC3339)
+}
+
+func (s *server) listBucketObjects(ctx context.Context, bucket, continuationToken string, maxKeys int32) ([]adminBucketObjectView, string, bool, error) {
 	if s == nil {
 		return nil, "", false, errors.New("server not configured")
 	}
@@ -598,7 +651,7 @@ func (s *server) listBucketObjectKeys(ctx context.Context, bucket, continuationT
 		return nil, "", false, err
 	}
 
-	keys := make([]string, 0, len(out.Contents))
+	objects := make([]adminBucketObjectView, 0, len(out.Contents))
 	for _, obj := range out.Contents {
 		if obj.Key == nil {
 			continue
@@ -607,9 +660,15 @@ func (s *server) listBucketObjectKeys(ctx context.Context, bucket, continuationT
 		if key == "" {
 			continue
 		}
-		keys = append(keys, key)
+		view := adminBucketObjectView{
+			Key:        key,
+			SizeBytes:  aws.ToInt64(obj.Size),
+			LastModUTC: formatObjectLastModifiedUTC(obj.LastModified),
+		}
+		view.Metadata, view.MetadataErr = s.headObjectMetadata(ctx, bucket, key)
+		objects = append(objects, view)
 	}
-	return keys, strings.TrimSpace(aws.ToString(out.NextContinuationToken)), out.IsTruncated != nil && *out.IsTruncated, nil
+	return objects, strings.TrimSpace(aws.ToString(out.NextContinuationToken)), out.IsTruncated != nil && *out.IsTruncated, nil
 }
 
 func (s *server) bucketPreviewsForGroups(groups map[string]struct{}, buckets []string) map[string]adminBucketView {
@@ -916,7 +975,7 @@ func handleAdminBucketPage(s *server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keys, nextCursor, truncated, err := s.listBucketObjectKeys(r.Context(), bucket, cursor, adminPreviewMaxKeys)
+	objects, nextCursor, truncated, err := s.listBucketObjects(r.Context(), bucket, cursor, adminPreviewMaxKeys)
 	if err != nil {
 		writeAdminBucketPage(w, r, http.StatusBadGateway, adminBucketPageData{
 			Username:    session.Username,
@@ -931,7 +990,7 @@ func handleAdminBucketPage(s *server, w http.ResponseWriter, r *http.Request) {
 		Username:    session.Username,
 		BucketName:  bucket,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		ObjectKeys:  keys,
+		Objects:     objects,
 	}
 
 	if len(history) > 0 {
@@ -986,447 +1045,11 @@ func adminWebpageHandler(s *server) http.Handler {
 	})
 }
 
-var adminLoginTmpl = template.Must(template.New("admin-login-page").Parse(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>S3 Gateway Login</title>
-  <style>
-    :root {
-      --bg: #f4f6f8;
-      --panel: #ffffff;
-      --text: #10212f;
-      --muted: #5f7283;
-      --accent: #0b5cab;
-      --border: #d6dce2;
-      --error: #b00020;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: "IBM Plex Sans", "Avenir Next", "Trebuchet MS", sans-serif;
-      background: linear-gradient(160deg, #f4f6f8 0%, #dde8f1 100%);
-      color: var(--text);
-    }
-    main {
-      max-width: 980px;
-      margin: 2rem auto;
-      padding: 0 1rem 2rem;
-      display: grid;
-      gap: 1rem;
-    }
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 1.25rem;
-      box-shadow: 0 2px 8px rgba(16, 33, 47, 0.06);
-      animation: panel-in 180ms ease-out;
-    }
-    h1, h2, h3 { margin-top: 0; }
-    p { margin: 0.5rem 0; }
-    .muted { color: var(--muted); }
-    .error {
-      margin-top: 0.75rem;
-      color: var(--error);
-      font-weight: 600;
-    }
-    form {
-      display: grid;
-      gap: 0.75rem;
-      margin-top: 0.75rem;
-    }
-    label {
-      display: grid;
-      gap: 0.35rem;
-      font-weight: 600;
-    }
-    input {
-      width: 100%;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 0.6rem;
-      font-size: 1rem;
-    }
-    button {
-      border: 0;
-      border-radius: 6px;
-      padding: 0.65rem 1rem;
-      font-size: 1rem;
-      font-weight: 600;
-      color: #fff;
-      background: var(--accent);
-      cursor: pointer;
-      width: fit-content;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 0.75rem;
-    }
-    th, td {
-      border: 1px solid var(--border);
-      padding: 0.65rem;
-      vertical-align: top;
-      text-align: left;
-    }
-    th {
-      background: #edf3f8;
-      font-weight: 700;
-    }
-    ul {
-      margin: 0;
-      padding-left: 1rem;
-    }
-    .badge {
-      display: inline-block;
-      margin: 0 0.35rem 0.35rem 0;
-      padding: 0.25rem 0.45rem;
-      border-radius: 999px;
-      background: #e6f0f9;
-      color: #0a3e73;
-      font-size: 0.85rem;
-      white-space: nowrap;
-    }
-    @media (max-width: 700px) {
-      table, tbody, tr, td, th { display: block; }
-      tr { margin-bottom: 0.75rem; }
-      th { border-bottom: 0; }
-      td { border-top: 0; }
-    }
-    @keyframes panel-in {
-      from {
-        opacity: 0;
-        transform: translateY(8px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <section class="panel">
-      <h1>S3 Gateway Admin</h1>
-      <p class="muted">Sign in with LDAP credentials.</p>
-      <form method="post" action="/login">
-        <label>
-          LDAP Username
-          <input type="text" name="username" autocomplete="username" value="{{.Username}}" required>
-        </label>
-        <label>
-          LDAP Password
-          <input type="password" name="password" autocomplete="current-password" required>
-        </label>
-        <button type="submit">Sign in</button>
-      </form>
-      {{if .Error}}
-      <p class="error">{{.Error}}</p>
-      {{end}}
-    </section>
-  </main>
-</body>
-</html>`))
+var (
+	//go:embed webtemplate/admin-login.html webtemplate/admin-dashboard.html webtemplate/admin-bucket.html
+	adminWebTemplatesFS embed.FS
 
-var adminDashboardTmpl = template.Must(template.New("admin-dashboard-page").Parse(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>S3 Gateway Admin</title>
-  <style>
-    :root {
-      --bg: #f4f6f8;
-      --panel: #ffffff;
-      --text: #10212f;
-      --muted: #5f7283;
-      --accent: #0b5cab;
-      --border: #d6dce2;
-      --error: #b00020;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: "IBM Plex Sans", "Avenir Next", "Trebuchet MS", sans-serif;
-      background: linear-gradient(160deg, #f4f6f8 0%, #dde8f1 100%);
-      color: var(--text);
-    }
-    main {
-      max-width: 1100px;
-      margin: 2rem auto;
-      padding: 0 1rem 2rem;
-      display: grid;
-      gap: 1rem;
-    }
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 1.25rem;
-      box-shadow: 0 2px 8px rgba(16, 33, 47, 0.06);
-      animation: panel-in 180ms ease-out;
-    }
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.75rem;
-      flex-wrap: wrap;
-    }
-    h1, h2, h3 { margin-top: 0; }
-    p { margin: 0.5rem 0; }
-    .muted { color: var(--muted); }
-    .error {
-      margin-top: 0.75rem;
-      color: var(--error);
-      font-weight: 600;
-    }
-    .logout-form {
-      margin: 0;
-    }
-    button {
-      border: 0;
-      border-radius: 6px;
-      padding: 0.65rem 1rem;
-      font-size: 1rem;
-      font-weight: 600;
-      color: #fff;
-      background: var(--accent);
-      cursor: pointer;
-      width: fit-content;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 0.75rem;
-    }
-    th, td {
-      border: 1px solid var(--border);
-      padding: 0.65rem;
-      vertical-align: top;
-      text-align: left;
-    }
-    th {
-      background: #edf3f8;
-      font-weight: 700;
-    }
-    ul {
-      margin: 0;
-      padding-left: 1rem;
-    }
-    .badge {
-      display: inline-block;
-      margin: 0 0.35rem 0.35rem 0;
-      padding: 0.25rem 0.45rem;
-      border-radius: 999px;
-      background: #e6f0f9;
-      color: #0a3e73;
-      font-size: 0.85rem;
-      white-space: nowrap;
-    }
-    @media (max-width: 700px) {
-      table, tbody, tr, td, th { display: block; }
-      tr { margin-bottom: 0.75rem; }
-      th { border-bottom: 0; }
-      td { border-top: 0; }
-    }
-    @keyframes panel-in {
-      from {
-        opacity: 0;
-        transform: translateY(8px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <section class="panel">
-      <div class="header">
-        <div>
-          <h1>S3 Gateway Admin</h1>
-          <p>Signed in as <strong>{{.Username}}</strong></p>
-          <p class="muted">Generated: {{.GeneratedAt}}</p>
-        </div>
-        <form class="logout-form" method="post" action="/logout">
-          <button type="submit">Log out</button>
-        </form>
-      </div>
-      <p><strong>S3 groups:</strong> {{.GroupCount}} | <strong>Visible buckets:</strong> {{.TotalBuckets}}</p>
-      {{if .Error}}
-      <p class="error">{{.Error}}</p>
-      {{end}}
-    </section>
-
-    <section class="panel">
-      {{if .Groups}}
-      <table>
-        <thead>
-          <tr>
-            <th>LDAP Group</th>
-            <th>Bucket Prefix</th>
-            <th>Permissions</th>
-            <th>Buckets</th>
-          </tr>
-        </thead>
-        <tbody>
-          {{range .Groups}}
-          <tr>
-            <td><code>{{.GroupName}}</code></td>
-            <td><code>{{.BucketPrefix}}</code></td>
-            <td>
-              {{range .Permissions}}
-              <span class="badge">{{.Letter}}: {{.Name}}</span>
-              {{end}}
-            </td>
-            <td>
-              {{if .Buckets}}
-              <ul>
-                {{range .Buckets}}
-                <li>
-                  {{if .CanRead}}
-                  <a href="/admin/bucket?name={{.Name | urlquery}}"><code>{{.Name}}</code></a>
-                  {{else}}
-                  <code>{{.Name}}</code>
-                  <div class="muted">Read permission required to list objects.</div>
-                  {{end}}
-                </li>
-                {{end}}
-              </ul>
-              {{else}}
-              <span class="muted">No existing buckets under this prefix.</span>
-              {{end}}
-            </td>
-          </tr>
-          {{end}}
-        </tbody>
-      </table>
-      {{else}}
-      <p>No LDAP groups matched the S3 rule format <code>&lt;prefix&gt;-&lt;permissions&gt;</code>.</p>
-      {{end}}
-
-      {{if .IgnoredGroups}}
-      <h3>Ignored LDAP Groups</h3>
-      <p class="muted">These groups do not match the S3 naming rule:</p>
-      <ul>
-        {{range .IgnoredGroups}}
-        <li><code>{{.}}</code></li>
-        {{end}}
-      </ul>
-      {{end}}
-    </section>
-  </main>
-</body>
-</html>`))
-
-var adminBucketTmpl = template.Must(template.New("admin-bucket-page").Parse(`<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>S3 Bucket Viewer</title>
-  <style>
-    :root {
-      --bg: #f4f6f8;
-      --panel: #ffffff;
-      --text: #10212f;
-      --muted: #5f7283;
-      --accent: #0b5cab;
-      --border: #d6dce2;
-      --error: #b00020;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: "IBM Plex Sans", "Avenir Next", "Trebuchet MS", sans-serif;
-      background: linear-gradient(160deg, #f4f6f8 0%, #dde8f1 100%);
-      color: var(--text);
-    }
-    main {
-      max-width: 980px;
-      margin: 2rem auto;
-      padding: 0 1rem 2rem;
-      display: grid;
-      gap: 1rem;
-    }
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 1.25rem;
-      box-shadow: 0 2px 8px rgba(16, 33, 47, 0.06);
-    }
-    .muted { color: var(--muted); }
-    .error {
-      margin-top: 0.75rem;
-      color: var(--error);
-      font-weight: 600;
-    }
-    ul {
-      margin: 0;
-      padding-left: 1rem;
-    }
-    .actions {
-      display: flex;
-      gap: 0.75rem;
-      margin-top: 1rem;
-      flex-wrap: wrap;
-    }
-    .btn {
-      display: inline-block;
-      border-radius: 6px;
-      padding: 0.55rem 0.85rem;
-      font-size: 0.95rem;
-      font-weight: 600;
-      color: #fff;
-      background: var(--accent);
-      text-decoration: none;
-    }
-    .btn.disabled {
-      opacity: 0.45;
-      pointer-events: none;
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <section class="panel">
-      <p><a href="/admin">Back to admin</a></p>
-      <h1>Bucket: <code>{{.BucketName}}</code></h1>
-      <p>Signed in as <strong>{{.Username}}</strong></p>
-      <p class="muted">Generated: {{.GeneratedAt}}</p>
-      {{if .Error}}
-      <p class="error">{{.Error}}</p>
-      {{else if .ObjectKeys}}
-      <ul>
-        {{range .ObjectKeys}}
-        <li><code>{{.}}</code></li>
-        {{end}}
-      </ul>
-      {{else}}
-      <p class="muted">No objects found.</p>
-      {{end}}
-
-      <div class="actions">
-        {{if .HasPrev}}
-        <a class="btn" href="{{.PrevURL}}">Prev</a>
-        {{else}}
-        <span class="btn disabled">Prev</span>
-        {{end}}
-
-        {{if .HasNext}}
-        <a class="btn" href="{{.NextURL}}">Next</a>
-        {{else}}
-        <span class="btn disabled">Next</span>
-        {{end}}
-      </div>
-    </section>
-  </main>
-</body>
-</html>`))
+	adminLoginTmpl     = template.Must(template.ParseFS(adminWebTemplatesFS, "webtemplate/admin-login.html"))
+	adminDashboardTmpl = template.Must(template.ParseFS(adminWebTemplatesFS, "webtemplate/admin-dashboard.html"))
+	adminBucketTmpl    = template.Must(template.ParseFS(adminWebTemplatesFS, "webtemplate/admin-bucket.html"))
+)

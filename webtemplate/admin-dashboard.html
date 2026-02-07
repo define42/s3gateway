@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>S3 Gateway Admin</title>
+  <style>
+    :root {
+      --bg-0: #05070d;
+      --bg-1: #0d1323;
+      --bg-2: #101a33;
+      --panel: rgba(16, 24, 46, 0.78);
+      --panel-border: rgba(112, 153, 255, 0.24);
+      --text: #e7ecf8;
+      --muted: #9eb2ce;
+      --accent: #3ab8ff;
+      --accent-2: #6df5c8;
+      --accent-soft: rgba(58, 184, 255, 0.18);
+      --error: #ff8ea5;
+      --table-header: rgba(34, 52, 90, 0.78);
+      --row-alt: rgba(12, 20, 40, 0.45);
+      --link: #9fd9ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Sora", "IBM Plex Sans", "Avenir Next", "Trebuchet MS", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 500px at 8% -10%, rgba(58, 184, 255, 0.28), transparent 72%),
+        radial-gradient(1000px 440px at 92% 2%, rgba(109, 245, 200, 0.16), transparent 72%),
+        linear-gradient(165deg, var(--bg-0) 0%, var(--bg-1) 46%, var(--bg-2) 100%);
+      position: relative;
+      overflow-x: hidden;
+    }
+    body::before, body::after {
+      content: "";
+      position: fixed;
+      z-index: -1;
+      border-radius: 999px;
+      filter: blur(56px);
+      opacity: 0.7;
+      pointer-events: none;
+    }
+    body::before {
+      width: 290px;
+      height: 290px;
+      background: rgba(58, 184, 255, 0.32);
+      top: 12%;
+      right: 4%;
+      animation: float-orb 9s ease-in-out infinite;
+    }
+    body::after {
+      width: 220px;
+      height: 220px;
+      background: rgba(109, 245, 200, 0.2);
+      bottom: 8%;
+      left: 4%;
+      animation: float-orb 10s ease-in-out infinite reverse;
+    }
+    main {
+      max-width: 1100px;
+      margin: 2rem auto;
+      padding: 0 1rem 2rem;
+      display: grid;
+      gap: 1rem;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      padding: 1.25rem;
+      box-shadow:
+        0 24px 80px rgba(2, 8, 22, 0.64),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      backdrop-filter: blur(12px);
+      animation: panel-in 220ms ease-out;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    h1, h2, h3 { margin-top: 0; margin-bottom: 0.5rem; }
+    p { margin: 0.5rem 0; }
+    .muted { color: var(--muted); }
+    .error {
+      margin-top: 0.75rem;
+      color: var(--error);
+      font-weight: 600;
+    }
+    a {
+      color: var(--link);
+      text-decoration-thickness: 0.08em;
+      text-underline-offset: 0.16em;
+    }
+    .logout-form {
+      margin: 0;
+    }
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 0.66rem 1.08rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #04101f;
+      background: linear-gradient(110deg, var(--accent) 0%, var(--accent-2) 100%);
+      cursor: pointer;
+      width: fit-content;
+      transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
+      box-shadow: 0 8px 28px rgba(58, 184, 255, 0.26);
+    }
+    button:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.02);
+    }
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      margin-top: 0.75rem;
+      background: rgba(7, 13, 28, 0.58);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      border: 1px solid rgba(120, 156, 238, 0.17);
+      padding: 0.65rem;
+      vertical-align: top;
+      text-align: left;
+    }
+    th {
+      background: var(--table-header);
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    tbody tr:nth-child(even) {
+      background: var(--row-alt);
+    }
+    code {
+      background: rgba(124, 155, 232, 0.16);
+      border: 1px solid rgba(120, 156, 238, 0.22);
+      padding: 0.08rem 0.3rem;
+      border-radius: 6px;
+      color: #d7e4ff;
+    }
+    ul {
+      margin: 0;
+      padding-left: 1rem;
+    }
+    .badge {
+      display: inline-block;
+      margin: 0 0.35rem 0.35rem 0;
+      padding: 0.24rem 0.54rem;
+      border-radius: 999px;
+      background: linear-gradient(120deg, rgba(58, 184, 255, 0.26), rgba(109, 245, 200, 0.22));
+      border: 1px solid rgba(109, 245, 200, 0.28);
+      color: #cbfff0;
+      font-size: 0.82rem;
+      white-space: nowrap;
+    }
+    .summary {
+      display: inline-block;
+      margin-top: 0.2rem;
+      border: 1px solid var(--panel-border);
+      border-radius: 999px;
+      padding: 0.26rem 0.7rem;
+      background: rgba(9, 16, 34, 0.7);
+      color: #c5d7f4;
+      font-size: 0.92rem;
+    }
+    @media (max-width: 700px) {
+      main {
+        margin-top: 1rem;
+      }
+      .panel {
+        border-radius: 14px;
+      }
+      th, td {
+        min-width: 180px;
+      }
+    }
+    @keyframes panel-in {
+      from {
+        opacity: 0;
+        transform: translateY(9px) scale(0.99);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    @keyframes float-orb {
+      0%, 100% { transform: translateY(0px) translateX(0px); }
+      50% { transform: translateY(-10px) translateX(4px); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <div class="header">
+        <div>
+          <h1>S3 Gateway Admin</h1>
+          <p>Signed in as <strong>{{.Username}}</strong></p>
+          <p class="muted">Generated: {{.GeneratedAt}}</p>
+        </div>
+        <form class="logout-form" method="post" action="/logout">
+          <button type="submit">Log out</button>
+        </form>
+      </div>
+      <p class="summary"><strong>S3 groups:</strong> {{.GroupCount}} | <strong>Visible buckets:</strong> {{.TotalBuckets}}</p>
+      {{if .Error}}
+      <p class="error">{{.Error}}</p>
+      {{end}}
+    </section>
+
+    <section class="panel">
+      {{if .Groups}}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>LDAP Group</th>
+              <th>Bucket Prefix</th>
+              <th>Permissions</th>
+              <th>Buckets</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Groups}}
+            <tr>
+              <td><code>{{.GroupName}}</code></td>
+              <td><code>{{.BucketPrefix}}</code></td>
+              <td>
+                {{range .Permissions}}
+                <span class="badge">{{.Letter}}: {{.Name}}</span>
+                {{end}}
+              </td>
+              <td>
+                {{if .Buckets}}
+                <ul>
+                  {{range .Buckets}}
+                  <li>
+                    {{if .CanRead}}
+                    <a href="/admin/bucket?name={{.Name | urlquery}}"><code>{{.Name}}</code></a>
+                    {{else}}
+                    <code>{{.Name}}</code>
+                    <div class="muted">Read permission required to list objects.</div>
+                    {{end}}
+                  </li>
+                  {{end}}
+                </ul>
+                {{else}}
+                <span class="muted">No existing buckets under this prefix.</span>
+                {{end}}
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <p>No LDAP groups matched the S3 rule format <code>&lt;prefix&gt;-&lt;permissions&gt;</code>.</p>
+      {{end}}
+
+      {{if .IgnoredGroups}}
+      <h3>Ignored LDAP Groups</h3>
+      <p class="muted">These groups do not match the S3 naming rule:</p>
+      <ul>
+        {{range .IgnoredGroups}}
+        <li><code>{{.}}</code></li>
+        {{end}}
+      </ul>
+      {{end}}
+    </section>
+  </main>
+</body>
+</html>

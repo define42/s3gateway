@@ -301,34 +301,45 @@ func TestAdminDashboardWithSessionRendersGroupsAndBuckets(t *testing.T) {
 
 func TestAdminBucketPagePagination(t *testing.T) {
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/team2-logs" || r.URL.Query().Get("list-type") != "2" {
-			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
-		}
-		if r.URL.Query().Get("max-keys") != "25" {
-			t.Fatalf("expected max-keys=25, got %q", r.URL.Query().Get("max-keys"))
-		}
-
-		w.Header().Set("Content-Type", "application/xml")
-		switch r.URL.Query().Get("continuation-token") {
-		case "":
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/team2-logs" && r.URL.Query().Get("list-type") == "2":
+			if r.URL.Query().Get("max-keys") != "25" {
+				t.Fatalf("expected max-keys=25, got %q", r.URL.Query().Get("max-keys"))
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			switch r.URL.Query().Get("continuation-token") {
+			case "":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
 <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Name>team2-logs</Name>
   <IsTruncated>true</IsTruncated>
   <NextContinuationToken>tok2</NextContinuationToken>
-  <Contents><Key>logs/p1.txt</Key></Contents>
+  <Contents><Key>logs/p1.txt</Key><LastModified>2026-02-07T01:02:03.000Z</LastModified><Size>11</Size></Contents>
 </ListBucketResult>`))
-		case "tok2":
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+			case "tok2":
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
 <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Name>team2-logs</Name>
   <IsTruncated>false</IsTruncated>
-  <Contents><Key>logs/p2.txt</Key></Contents>
+  <Contents><Key>logs/p2.txt</Key><LastModified>2026-02-07T02:03:04.000Z</LastModified><Size>22</Size></Contents>
 </ListBucketResult>`))
+			default:
+				t.Fatalf("unexpected continuation token: %q", r.URL.Query().Get("continuation-token"))
+			}
+
+		case r.Method == http.MethodHead && r.URL.Path == "/team2-logs/logs/p1.txt":
+			w.Header().Set("x-amz-meta-owner", "alice")
+			w.Header().Set("x-amz-meta-doc-type", "report")
+			w.WriteHeader(http.StatusOK)
+
+		case r.Method == http.MethodHead && r.URL.Path == "/team2-logs/logs/p2.txt":
+			w.Header().Set("x-amz-meta-owner", "bob")
+			w.WriteHeader(http.StatusOK)
+
 		default:
-			t.Fatalf("unexpected continuation token: %q", r.URL.Query().Get("continuation-token"))
+			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 		}
 	})
 	defer cleanup()
@@ -373,6 +384,15 @@ func TestAdminBucketPagePagination(t *testing.T) {
 	if !strings.Contains(page1Body, "logs/p1.txt") {
 		t.Fatalf("missing page1 object key: %q", page1Body)
 	}
+	if !strings.Contains(page1Body, "<code>11</code>") {
+		t.Fatalf("missing page1 size in bucket page: %q", page1Body)
+	}
+	if !strings.Contains(page1Body, "2026-02-07T01:02:03Z") {
+		t.Fatalf("missing page1 last-modified in bucket page: %q", page1Body)
+	}
+	if !strings.Contains(page1Body, "owner") || !strings.Contains(page1Body, "alice") {
+		t.Fatalf("missing page1 metadata in bucket page: %q", page1Body)
+	}
 	if !strings.Contains(page1Body, "cursor=tok2") {
 		t.Fatalf("missing next cursor on page1: %q", page1Body)
 	}
@@ -388,6 +408,15 @@ func TestAdminBucketPagePagination(t *testing.T) {
 	page2Body := page2RR.Body.String()
 	if !strings.Contains(page2Body, "logs/p2.txt") {
 		t.Fatalf("missing page2 object key: %q", page2Body)
+	}
+	if !strings.Contains(page2Body, "<code>22</code>") {
+		t.Fatalf("missing page2 size in bucket page: %q", page2Body)
+	}
+	if !strings.Contains(page2Body, "2026-02-07T02:03:04Z") {
+		t.Fatalf("missing page2 last-modified in bucket page: %q", page2Body)
+	}
+	if !strings.Contains(page2Body, "owner") || !strings.Contains(page2Body, "bob") {
+		t.Fatalf("missing page2 metadata in bucket page: %q", page2Body)
 	}
 	if !strings.Contains(page2Body, `href="/admin/bucket?name=team2-logs"`) {
 		t.Fatalf("missing prev link on page2: %q", page2Body)
