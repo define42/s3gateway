@@ -812,3 +812,246 @@ func TestHandleDeleteObjectsRejectsMoreThan1000Objects(t *testing.T) {
 		t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
 	}
 }
+
+func TestBucketLifecycleHandlersBranches(t *testing.T) {
+	validLifecycle := `<?xml version="1.0" encoding="UTF-8"?><LifecycleConfiguration><Rule><ID>r1</ID><Status>Enabled</Status><Filter><Prefix>logs/</Prefix></Filter><Expiration><Days>30</Days></Expiration></Rule></LifecycleConfiguration>`
+
+	t.Run("put lifecycle forbidden", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?lifecycle", strings.NewReader(validLifecycle))
+		req = reqWithRules(req, nil)
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put lifecycle malformed xml", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?lifecycle", strings.NewReader(`<LifecycleConfiguration><Rule>`))
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put lifecycle success", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?lifecycle", strings.NewReader(validLifecycle))
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put lifecycle upstream error", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>boom</Message></Error>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?lifecycle", strings.NewReader(validLifecycle))
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("get lifecycle forbidden", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket?lifecycle", nil)
+		req = reqWithRules(req, nil)
+		rr := httptest.NewRecorder()
+		gw.handleGetBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("get lifecycle success", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Rule><ID>r1</ID><Status>Enabled</Status><Filter><Prefix>logs/</Prefix></Filter><Expiration><Days>30</Days></Expiration></Rule></LifecycleConfiguration>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket?lifecycle", nil)
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handleGetBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if !strings.Contains(rr.Body.String(), "<LifecycleConfiguration") {
+			t.Fatalf("missing lifecycle xml in response: %s", rr.Body.String())
+		}
+	})
+
+	t.Run("get lifecycle upstream error", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>boom</Message></Error>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket?lifecycle", nil)
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handleGetBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("delete lifecycle forbidden", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?lifecycle", nil)
+		req = reqWithRules(req, nil)
+		rr := httptest.NewRecorder()
+		gw.handleDeleteBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("delete lifecycle success", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?lifecycle", nil)
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handleDeleteBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusNoContent {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("delete lifecycle upstream error", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>boom</Message></Error>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?lifecycle", nil)
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handleDeleteBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+}
+
+func TestHandlePutBucketVersioningBranches(t *testing.T) {
+	validVersioning := `<?xml version="1.0" encoding="UTF-8"?><VersioningConfiguration><Status>Enabled</Status><MfaDelete>Enabled</MfaDelete></VersioningConfiguration>`
+
+	t.Run("forbidden", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?versioning", strings.NewReader(validVersioning))
+		req = reqWithRules(req, nil)
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketVersioning(rr, req, "team2-bucket")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("malformed xml", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?versioning", strings.NewReader(`<VersioningConfiguration><Status>`))
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketVersioning(rr, req, "team2-bucket")
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("success with optional headers", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			if got := r.Header.Get("X-Amz-Mfa"); got != "device 123456" {
+				t.Fatalf("x-amz-mfa mismatch: got=%q", got)
+			}
+			if got := r.Header.Get("Content-Md5"); got != "d41d8cd98f00b204e9800998ecf8427e" {
+				t.Fatalf("content-md5 mismatch: got=%q", got)
+			}
+			if got := r.Header.Get("X-Amz-Expected-Bucket-Owner"); got != "123456789012" {
+				t.Fatalf("expected bucket owner mismatch: got=%q", got)
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?versioning", strings.NewReader(validVersioning))
+		req.Header.Set("x-amz-mfa", "device 123456")
+		req.Header.Set("Content-MD5", "d41d8cd98f00b204e9800998ecf8427e")
+		req.Header.Set("x-amz-expected-bucket-owner", "123456789012")
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketVersioning(rr, req, "team2-bucket")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("upstream error", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>boom</Message></Error>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?versioning", strings.NewReader(validVersioning))
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketVersioning(rr, req, "team2-bucket")
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+}
