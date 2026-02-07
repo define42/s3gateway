@@ -531,6 +531,132 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	assertGetObjectPartMatchesUpstream(1, part1Body)
 	assertGetObjectPartMatchesUpstream(2, part2Body)
 
+	getPartHead, err := upstreamClient.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(getPartKey),
+	})
+	if err != nil {
+		t.Fatalf("head multipart object for get-object conditionals from upstream: %v", err)
+	}
+	if getPartHead.ETag == nil || *getPartHead.ETag == "" {
+		t.Fatalf("multipart object etag for get-object conditionals should be non-empty")
+	}
+	multipartETag := *getPartHead.ETag
+	nonMatchingETag := "\"00000000000000000000000000000000\""
+	farPast := time.Unix(0, 0).UTC()
+	farFuture := time.Now().Add(24 * time.Hour).UTC()
+	assertConditionalGetObjectPartMatchesUpstream := func(
+		label string,
+		expectErr bool,
+		mutate func(*s3.GetObjectInput),
+	) {
+		t.Helper()
+		newInput := func() *s3.GetObjectInput {
+			in := &s3.GetObjectInput{
+				Bucket:     aws.String(bucket),
+				Key:        aws.String(getPartKey),
+				PartNumber: aws.Int32(1),
+			}
+			mutate(in)
+			return in
+		}
+		upstreamPartOut, upstreamPartErr := upstreamClient.GetObject(ctx, newInput())
+		gatewayPartOut, gatewayPartErr := rwClient.GetObject(ctx, newInput())
+		if (upstreamPartErr != nil) != (gatewayPartErr != nil) {
+			t.Fatalf("%s get object with partNumber error mismatch: gatewayErr=%v upstreamErr=%v", label, gatewayPartErr, upstreamPartErr)
+		}
+		if expectErr != (upstreamPartErr != nil) {
+			t.Fatalf("%s get object with partNumber error expectation mismatch: gotErr=%v wantErr=%v", label, upstreamPartErr != nil, expectErr)
+		}
+		if upstreamPartErr != nil {
+			var upstreamAPIErr smithy.APIError
+			var gatewayAPIErr smithy.APIError
+			if !errors.As(upstreamPartErr, &upstreamAPIErr) || !errors.As(gatewayPartErr, &gatewayAPIErr) {
+				t.Fatalf("%s get object with partNumber expected smithy errors: gatewayErr=%v upstreamErr=%v", label, gatewayPartErr, upstreamPartErr)
+			}
+			if gatewayAPIErr.ErrorCode() != upstreamAPIErr.ErrorCode() {
+				t.Fatalf("%s get object with partNumber error code mismatch: gateway=%q upstream=%q", label, gatewayAPIErr.ErrorCode(), upstreamAPIErr.ErrorCode())
+			}
+			return
+		}
+		defer upstreamPartOut.Body.Close()
+		defer gatewayPartOut.Body.Close()
+
+		upstreamPartBody, err := io.ReadAll(upstreamPartOut.Body)
+		if err != nil {
+			t.Fatalf("%s read upstream get object with partNumber body: %v", label, err)
+		}
+		gatewayPartBody, err := io.ReadAll(gatewayPartOut.Body)
+		if err != nil {
+			t.Fatalf("%s read gateway get object with partNumber body: %v", label, err)
+		}
+		if !bytes.Equal(gatewayPartBody, upstreamPartBody) {
+			t.Fatalf("%s get object with partNumber body mismatch between gateway and upstream", label)
+		}
+		if !bytes.Equal(gatewayPartBody, part1Body) {
+			t.Fatalf("%s get object with partNumber body mismatch: gotLen=%d wantLen=%d", label, len(gatewayPartBody), len(part1Body))
+		}
+		if aws.ToInt64(gatewayPartOut.ContentLength) != aws.ToInt64(upstreamPartOut.ContentLength) {
+			t.Fatalf("%s get object with partNumber content-length mismatch: gateway=%d upstream=%d", label, aws.ToInt64(gatewayPartOut.ContentLength), aws.ToInt64(upstreamPartOut.ContentLength))
+		}
+	}
+	assertConditionalGetObjectPartMatchesUpstream(
+		"If-Match match",
+		false,
+		func(in *s3.GetObjectInput) {
+			in.IfMatch = aws.String(multipartETag)
+		},
+	)
+	assertConditionalGetObjectPartMatchesUpstream(
+		"If-Match mismatch",
+		true,
+		func(in *s3.GetObjectInput) {
+			in.IfMatch = aws.String(nonMatchingETag)
+		},
+	)
+	assertConditionalGetObjectPartMatchesUpstream(
+		"If-None-Match match",
+		true,
+		func(in *s3.GetObjectInput) {
+			in.IfNoneMatch = aws.String(multipartETag)
+		},
+	)
+	assertConditionalGetObjectPartMatchesUpstream(
+		"If-None-Match mismatch",
+		false,
+		func(in *s3.GetObjectInput) {
+			in.IfNoneMatch = aws.String(nonMatchingETag)
+		},
+	)
+	assertConditionalGetObjectPartMatchesUpstream(
+		"If-Modified-Since old",
+		false,
+		func(in *s3.GetObjectInput) {
+			in.IfModifiedSince = aws.Time(farPast)
+		},
+	)
+	assertConditionalGetObjectPartMatchesUpstream(
+		"If-Modified-Since future",
+		true,
+		func(in *s3.GetObjectInput) {
+			in.IfModifiedSince = aws.Time(farFuture)
+		},
+	)
+	assertConditionalGetObjectPartMatchesUpstream(
+		"If-Unmodified-Since old",
+		true,
+		func(in *s3.GetObjectInput) {
+			in.IfUnmodifiedSince = aws.Time(farPast)
+		},
+	)
+	assertConditionalGetObjectPartMatchesUpstream(
+		"If-Unmodified-Since future",
+		false,
+		func(in *s3.GetObjectInput) {
+			in.IfUnmodifiedSince = aws.Time(farFuture)
+		},
+	)
+
 	roObj, err := roClient.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
