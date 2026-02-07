@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -1179,6 +1180,9 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 			{method: http.MethodPost, target: "/", want: http.StatusNotFound},
 			{method: http.MethodGet, target: "/healthz", want: http.StatusOK},
 			{method: http.MethodHead, target: "/healthz", want: http.StatusOK},
+			{method: http.MethodGet, target: "/readyz", want: http.StatusServiceUnavailable},
+			{method: http.MethodHead, target: "/readyz", want: http.StatusServiceUnavailable},
+			{method: http.MethodPost, target: "/readyz", want: http.StatusMethodNotAllowed},
 			{method: http.MethodPatch, target: "/team2-bucket?lifecycle", want: http.StatusNotImplemented},
 			{method: http.MethodDelete, target: "/team2-bucket?versioning", want: http.StatusNotImplemented},
 			{method: http.MethodGet, target: "/team2-bucket", want: http.StatusNotImplemented},
@@ -1205,6 +1209,11 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 		healthHandler.ServeHTTP(rrHealth, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 		if rrHealth.Code != http.StatusNoContent {
 			t.Fatalf("healthz should bypass auth and reach next handler: got=%d body=%s", rrHealth.Code, rrHealth.Body.String())
+		}
+		rrReady := httptest.NewRecorder()
+		healthHandler.ServeHTTP(rrReady, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		if rrReady.Code != http.StatusNoContent {
+			t.Fatalf("readyz should bypass auth and reach next handler: got=%d body=%s", rrReady.Code, rrReady.Body.String())
 		}
 
 		handler := gw.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1257,6 +1266,73 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 			t.Fatalf("bad creds status mismatch: got=%d body=%s", rrBadCreds.Code, rrBadCreds.Body.String())
 		}
 
+	})
+}
+
+func TestReadyzDependencyChecks(t *testing.T) {
+	startLDAPListener := func(t *testing.T) string {
+		t.Helper()
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen for ldap stub: %v", err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		return "ldap://" + ln.Addr().String()
+	}
+
+	upstreamOK := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/" {
+			t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Owner><ID>owner</ID><DisplayName>owner</DisplayName></Owner><Buckets/></ListAllMyBucketsResult>`))
+	}
+
+	t.Run("success when ldap and s3 are reachable", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, upstreamOK)
+		defer cleanup()
+		gw.cfg.LDAPURL = startLDAPListener(t)
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rr := httptest.NewRecorder()
+		gw.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("readyz success status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if body := rr.Body.String(); body != "ok\n" {
+			t.Fatalf("readyz success body mismatch: got=%q want=%q", body, "ok\n")
+		}
+	})
+
+	t.Run("fails when ldap is unavailable", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, upstreamOK)
+		defer cleanup()
+		gw.cfg.LDAPURL = "ldap://127.0.0.1:1"
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rr := httptest.NewRecorder()
+		gw.ServeHTTP(rr, req)
+		if rr.Code != http.StatusServiceUnavailable {
+			t.Fatalf("readyz ldap failure status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if !strings.Contains(rr.Body.String(), "ldap:") {
+			t.Fatalf("expected ldap failure in readyz body: %s", rr.Body.String())
+		}
+	})
+
+	t.Run("fails when s3 client is unavailable", func(t *testing.T) {
+		gw := newServer(Config{LDAPURL: startLDAPListener(t)}, nil)
+
+		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		rr := httptest.NewRecorder()
+		gw.ServeHTTP(rr, req)
+		if rr.Code != http.StatusServiceUnavailable {
+			t.Fatalf("readyz s3 failure status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if !strings.Contains(rr.Body.String(), "s3:") {
+			t.Fatalf("expected s3 failure in readyz body: %s", rr.Body.String())
+		}
 	})
 }
 

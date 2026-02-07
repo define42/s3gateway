@@ -40,6 +40,11 @@ import (
 
 const maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
 
+const (
+	defaultLDAPDialTimeout   = 5 * time.Second
+	defaultReadyCheckTimeout = 2 * time.Second
+)
+
 // ==================== Credential hack ====================
 // accessKey = base64("userPrincipalName:password")
 // secretKey = constant "password"
@@ -58,11 +63,15 @@ func decodeUserPassFromAccessKey(accessKey string) (upn, password string, err er
 
 // ==================== AD group lookup ====================
 func ldapDial(ldapURL string) (*ldap.Conn, error) {
+	return ldapDialWithTimeout(ldapURL, defaultLDAPDialTimeout)
+}
+
+func ldapDialWithTimeout(ldapURL string, timeout time.Duration) (*ldap.Conn, error) {
 	_, err := url.Parse(ldapURL)
 	if err != nil {
 		return nil, err
 	}
-	return ldap.DialURL(ldapURL)
+	return ldap.DialURL(ldapURL, ldap.DialWithDialer(&net.Dialer{Timeout: timeout}))
 }
 
 func fetchGroupsUPN(cfg Config, upn, password string) (map[string]struct{}, error) {
@@ -1394,7 +1403,7 @@ func newServer(cfg Config, up *s3.Client) *server {
 
 func (s *server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1470,6 +1479,14 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodHead {
 			_, _ = w.Write([]byte("ok\n"))
 		}
+		return
+	}
+	if p == "/readyz" {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		s.handleReadyz(w, r)
 		return
 	}
 
@@ -1623,6 +1640,69 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------- handlers ----------
+
+func (s *server) checkLDAPReady(ctx context.Context) error {
+	if strings.TrimSpace(s.cfg.LDAPURL) == "" {
+		return errors.New("url not configured")
+	}
+	timeout := defaultReadyCheckTimeout
+	if d, ok := ctx.Deadline(); ok {
+		remaining := time.Until(d)
+		if remaining <= 0 {
+			return context.DeadlineExceeded
+		}
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	conn, err := ldapDialWithTimeout(s.cfg.LDAPURL, timeout)
+	if err != nil {
+		return err
+	}
+	_ = conn.Close()
+	return nil
+}
+
+func (s *server) checkS3Ready(ctx context.Context) error {
+	if s.up == nil {
+		return errors.New("client not configured")
+	}
+	_, err := s.up.ListBuckets(ctx, &s3.ListBucketsInput{})
+	return err
+}
+
+func (s *server) checkReady(ctx context.Context) error {
+	var errs []string
+	if err := s.checkLDAPReady(ctx); err != nil {
+		errs = append(errs, fmt.Sprintf("ldap: %v", err))
+	}
+	if err := s.checkS3Ready(ctx); err != nil {
+		errs = append(errs, fmt.Sprintf("s3: %v", err))
+	}
+	if len(errs) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(errs, "; "))
+}
+
+func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+
+	ctx, cancel := context.WithTimeout(r.Context(), defaultReadyCheckTimeout)
+	defer cancel()
+	if err := s.checkReady(ctx); err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		if r.Method != http.MethodHead {
+			_, _ = w.Write([]byte("not ready: " + err.Error() + "\n"))
+		}
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write([]byte("ok\n"))
+	}
+}
 
 func (s *server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
 	rules := rulesFromCtx(r)

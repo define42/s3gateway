@@ -134,6 +134,25 @@ go run .
 
 The server supports graceful shutdown on `SIGINT`/`SIGTERM`.
 
+## Health Endpoints
+
+- `GET /healthz` -> liveness endpoint. Returns `200 OK` when process is running.
+- `GET /readyz` -> readiness endpoint. Returns `200 OK` only when both LDAP and upstream S3 are reachable; otherwise returns `503 Service Unavailable`.
+
+Example Kubernetes probes:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8080
+```
+
 ## Client Setup Example
 
 ```bash

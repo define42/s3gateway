@@ -121,6 +121,21 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 
 	gatewayURL := "http://" + ln.Addr().String()
 	waitForGatewayReady(t, gatewayURL)
+	for _, probePath := range []string{"/healthz", "/readyz"} {
+		req, err := http.NewRequest(http.MethodGet, gatewayURL+probePath, nil)
+		if err != nil {
+			t.Fatalf("build %s request: %v", probePath, err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s request failed: %v", probePath, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s status mismatch: got=%d want=%d", probePath, resp.StatusCode, http.StatusOK)
+		}
+	}
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
 	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
