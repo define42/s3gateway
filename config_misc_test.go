@@ -116,3 +116,22 @@ func TestNewGroupCacheWithDefaultMaxEntries(t *testing.T) {
 		t.Fatalf("default max entries mismatch: got=%d want=%d", c.maxEntries, defaultGroupCacheMaxEntries)
 	}
 }
+
+func TestEnvCSVMetadataKeys(t *testing.T) {
+	t.Setenv("REQUIRED_UPLOAD_METADATA_KEYS", "")
+	if got := envCSVMetadataKeys("REQUIRED_UPLOAD_METADATA_KEYS"); got != nil {
+		t.Fatalf("expected nil for empty env, got=%v", got)
+	}
+
+	t.Setenv("REQUIRED_UPLOAD_METADATA_KEYS", " Legal-Ingest-Timestamp , x-amz-meta-case-id, legal-ingest-timestamp ,, X-Amz-Meta-Case-ID ")
+	got := envCSVMetadataKeys("REQUIRED_UPLOAD_METADATA_KEYS")
+	want := []string{"legal-ingest-timestamp", "case-id"}
+	if len(got) != len(want) {
+		t.Fatalf("metadata key count mismatch: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("metadata key mismatch at %d: got=%q want=%q (all=%v)", i, got[i], want[i], got)
+		}
+	}
+}

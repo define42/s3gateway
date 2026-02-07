@@ -71,11 +71,11 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 | Bucket | `GET /<bucket>?uploads` | List multipart uploads | `r` on target bucket prefix |
 | Object | `GET /<bucket>/<key>` | Get object | `r` on target bucket prefix |
 | Object | `HEAD /<bucket>/<key>` | Head object | `r` on target bucket prefix |
-| Object | `PUT /<bucket>/<key>` | Put object | `w` on target bucket prefix |
+| Object | `PUT /<bucket>/<key>` | Put object | `w` on target bucket prefix; if `REQUIRED_UPLOAD_METADATA_KEYS` is set, all listed `x-amz-meta-*` keys must be present |
 | Object | `PUT /<bucket>/<key>` with `x-amz-copy-source` | Copy object | Destination bucket: `w`; source bucket: `r` |
 | Object | `GET /<bucket>/<key>?attributes` | Get object attributes | `r` on target bucket prefix |
 | Object | `DELETE /<bucket>/<key>` | Delete object | `d` on target bucket prefix |
-| Multipart | `POST /<bucket>/<key>?uploads` | Create multipart upload | `w` on target bucket prefix |
+| Multipart | `POST /<bucket>/<key>?uploads` | Create multipart upload | `w` on target bucket prefix; if `REQUIRED_UPLOAD_METADATA_KEYS` is set, all listed `x-amz-meta-*` keys must be present |
 | Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` | Upload part | `w` on target bucket prefix |
 | Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` with `x-amz-copy-source` | Upload part copy | Destination bucket: `w`; source bucket: `r` |
 | Multipart | `GET /<bucket>/<key>?uploadId=...` | List parts | `r` on target bucket prefix |
@@ -110,6 +110,7 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 - `SIGV4_SECRET` (default `password`, strongly recommended to override)
 - `SIGV4_SERVICE` (default `s3`)
 - `SIGV4_MAX_SKEW` (default `15m`)
+- `REQUIRED_UPLOAD_METADATA_KEYS` (default empty): comma-separated required upload metadata keys (for example `legal-ingest-timestamp,case-id`). Keys may be provided with or without `x-amz-meta-` prefix.
 - `HTTP_READ_HEADER_TIMEOUT` (default `10s`)
 - `HTTP_READ_TIMEOUT` (default `0s`)
 - `HTTP_WRITE_TIMEOUT` (default `0s`)

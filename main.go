@@ -3850,6 +3850,10 @@ func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 
 	ct := r.Header.Get("Content-Type")
 	meta := extractAmzMeta(r.Header)
+	if missing := missingRequiredUploadMetadata(meta, s.cfg.RequiredUploadMetadataKeys); len(missing) > 0 {
+		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
+		return
+	}
 	expires, err := parseExpiresHeader(r.Header)
 	if err != nil {
 		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid Expires header")
@@ -4432,13 +4436,33 @@ func extractAmzMeta(h http.Header) map[string]string {
 	for k, vs := range h {
 		kl := strings.ToLower(k)
 		if strings.HasPrefix(kl, "x-amz-meta-") && len(vs) > 0 {
-			meta[strings.TrimPrefix(kl, "x-amz-meta-")] = vs[0]
+			mk := normalizeRequiredMetadataKey(strings.TrimPrefix(kl, "x-amz-meta-"))
+			if mk == "" {
+				continue
+			}
+			meta[mk] = vs[0]
 		}
 	}
 	if len(meta) == 0 {
 		return nil
 	}
 	return meta
+}
+
+func missingRequiredUploadMetadata(meta map[string]string, required []string) []string {
+	if len(required) == 0 {
+		return nil
+	}
+	missing := make([]string, 0, len(required))
+	for _, key := range required {
+		if _, ok := meta[key]; !ok {
+			missing = append(missing, "x-amz-meta-"+key)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return missing
 }
 
 func parseExpiresHeader(h http.Header) (*time.Time, error) {
@@ -4473,6 +4497,10 @@ func (s *server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 
 	ct := r.Header.Get("Content-Type")
 	meta := extractAmzMeta(r.Header)
+	if missing := missingRequiredUploadMetadata(meta, s.cfg.RequiredUploadMetadataKeys); len(missing) > 0 {
+		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
+		return
+	}
 	expires, err := parseExpiresHeader(r.Header)
 	if err != nil {
 		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid Expires header")

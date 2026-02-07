@@ -28,6 +28,8 @@ type Config struct {
 	SigV4Service string        // default "s3"
 	SigV4MaxSkew time.Duration // max absolute request age/skew based on x-amz-date
 
+	RequiredUploadMetadataKeys []string // metadata keys required for upload requests (without x-amz-meta- prefix, lowercase)
+
 	ReadHeaderTimeout time.Duration
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
@@ -145,6 +147,37 @@ func envInt(key string, def int) int {
 	return n
 }
 
+func normalizeRequiredMetadataKey(raw string) string {
+	key := strings.ToLower(strings.TrimSpace(raw))
+	key = strings.TrimPrefix(key, "x-amz-meta-")
+	return strings.TrimSpace(key)
+}
+
+func envCSVMetadataKeys(key string) []string {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, p := range parts {
+		k := normalizeRequiredMetadataKey(p)
+		if k == "" {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, k)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func loadConfig() Config {
 	cfg := Config{
 		ListenAddr: env("LISTEN_ADDR", ":8080"),
@@ -164,6 +197,8 @@ func loadConfig() Config {
 		SigV4Secret:  env("SIGV4_SECRET", "password"),
 		SigV4Service: env("SIGV4_SERVICE", "s3"),
 		SigV4MaxSkew: envDuration("SIGV4_MAX_SKEW", defaultSigV4MaxSkew),
+
+		RequiredUploadMetadataKeys: envCSVMetadataKeys("REQUIRED_UPLOAD_METADATA_KEYS"),
 
 		ReadHeaderTimeout: envDuration("HTTP_READ_HEADER_TIMEOUT", defaultReadHeaderTimeout),
 		ReadTimeout:       envDuration("HTTP_READ_TIMEOUT", defaultReadTimeout),

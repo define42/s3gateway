@@ -928,6 +928,25 @@ func TestHandlePutObjectBranchMatrix(t *testing.T) {
 		}
 	})
 
+	t.Run("missing required upload metadata", func(t *testing.T) {
+		gwRequired, cleanupRequired := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called for missing required metadata")
+		})
+		defer cleanupRequired()
+		gwRequired.cfg.RequiredUploadMetadataKeys = []string{"legal-ingest-timestamp", "case-id"}
+
+		req := newReq("payload")
+		req.Header.Set("x-amz-meta-legal-ingest-timestamp", "2026-02-07T12:34:56Z")
+		rr := httptest.NewRecorder()
+		gwRequired.handlePutObject(rr, req, "team2-dst", "object-put.txt")
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if !strings.Contains(rr.Body.String(), "x-amz-meta-case-id") {
+			t.Fatalf("expected missing required metadata key in body: %s", rr.Body.String())
+		}
+	})
+
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("ETag", "\"etag-put\"")
 		w.Header().Set("x-amz-version-id", "v-put")
@@ -1020,6 +1039,22 @@ func TestCreateCompleteAndListPartsBranchMatrix(t *testing.T) {
 		gwNoUpstream.handleCreateMultipart(rrBadChecksum, reqBadChecksum, "team2-dst", "object.txt")
 		if rrBadChecksum.Code != http.StatusBadRequest {
 			t.Fatalf("invalid checksum status mismatch: got=%d body=%s", rrBadChecksum.Code, rrBadChecksum.Body.String())
+		}
+
+		gwRequired, cleanupRequired := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called for missing required metadata")
+		})
+		defer cleanupRequired()
+		gwRequired.cfg.RequiredUploadMetadataKeys = []string{"legal-ingest-timestamp"}
+
+		reqMissingMeta := newReq()
+		rrMissingMeta := httptest.NewRecorder()
+		gwRequired.handleCreateMultipart(rrMissingMeta, reqMissingMeta, "team2-dst", "object.txt")
+		if rrMissingMeta.Code != http.StatusBadRequest {
+			t.Fatalf("missing metadata status mismatch: got=%d body=%s", rrMissingMeta.Code, rrMissingMeta.Body.String())
+		}
+		if !strings.Contains(rrMissingMeta.Body.String(), "x-amz-meta-legal-ingest-timestamp") {
+			t.Fatalf("expected missing required metadata key in body: %s", rrMissingMeta.Body.String())
 		}
 
 		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
