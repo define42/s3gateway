@@ -145,6 +145,9 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	if gotObj.Metadata["owner"] != metadata["owner"] || gotObj.Metadata["purpose"] != metadata["purpose"] {
 		t.Fatalf("upstream metadata mismatch: got=%v want=%v", gotObj.Metadata, metadata)
 	}
+	if gotObj.Metadata["uploaded-by"] != "testuser" {
+		t.Fatalf("upstream uploaded-by metadata mismatch: got=%q want=%q (all=%v)", gotObj.Metadata["uploaded-by"], "testuser", gotObj.Metadata)
+	}
 	if gotObj.ExpiresString == nil {
 		t.Fatalf("expected upstream object ExpiresString to be set")
 	}
@@ -1059,6 +1062,9 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	wantComplete := append(append([]byte{}, part1Body...), part2Body...)
 	if !bytes.Equal(completeBody, wantComplete) {
 		t.Fatalf("completed multipart body mismatch: gotLen=%d wantLen=%d", len(completeBody), len(wantComplete))
+	}
+	if completeObj.Metadata["uploaded-by"] != "testuser" {
+		t.Fatalf("completed multipart uploaded-by metadata mismatch: got=%q want=%q (all=%v)", completeObj.Metadata["uploaded-by"], "testuser", completeObj.Metadata)
 	}
 
 	abortKey := "multi/abort.txt"

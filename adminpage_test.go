@@ -664,12 +664,14 @@ func TestAdminBucketDownload(t *testing.T) {
 func TestAdminBucketUploadAndDelete(t *testing.T) {
 	var putBody bytes.Buffer
 	var putPath string
+	var putUploadedBy string
 	var deletePath string
 
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPut && r.URL.Path == "/team2-logs/uploads/new.txt":
 			putPath = r.URL.Path
+			putUploadedBy = r.Header.Get("x-amz-meta-uploaded-by")
 			_, _ = io.Copy(&putBody, r.Body)
 			w.Header().Set("ETag", `"etag-uploaded"`)
 			w.WriteHeader(http.StatusOK)
@@ -723,6 +725,9 @@ func TestAdminBucketUploadAndDelete(t *testing.T) {
 	}
 	if putPath != "/team2-logs/uploads/new.txt" {
 		t.Fatalf("put path mismatch: got=%q want=%q", putPath, "/team2-logs/uploads/new.txt")
+	}
+	if putUploadedBy != "alice" {
+		t.Fatalf("uploaded-by metadata mismatch: got=%q want=%q", putUploadedBy, "alice")
 	}
 	if putBody.String() != "payload-123" {
 		t.Fatalf("put body mismatch: got=%q want=%q", putBody.String(), "payload-123")

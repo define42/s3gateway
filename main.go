@@ -1387,6 +1387,7 @@ type ctxKey string
 
 const ctxRulesKey ctxKey = "rules"
 const ctxSigV4AuthKey ctxKey = "sigv4-auth"
+const ctxUploaderKey ctxKey = "uploader-upn"
 
 type server struct {
 	cfg              Config
@@ -1467,6 +1468,7 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 		rules := rulesFromGroups(grps)
 		ctx := context.WithValue(r.Context(), ctxRulesKey, rules)
 		ctx = context.WithValue(ctx, ctxSigV4AuthKey, auth)
+		ctx = context.WithValue(ctx, ctxUploaderKey, upn)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -1487,6 +1489,15 @@ func sigV4AuthFromCtx(r *http.Request) *sigv4Auth {
 	}
 	auth, _ := v.(*sigv4Auth)
 	return auth
+}
+
+func uploaderFromCtx(r *http.Request) string {
+	v := r.Context().Value(ctxUploaderKey)
+	if v == nil {
+		return ""
+	}
+	uploader, _ := v.(string)
+	return strings.TrimSpace(uploader)
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -3874,6 +3885,7 @@ func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 
 	ct := r.Header.Get("Content-Type")
 	meta := extractAmzMeta(r.Header)
+	meta = ensureUploadedByMetadata(meta, uploaderFromCtx(r))
 	if missing := missingRequiredUploadMetadata(meta, s.cfg.RequiredUploadMetadataKeys); len(missing) > 0 {
 		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
 		return
@@ -4489,6 +4501,18 @@ func missingRequiredUploadMetadata(meta map[string]string, required []string) []
 	return missing
 }
 
+func ensureUploadedByMetadata(meta map[string]string, uploader string) map[string]string {
+	uploader = strings.TrimSpace(uploader)
+	if uploader == "" {
+		return meta
+	}
+	if meta == nil {
+		meta = make(map[string]string, 1)
+	}
+	meta["uploaded-by"] = uploader
+	return meta
+}
+
 func parseExpiresHeader(h http.Header) (*time.Time, error) {
 	raw := strings.TrimSpace(h.Get("Expires"))
 	if raw == "" {
@@ -4521,6 +4545,7 @@ func (s *server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 
 	ct := r.Header.Get("Content-Type")
 	meta := extractAmzMeta(r.Header)
+	meta = ensureUploadedByMetadata(meta, uploaderFromCtx(r))
 	if missing := missingRequiredUploadMetadata(meta, s.cfg.RequiredUploadMetadataKeys); len(missing) > 0 {
 		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
 		return

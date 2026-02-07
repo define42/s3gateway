@@ -676,11 +676,16 @@ func metadataPairsFromMap(meta map[string]string) []adminMetadataPair {
 	return pairs
 }
 
-func formatObjectExpiresUTC(expires *time.Time) string {
-	if expires == nil || expires.IsZero() {
+func formatObjectExpiresUTC(expiresString *string) string {
+	raw := strings.TrimSpace(aws.ToString(expiresString))
+	if raw == "" {
 		return ""
 	}
-	return expires.UTC().Format(time.RFC3339)
+	parsed, err := http.ParseTime(raw)
+	if err != nil {
+		return raw
+	}
+	return parsed.UTC().Format(time.RFC3339)
 }
 
 func (s *server) headObjectMetadata(ctx context.Context, bucket, key string) ([]adminMetadataPair, string, string) {
@@ -691,7 +696,7 @@ func (s *server) headObjectMetadata(ctx context.Context, bucket, key string) ([]
 	if err != nil {
 		return nil, "", "Could not load metadata."
 	}
-	return metadataPairsFromMap(out.Metadata), formatObjectExpiresUTC(out.Expires), ""
+	return metadataPairsFromMap(out.Metadata), formatObjectExpiresUTC(out.ExpiresString), ""
 }
 
 func formatObjectLastModifiedUTC(lastModified *time.Time) string {
@@ -1355,6 +1360,9 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 		Bucket: &bucket,
 		Key:    &key,
 		Body:   file,
+		Metadata: map[string]string{
+			"uploaded-by": strings.TrimSpace(session.Username),
+		},
 	}
 	if fileHeader != nil {
 		if fileHeader.Size > maxSinglePutObjectSize {
