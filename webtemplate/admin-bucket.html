@@ -60,7 +60,7 @@
       animation: float-orb 10s ease-in-out infinite reverse;
     }
     main {
-      max-width: 1080px;
+      width: min(96vw, 1560px);
       margin: 2rem auto;
       padding: 0 1rem 2rem;
       display: grid;
@@ -89,6 +89,40 @@
       margin-top: 0.75rem;
       color: var(--error);
       font-weight: 600;
+    }
+    .notice {
+      margin-top: 0.75rem;
+      color: #95f5c9;
+      font-weight: 600;
+    }
+    .upload-box {
+      margin-top: 1rem;
+      padding: 0.95rem;
+      border-radius: 12px;
+      border: 1px solid rgba(120, 156, 238, 0.22);
+      background: rgba(7, 13, 28, 0.52);
+    }
+    .upload-form {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      gap: 0.65rem;
+      margin-top: 0.5rem;
+    }
+    .upload-form label {
+      display: grid;
+      gap: 0.3rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+    .upload-form input[type="text"],
+    .upload-form input[type="file"] {
+      max-width: 320px;
+      border-radius: 8px;
+      border: 1px solid rgba(120, 156, 238, 0.22);
+      background: rgba(6, 11, 24, 0.72);
+      color: var(--text);
+      padding: 0.5rem 0.6rem;
     }
     a {
       color: var(--link);
@@ -158,6 +192,23 @@
       opacity: 0.45;
       pointer-events: none;
     }
+    .btn.warn {
+      background: linear-gradient(120deg, #ff9f6d 0%, #ff6d88 100%);
+      box-shadow: 0 8px 28px rgba(255, 119, 150, 0.22);
+    }
+    .btn.small {
+      padding: 0.42rem 0.72rem;
+      font-size: 0.82rem;
+    }
+    .row-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .inline {
+      margin: 0;
+    }
     @media (max-width: 700px) {
       main {
         margin-top: 1rem;
@@ -196,7 +247,34 @@
       <p class="muted">Generated: {{.GeneratedAt}}</p>
       {{if .Error}}
       <p class="error">{{.Error}}</p>
-      {{else if .Objects}}
+      {{end}}
+      {{if .Notice}}
+      <p class="notice">{{.Notice}}</p>
+      {{end}}
+
+      {{if .CanUploadObjects}}
+      <div class="upload-box">
+        <strong>Upload object</strong>
+        <form class="upload-form" method="post" action="/admin/bucket/upload" enctype="multipart/form-data">
+          <input type="hidden" name="name" value="{{.BucketName}}">
+          <input type="hidden" name="cursor" value="{{.CurrentCursor}}">
+          <input type="hidden" name="history" value="{{.CurrentHistory}}">
+          <label>
+            Object key (optional)
+            <input type="text" name="key" placeholder="folder/file.txt">
+          </label>
+          <label>
+            File
+            <input type="file" name="file" required>
+          </label>
+          <button class="btn small" type="submit">Upload</button>
+        </form>
+      </div>
+      {{else}}
+      <p class="muted">Write permission is required to upload objects.</p>
+      {{end}}
+
+      {{if .Objects}}
       <div class="table-wrap">
         <table>
           <thead>
@@ -204,19 +282,28 @@
               <th>Object Key</th>
               <th>Size (bytes)</th>
               <th>Last-Modified (UTC)</th>
+              <th>Expires (UTC)</th>
               <th>Metadata</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
             {{range .Objects}}
             <tr>
-              <td><code>{{.Key}}</code></td>
+              <td><a href="/admin/bucket/download?name={{$.BucketName | urlquery}}&key={{.Key | urlquery}}"><code>{{.Key}}</code></a></td>
               <td><code>{{.SizeBytes}}</code></td>
               <td>
                 {{if .LastModUTC}}
                 <code>{{.LastModUTC}}</code>
                 {{else}}
                 <span class="muted">Unknown</span>
+                {{end}}
+              </td>
+              <td>
+                {{if .ExpiresUTC}}
+                <code>{{.ExpiresUTC}}</code>
+                {{else}}
+                <span class="muted">Not set</span>
                 {{end}}
               </td>
               <td>
@@ -232,12 +319,26 @@
                 <span class="muted">No metadata.</span>
                 {{end}}
               </td>
+              <td>
+                <div class="row-actions">
+                  <a class="btn small" href="/admin/bucket/download?name={{$.BucketName | urlquery}}&key={{.Key | urlquery}}">Download</a>
+                  {{if $.CanDeleteObjects}}
+                  <form class="inline" method="post" action="/admin/bucket/delete">
+                    <input type="hidden" name="name" value="{{$.BucketName}}">
+                    <input type="hidden" name="cursor" value="{{$.CurrentCursor}}">
+                    <input type="hidden" name="history" value="{{$.CurrentHistory}}">
+                    <input type="hidden" name="key" value="{{.Key}}">
+                    <button class="btn warn small" type="submit">Delete</button>
+                  </form>
+                  {{end}}
+                </div>
+              </td>
             </tr>
             {{end}}
           </tbody>
         </table>
       </div>
-      {{else}}
+      {{else if not .Error}}
       <p class="muted">No objects found.</p>
       {{end}}
 

@@ -60,7 +60,7 @@
       animation: float-orb 10s ease-in-out infinite reverse;
     }
     main {
-      max-width: 1100px;
+      width: min(95vw, 1480px);
       margin: 2rem auto;
       padding: 0 1rem 2rem;
       display: grid;
@@ -91,6 +91,48 @@
       margin-top: 0.75rem;
       color: var(--error);
       font-weight: 600;
+    }
+    .notice {
+      margin-top: 0.75rem;
+      color: #95f5c9;
+      font-weight: 600;
+    }
+    .create-box {
+      margin-top: 1rem;
+      padding: 0.95rem;
+      border-radius: 12px;
+      border: 1px solid rgba(120, 156, 238, 0.22);
+      background: rgba(7, 13, 28, 0.52);
+    }
+    .create-form {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: end;
+      gap: 0.65rem;
+      margin-top: 0.5rem;
+    }
+    .create-form label {
+      display: grid;
+      gap: 0.3rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+    .create-form select,
+    .create-form input[type="text"] {
+      max-width: 260px;
+      border-radius: 8px;
+      border: 1px solid rgba(120, 156, 238, 0.22);
+      background: rgba(6, 11, 24, 0.72);
+      color: var(--text);
+      padding: 0.5rem 0.6rem;
+    }
+    .create-form button {
+      padding: 0.58rem 0.95rem;
+      font-size: 0.9rem;
+    }
+    .create-preview {
+      margin: 0.5rem 0 0;
+      color: var(--muted);
     }
     a {
       color: var(--link);
@@ -215,9 +257,40 @@
         </form>
       </div>
       <p class="summary"><strong>S3 groups:</strong> {{.GroupCount}} | <strong>Visible buckets:</strong> {{.TotalBuckets}}</p>
+      {{if .Notice}}
+      <p class="notice">{{.Notice}}</p>
+      {{end}}
       {{if .Error}}
       <p class="error">{{.Error}}</p>
       {{end}}
+
+      <div class="create-box">
+        <strong>Create bucket</strong>
+        {{if .CanCreateBuckets}}
+        <form class="create-form" method="post" action="/admin/create-bucket">
+          <label>
+            Space
+            <select name="space" required>
+              {{range .CreateSpaces}}
+              <option value="{{.}}" {{if eq $.CreateSpace .}}selected{{end}}>{{.}}-</option>
+              {{end}}
+            </select>
+          </label>
+          <label>
+            Bucket suffix
+            <input type="text" name="suffix" value="{{.CreateSuffix}}" placeholder="newname" required>
+          </label>
+          <button type="submit">Create bucket</button>
+        </form>
+        {{if .CreateBucketLabel}}
+        <p class="create-preview">Generated bucket: <code>{{.CreateBucketLabel}}</code></p>
+        {{else}}
+        <p class="create-preview">Generated bucket: <code>{{.CreateSpace}}-newname</code></p>
+        {{end}}
+        {{else}}
+        <p class="muted">Create-bucket permission is required.</p>
+        {{end}}
+      </div>
     </section>
 
     <section class="panel">
