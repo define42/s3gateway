@@ -656,6 +656,106 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 			in.IfUnmodifiedSince = aws.Time(farFuture)
 		},
 	)
+	assertGetObjectPartChecksumModeMatchesUpstream := func(mode s3types.ChecksumMode) {
+		t.Helper()
+		upstreamPartOut, upstreamPartErr := upstreamClient.GetObject(ctx, &s3.GetObjectInput{
+			Bucket:       aws.String(bucket),
+			Key:          aws.String(getPartKey),
+			PartNumber:   aws.Int32(1),
+			ChecksumMode: mode,
+		})
+		gatewayPartOut, gatewayPartErr := rwClient.GetObject(ctx, &s3.GetObjectInput{
+			Bucket:       aws.String(bucket),
+			Key:          aws.String(getPartKey),
+			PartNumber:   aws.Int32(1),
+			ChecksumMode: mode,
+		})
+		if (upstreamPartErr != nil) != (gatewayPartErr != nil) {
+			t.Fatalf("get object with partNumber and checksum-mode=%q error mismatch: gatewayErr=%v upstreamErr=%v", mode, gatewayPartErr, upstreamPartErr)
+		}
+		if upstreamPartErr != nil {
+			var upstreamAPIErr smithy.APIError
+			var gatewayAPIErr smithy.APIError
+			if !errors.As(upstreamPartErr, &upstreamAPIErr) || !errors.As(gatewayPartErr, &gatewayAPIErr) {
+				t.Fatalf("get object with partNumber and checksum-mode=%q expected smithy errors: gatewayErr=%v upstreamErr=%v", mode, gatewayPartErr, upstreamPartErr)
+			}
+			if gatewayAPIErr.ErrorCode() != upstreamAPIErr.ErrorCode() {
+				t.Fatalf("get object with partNumber and checksum-mode=%q error code mismatch: gateway=%q upstream=%q", mode, gatewayAPIErr.ErrorCode(), upstreamAPIErr.ErrorCode())
+			}
+			return
+		}
+		defer upstreamPartOut.Body.Close()
+		defer gatewayPartOut.Body.Close()
+
+		upstreamPartBody, err := io.ReadAll(upstreamPartOut.Body)
+		if err != nil {
+			t.Fatalf("read upstream get object with partNumber and checksum-mode=%q body: %v", mode, err)
+		}
+		gatewayPartBody, err := io.ReadAll(gatewayPartOut.Body)
+		if err != nil {
+			t.Fatalf("read gateway get object with partNumber and checksum-mode=%q body: %v", mode, err)
+		}
+		if !bytes.Equal(gatewayPartBody, upstreamPartBody) {
+			t.Fatalf("get object with partNumber and checksum-mode=%q body mismatch between gateway and upstream", mode)
+		}
+		if !bytes.Equal(gatewayPartBody, part1Body) {
+			t.Fatalf("get object with partNumber and checksum-mode=%q body mismatch: gotLen=%d wantLen=%d", mode, len(gatewayPartBody), len(part1Body))
+		}
+		if aws.ToInt64(gatewayPartOut.ContentLength) != aws.ToInt64(upstreamPartOut.ContentLength) {
+			t.Fatalf("get object with partNumber and checksum-mode=%q content-length mismatch: gateway=%d upstream=%d", mode, aws.ToInt64(gatewayPartOut.ContentLength), aws.ToInt64(upstreamPartOut.ContentLength))
+		}
+	}
+	assertGetObjectPartChecksumModeMatchesUpstream(s3types.ChecksumModeEnabled)
+	assertGetObjectPartExpectedOwnerMatchesUpstream := func(expectedOwner string) {
+		t.Helper()
+		upstreamPartOut, upstreamPartErr := upstreamClient.GetObject(ctx, &s3.GetObjectInput{
+			Bucket:              aws.String(bucket),
+			Key:                 aws.String(getPartKey),
+			PartNumber:          aws.Int32(1),
+			ExpectedBucketOwner: aws.String(expectedOwner),
+		})
+		gatewayPartOut, gatewayPartErr := rwClient.GetObject(ctx, &s3.GetObjectInput{
+			Bucket:              aws.String(bucket),
+			Key:                 aws.String(getPartKey),
+			PartNumber:          aws.Int32(1),
+			ExpectedBucketOwner: aws.String(expectedOwner),
+		})
+		if (upstreamPartErr != nil) != (gatewayPartErr != nil) {
+			t.Fatalf("get object with partNumber and expected-bucket-owner=%q error mismatch: gatewayErr=%v upstreamErr=%v", expectedOwner, gatewayPartErr, upstreamPartErr)
+		}
+		if upstreamPartErr != nil {
+			var upstreamAPIErr smithy.APIError
+			var gatewayAPIErr smithy.APIError
+			if !errors.As(upstreamPartErr, &upstreamAPIErr) || !errors.As(gatewayPartErr, &gatewayAPIErr) {
+				t.Fatalf("get object with partNumber and expected-bucket-owner=%q expected smithy errors: gatewayErr=%v upstreamErr=%v", expectedOwner, gatewayPartErr, upstreamPartErr)
+			}
+			if gatewayAPIErr.ErrorCode() != upstreamAPIErr.ErrorCode() {
+				t.Fatalf("get object with partNumber and expected-bucket-owner=%q error code mismatch: gateway=%q upstream=%q", expectedOwner, gatewayAPIErr.ErrorCode(), upstreamAPIErr.ErrorCode())
+			}
+			return
+		}
+		defer upstreamPartOut.Body.Close()
+		defer gatewayPartOut.Body.Close()
+
+		upstreamPartBody, err := io.ReadAll(upstreamPartOut.Body)
+		if err != nil {
+			t.Fatalf("read upstream get object with partNumber and expected-bucket-owner=%q body: %v", expectedOwner, err)
+		}
+		gatewayPartBody, err := io.ReadAll(gatewayPartOut.Body)
+		if err != nil {
+			t.Fatalf("read gateway get object with partNumber and expected-bucket-owner=%q body: %v", expectedOwner, err)
+		}
+		if !bytes.Equal(gatewayPartBody, upstreamPartBody) {
+			t.Fatalf("get object with partNumber and expected-bucket-owner=%q body mismatch between gateway and upstream", expectedOwner)
+		}
+		if !bytes.Equal(gatewayPartBody, part1Body) {
+			t.Fatalf("get object with partNumber and expected-bucket-owner=%q body mismatch: gotLen=%d wantLen=%d", expectedOwner, len(gatewayPartBody), len(part1Body))
+		}
+		if aws.ToInt64(gatewayPartOut.ContentLength) != aws.ToInt64(upstreamPartOut.ContentLength) {
+			t.Fatalf("get object with partNumber and expected-bucket-owner=%q content-length mismatch: gateway=%d upstream=%d", expectedOwner, aws.ToInt64(gatewayPartOut.ContentLength), aws.ToInt64(upstreamPartOut.ContentLength))
+		}
+	}
+	assertGetObjectPartExpectedOwnerMatchesUpstream("123456789012")
 
 	roObj, err := roClient.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
