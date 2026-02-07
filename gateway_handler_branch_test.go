@@ -1337,6 +1337,43 @@ func TestReadyzDependencyChecks(t *testing.T) {
 	})
 }
 
+func TestHandleListBucketsAllowsAnyPermission(t *testing.T) {
+	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/" {
+			t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Owner><ID>owner</ID><DisplayName>owner</DisplayName></Owner>
+  <Buckets>
+    <Bucket><Name>team2-any-perm</Name></Bucket>
+    <Bucket><Name>team9-denied</Name></Bucket>
+  </Buckets>
+</ListAllMyBucketsResult>`))
+	})
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = reqWithRules(req, []Rule{{
+		BucketPrefix: "team2-",
+		Perm:         PermDeleteBucket,
+	}})
+	rr := httptest.NewRecorder()
+
+	gw.handleListBuckets(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "<Name>team2-any-perm</Name>") {
+		t.Fatalf("expected any-permission visible bucket in list response: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "<Name>team9-denied</Name>") {
+		t.Fatalf("unexpected denied bucket in list response: %s", rr.Body.String())
+	}
+}
+
 func TestHandleListObjectVersionsBranchMatrix(t *testing.T) {
 	gwNoUpstream, cleanupNoUpstream := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("upstream should not be called for validation errors: %s %s", r.Method, r.URL.String())

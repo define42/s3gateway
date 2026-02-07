@@ -1723,7 +1723,7 @@ func (s *server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
 		if bk.Name == nil {
 			continue
 		}
-		if canRead(rules, *bk.Name) {
+		if bucketPerm(rules, *bk.Name) != PermNone {
 			b.WriteString("<Bucket><Name>")
 			b.WriteString(xmlEscape(*bk.Name))
 			b.WriteString("</Name></Bucket>")

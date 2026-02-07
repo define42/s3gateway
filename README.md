@@ -43,6 +43,7 @@ Examples:
 
 - `team2-r` can read buckets like `team2-logs`, `team2-data`.
 - `team2-rwcdb` can read, write, create buckets, delete objects, and delete buckets.
+- `ListBuckets` shows buckets when you have `r` or `w` for the matching bucket prefix.
 
 For copy operations (`CopyObject`, `UploadPartCopy`):
 
@@ -53,45 +54,34 @@ For copy operations (`CopyObject`, `UploadPartCopy`):
 
 Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 
-### Bucket-level
-
-- `GET /` -> List buckets (filtered by read permission).
-- `PUT /<bucket>` -> Create bucket.
-- `HEAD /<bucket>` -> Head bucket.
-- `DELETE /<bucket>` -> Delete bucket.
-- `GET /<bucket>?list-type=2` -> List objects v2.
-- `GET /<bucket>?versions` -> List object versions.
-- `POST /<bucket>?delete` -> Multi-object delete.
-- `PUT /<bucket>?versioning` -> Put bucket versioning.
-- `GET /<bucket>?versioning` -> Get bucket versioning.
-- `PUT /<bucket>?lifecycle` -> Put lifecycle configuration.
-- `GET /<bucket>?lifecycle` -> Get lifecycle configuration.
-- `DELETE /<bucket>?lifecycle` -> Delete lifecycle configuration.
-- `GET /<bucket>?uploads` -> List multipart uploads.
-
-### Object-level
-
-- `GET /<bucket>/<key>` -> Get object.
-- `HEAD /<bucket>/<key>` -> Head object.
-- `PUT /<bucket>/<key>` -> Put object.
-- `PUT /<bucket>/<key>` with `x-amz-copy-source` -> Copy object.
-- `GET /<bucket>/<key>?attributes` -> Get object attributes.
-- `DELETE /<bucket>/<key>` -> Delete object.
-
-### Multipart upload
-
-- `POST /<bucket>/<key>?uploads` -> Create multipart upload.
-- `PUT /<bucket>/<key>?partNumber=N&uploadId=...` -> Upload part.
-- `PUT /<bucket>/<key>?partNumber=N&uploadId=...` with `x-amz-copy-source` -> Upload part copy.
-- `GET /<bucket>/<key>?uploadId=...` -> List parts.
-- `POST /<bucket>/<key>?uploadId=...` -> Complete multipart upload.
-- `DELETE /<bucket>/<key>?uploadId=...` -> Abort multipart upload.
-
-### Streaming uploads
-
-- Supports `STREAMING-AWS4-HMAC-SHA256-PAYLOAD` (`aws-chunked`).
-- Verifies per-chunk signature chain.
-- Requires `x-amz-decoded-content-length`.
+| Scope | Route / Request | Capability | Required group rule |
+| --- | --- | --- | --- |
+| Bucket | `GET /` | List buckets | Any permission on bucket prefix (`r`, `w`, `c`, `d`, or `b`); only matching buckets are returned |
+| Bucket | `PUT /<bucket>` | Create bucket | `c` on target bucket prefix |
+| Bucket | `HEAD /<bucket>` | Head bucket | `r` on target bucket prefix |
+| Bucket | `DELETE /<bucket>` | Delete bucket | `b` on target bucket prefix |
+| Bucket | `GET /<bucket>?list-type=2` | List objects v2 | `r` on target bucket prefix |
+| Bucket | `GET /<bucket>?versions` | List object versions | `r` on target bucket prefix |
+| Bucket | `POST /<bucket>?delete` | Multi-object delete | `d` on target bucket prefix |
+| Bucket | `PUT /<bucket>?versioning` | Put bucket versioning | `w` on target bucket prefix |
+| Bucket | `GET /<bucket>?versioning` | Get bucket versioning | `r` on target bucket prefix |
+| Bucket | `PUT /<bucket>?lifecycle` | Put lifecycle configuration | `w` on target bucket prefix |
+| Bucket | `GET /<bucket>?lifecycle` | Get lifecycle configuration | `r` on target bucket prefix |
+| Bucket | `DELETE /<bucket>?lifecycle` | Delete lifecycle configuration | `w` on target bucket prefix |
+| Bucket | `GET /<bucket>?uploads` | List multipart uploads | `r` on target bucket prefix |
+| Object | `GET /<bucket>/<key>` | Get object | `r` on target bucket prefix |
+| Object | `HEAD /<bucket>/<key>` | Head object | `r` on target bucket prefix |
+| Object | `PUT /<bucket>/<key>` | Put object | `w` on target bucket prefix |
+| Object | `PUT /<bucket>/<key>` with `x-amz-copy-source` | Copy object | Destination bucket: `w`; source bucket: `r` |
+| Object | `GET /<bucket>/<key>?attributes` | Get object attributes | `r` on target bucket prefix |
+| Object | `DELETE /<bucket>/<key>` | Delete object | `d` on target bucket prefix |
+| Multipart | `POST /<bucket>/<key>?uploads` | Create multipart upload | `w` on target bucket prefix |
+| Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` | Upload part | `w` on target bucket prefix |
+| Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` with `x-amz-copy-source` | Upload part copy | Destination bucket: `w`; source bucket: `r` |
+| Multipart | `GET /<bucket>/<key>?uploadId=...` | List parts | `r` on target bucket prefix |
+| Multipart | `POST /<bucket>/<key>?uploadId=...` | Complete multipart upload | `w` on target bucket prefix |
+| Multipart | `DELETE /<bucket>/<key>?uploadId=...` | Abort multipart upload | `w` on target bucket prefix |
+| Streaming | `PUT` object/part with `x-amz-content-sha256: STREAMING-AWS4-HMAC-SHA256-PAYLOAD` | `aws-chunked` streaming uploads | Same as underlying write route (`w`); requires `x-amz-decoded-content-length` and per-chunk signature chain |
 
 ## Notable Limits / Non-Goals
 
