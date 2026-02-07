@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -1392,13 +1393,29 @@ func TestLifecycleConfigXMLExpandedRoundTrip(t *testing.T) {
 }
 
 func TestDecodeBodyForS3WriteAWSChunked(t *testing.T) {
+	newAuth := func() *sigv4Auth {
+		return &sigv4Auth{
+			AccessKey:    "test-access-key",
+			Date:         "20260207",
+			Region:       "us-east-1",
+			Service:      "s3",
+			SignatureHex: strings.Repeat("0", 64),
+			AmzDate:      "20260207T010203Z",
+		}
+	}
+
 	t.Run("valid aws-chunked payload", func(t *testing.T) {
-		const encoded = "5;chunk-signature=abc\r\nhello\r\n6;chunk-signature=def\r\n world\r\n0;chunk-signature=ghi\r\nx-amz-checksum-crc32:AAAAAA==\r\n\r\n"
+		auth := newAuth()
+		encoded := signedAWSChunkedPayloadForTest(t, "password", auth, [][]byte{
+			[]byte("hello"),
+			[]byte(" world"),
+		})
+
 		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/object.txt", strings.NewReader(encoded))
 		req.Header.Set("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
 		req.Header.Set("x-amz-decoded-content-length", "11")
 
-		body, cl, err := decodeBodyForS3Write(req)
+		body, cl, err := decodeBodyForS3Write(req, newAWSChunkSignatureVerifier(auth, "password"))
 		if err != nil {
 			t.Fatalf("decodeBodyForS3Write returned error: %v", err)
 		}
@@ -1416,10 +1433,33 @@ func TestDecodeBodyForS3WriteAWSChunked(t *testing.T) {
 		}
 	})
 
+	t.Run("invalid chunk signature", func(t *testing.T) {
+		auth := newAuth()
+		encoded := signedAWSChunkedPayloadForTest(t, "password", auth, [][]byte{
+			[]byte("hello"),
+		})
+		encoded = tamperFirstChunkSignatureForTest(t, encoded)
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/object.txt", strings.NewReader(encoded))
+		req.Header.Set("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
+		req.Header.Set("x-amz-decoded-content-length", "5")
+
+		body, _, err := decodeBodyForS3Write(req, newAWSChunkSignatureVerifier(auth, "password"))
+		if err != nil {
+			t.Fatalf("decodeBodyForS3Write returned unexpected error: %v", err)
+		}
+		defer body.Close()
+
+		if _, err := io.ReadAll(body); !errors.Is(err, errInvalidChunkSignature) {
+			t.Fatalf("expected invalid chunk signature error, got: %v", err)
+		}
+	})
+
 	t.Run("missing decoded length header", func(t *testing.T) {
+		auth := newAuth()
 		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/object.txt", strings.NewReader(""))
 		req.Header.Set("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
-		if _, _, err := decodeBodyForS3Write(req); err == nil {
+		if _, _, err := decodeBodyForS3Write(req, newAWSChunkSignatureVerifier(auth, "password")); err == nil {
 			t.Fatalf("expected decodeBodyForS3Write to fail for missing x-amz-decoded-content-length")
 		}
 	})
@@ -1879,6 +1919,94 @@ func TestLdapS3upstreamCopyObjectAndUploadPartCopy(t *testing.T) {
 	}
 }
 
+func TestLdapS3upstreamCopySourceBucketAuthorization(t *testing.T) {
+	env := setupIntegrationEnv(t)
+	sourceBucket := fmt.Sprintf("private-src-%d", time.Now().UnixNano())
+	destBucket := fmt.Sprintf("team2-copyauth-%d", time.Now().UnixNano())
+	sourceKey := "secret/source.txt"
+	destKey := "copy/denied.txt"
+	sourceBody := []byte("sensitive payload")
+
+	if _, err := env.upstreamClient.CreateBucket(env.ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(sourceBucket),
+	}); err != nil {
+		t.Fatalf("create source bucket via upstream: %v", err)
+	}
+	if _, err := env.upstreamClient.PutObject(env.ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(sourceBucket),
+		Key:           aws.String(sourceKey),
+		Body:          bytes.NewReader(sourceBody),
+		ContentLength: aws.Int64(int64(len(sourceBody))),
+	}); err != nil {
+		t.Fatalf("put source object via upstream: %v", err)
+	}
+	if _, err := env.rwClient.CreateBucket(env.ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(destBucket),
+	}); err != nil {
+		t.Fatalf("create destination bucket via gateway: %v", err)
+	}
+
+	copySource := sourceBucket + "/" + sourceKey
+	if _, err := env.rwClient.CopyObject(env.ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(destBucket),
+		Key:        aws.String(destKey),
+		CopySource: aws.String(copySource),
+	}); err == nil {
+		t.Fatalf("expected copy object from unauthorized source bucket to fail")
+	} else {
+		var apiErr smithy.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("expected smithy API error for unauthorized copy object, got: %v", err)
+		}
+		if apiErr.ErrorCode() != "AccessDenied" {
+			t.Fatalf("expected AccessDenied for unauthorized copy object, got code=%q err=%v", apiErr.ErrorCode(), err)
+		}
+	}
+	if _, err := env.upstreamClient.HeadObject(env.ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(destBucket),
+		Key:    aws.String(destKey),
+	}); err == nil {
+		t.Fatalf("copy object should not have created destination object when source bucket is unauthorized")
+	}
+
+	mpKey := "copy/denied-multipart.bin"
+	createOut, err := env.rwClient.CreateMultipartUpload(env.ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(destBucket),
+		Key:    aws.String(mpKey),
+	})
+	if err != nil {
+		t.Fatalf("create multipart upload via gateway: %v", err)
+	}
+	if createOut.UploadId == nil || *createOut.UploadId == "" {
+		t.Fatalf("multipart upload id should not be empty")
+	}
+	defer func() {
+		_, _ = env.rwClient.AbortMultipartUpload(env.ctx, &s3.AbortMultipartUploadInput{
+			Bucket:   aws.String(destBucket),
+			Key:      aws.String(mpKey),
+			UploadId: createOut.UploadId,
+		})
+	}()
+
+	if _, err := env.rwClient.UploadPartCopy(env.ctx, &s3.UploadPartCopyInput{
+		Bucket:     aws.String(destBucket),
+		Key:        aws.String(mpKey),
+		UploadId:   createOut.UploadId,
+		PartNumber: aws.Int32(1),
+		CopySource: aws.String(copySource),
+	}); err == nil {
+		t.Fatalf("expected upload part copy from unauthorized source bucket to fail")
+	} else {
+		var apiErr smithy.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("expected smithy API error for unauthorized upload part copy, got: %v", err)
+		}
+		if apiErr.ErrorCode() != "AccessDenied" {
+			t.Fatalf("expected AccessDenied for unauthorized upload part copy, got code=%q err=%v", apiErr.ErrorCode(), err)
+		}
+	}
+}
+
 func TestLdapS3upstreamDeleteObjectsVersioningAndListObjectVersions(t *testing.T) {
 	env := setupIntegrationEnv(t)
 	bucket := fmt.Sprintf("team2-versions-%d", time.Now().UnixNano())
@@ -2268,6 +2396,69 @@ func mapBoolKeys(in map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func signedAWSChunkedPayloadForTest(t *testing.T, secret string, auth *sigv4Auth, chunks [][]byte) string {
+	t.Helper()
+
+	signingKey := deriveSigningKey(secret, auth.Date, auth.Region, auth.Service)
+	scope := fmt.Sprintf("%s/%s/%s/aws4_request", auth.Date, auth.Region, auth.Service)
+	prevSig := strings.ToLower(auth.SignatureHex)
+	emptyHash := sha256.Sum256(nil)
+	emptyHashHex := fmt.Sprintf("%x", emptyHash[:])
+
+	var b strings.Builder
+	for _, chunk := range chunks {
+		chunkHash := sha256.Sum256(chunk)
+		chunkHashHex := fmt.Sprintf("%x", chunkHash[:])
+		stringToSign := strings.Join([]string{
+			"AWS4-HMAC-SHA256-PAYLOAD",
+			auth.AmzDate,
+			scope,
+			prevSig,
+			emptyHashHex,
+			chunkHashHex,
+		}, "\n")
+		sig := hmacSHA256Hex(signingKey, []byte(stringToSign))
+		b.WriteString(fmt.Sprintf("%x;chunk-signature=%s\r\n", len(chunk), sig))
+		b.Write(chunk)
+		b.WriteString("\r\n")
+		prevSig = sig
+	}
+
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256-PAYLOAD",
+		auth.AmzDate,
+		scope,
+		prevSig,
+		emptyHashHex,
+		emptyHashHex,
+	}, "\n")
+	finalSig := hmacSHA256Hex(signingKey, []byte(stringToSign))
+	b.WriteString(fmt.Sprintf("0;chunk-signature=%s\r\n\r\n", finalSig))
+	return b.String()
+}
+
+func tamperFirstChunkSignatureForTest(t *testing.T, encoded string) string {
+	t.Helper()
+
+	const marker = "chunk-signature="
+	idx := strings.Index(encoded, marker)
+	if idx < 0 {
+		t.Fatalf("missing %q marker in encoded payload", marker)
+	}
+	sigPos := idx + len(marker)
+	if sigPos >= len(encoded) {
+		t.Fatalf("invalid signature position in encoded payload")
+	}
+
+	out := []byte(encoded)
+	if out[sigPos] == '0' {
+		out[sigPos] = '1'
+	} else {
+		out[sigPos] = '0'
+	}
+	return string(out)
 }
 
 func newS3Client(t *testing.T, ctx context.Context, endpoint, region, accessKey, secretKey string) *s3.Client {
