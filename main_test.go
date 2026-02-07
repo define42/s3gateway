@@ -1465,6 +1465,158 @@ func TestDecodeBodyForS3WriteAWSChunked(t *testing.T) {
 	})
 }
 
+func TestValidateSigV4RequestTime(t *testing.T) {
+	now := time.Date(2026, 2, 7, 12, 0, 0, 0, time.UTC)
+
+	t.Run("within allowed skew", func(t *testing.T) {
+		reqTime := now.Add(-10 * time.Minute)
+		auth := &sigv4Auth{
+			Date:    reqTime.Format("20060102"),
+			AmzDate: reqTime.Format("20060102T150405Z"),
+		}
+		if err := validateSigV4RequestTime(auth, now, 15*time.Minute); err != nil {
+			t.Fatalf("expected valid request time, got error: %v", err)
+		}
+	})
+
+	t.Run("too old", func(t *testing.T) {
+		reqTime := now.Add(-16 * time.Minute)
+		auth := &sigv4Auth{
+			Date:    reqTime.Format("20060102"),
+			AmzDate: reqTime.Format("20060102T150405Z"),
+		}
+		if err := validateSigV4RequestTime(auth, now, 15*time.Minute); !errors.Is(err, errSigV4RequestOutsideMaxSkew) {
+			t.Fatalf("expected skew error, got: %v", err)
+		}
+	})
+
+	t.Run("too far in future", func(t *testing.T) {
+		reqTime := now.Add(16 * time.Minute)
+		auth := &sigv4Auth{
+			Date:    reqTime.Format("20060102"),
+			AmzDate: reqTime.Format("20060102T150405Z"),
+		}
+		if err := validateSigV4RequestTime(auth, now, 15*time.Minute); !errors.Is(err, errSigV4RequestOutsideMaxSkew) {
+			t.Fatalf("expected skew error, got: %v", err)
+		}
+	})
+
+	t.Run("invalid amz date", func(t *testing.T) {
+		auth := &sigv4Auth{
+			Date:    now.Format("20060102"),
+			AmzDate: "not-a-date",
+		}
+		if err := validateSigV4RequestTime(auth, now, 15*time.Minute); !errors.Is(err, errInvalidAmzDate) {
+			t.Fatalf("expected invalid amz date error, got: %v", err)
+		}
+	})
+
+	t.Run("credential scope date mismatch", func(t *testing.T) {
+		reqTime := now
+		auth := &sigv4Auth{
+			Date:    "20000101",
+			AmzDate: reqTime.Format("20060102T150405Z"),
+		}
+		if err := validateSigV4RequestTime(auth, now, 15*time.Minute); !errors.Is(err, errSigV4DateScopeMismatch) {
+			t.Fatalf("expected date mismatch error, got: %v", err)
+		}
+	})
+}
+
+func TestGroupCacheCredentialAwareAndBounded(t *testing.T) {
+	c := newGroupCacheWithMaxEntries(2*time.Second, 2)
+
+	g1 := map[string]struct{}{"team1-rw": {}}
+	c.set("u1@example.com", "pass1", g1)
+	if _, ok := c.get("u1@example.com", "wrong-pass"); ok {
+		t.Fatalf("cache hit with wrong password should not be allowed")
+	}
+	got, ok := c.get("u1@example.com", "pass1")
+	if !ok {
+		t.Fatalf("expected cache hit for correct credentials")
+	}
+	if _, ok := got["team1-rw"]; !ok {
+		t.Fatalf("expected cached group in returned map")
+	}
+	got["tamper"] = struct{}{}
+	gotAgain, ok := c.get("u1@example.com", "pass1")
+	if !ok {
+		t.Fatalf("expected cache hit for correct credentials after tamper attempt")
+	}
+	if _, ok := gotAgain["tamper"]; ok {
+		t.Fatalf("cache returned mutable shared map; tampered key should not persist")
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	c.set("u2@example.com", "pass2", map[string]struct{}{"team2-r": {}})
+	time.Sleep(10 * time.Millisecond)
+	c.set("u3@example.com", "pass3", map[string]struct{}{"team3-rw": {}})
+
+	if len(c.data) > 2 {
+		t.Fatalf("cache exceeded max size: len=%d max=2", len(c.data))
+	}
+	if _, ok := c.get("u1@example.com", "pass1"); ok {
+		t.Fatalf("expected oldest entry to be evicted when cache is full")
+	}
+	if _, ok := c.get("u2@example.com", "pass2"); !ok {
+		t.Fatalf("expected second entry to remain in cache")
+	}
+	if _, ok := c.get("u3@example.com", "pass3"); !ok {
+		t.Fatalf("expected newest entry to remain in cache")
+	}
+}
+
+func TestGroupCacheExpiredEntryIsRemovedOnLookup(t *testing.T) {
+	c := newGroupCacheWithMaxEntries(20*time.Millisecond, 10)
+	c.set("u1@example.com", "pass1", map[string]struct{}{"team1-rw": {}})
+	time.Sleep(30 * time.Millisecond)
+
+	if _, ok := c.get("u1@example.com", "pass1"); ok {
+		t.Fatalf("expected expired cache entry to miss")
+	}
+	if len(c.data) != 0 {
+		t.Fatalf("expected expired entry to be removed from cache, len=%d", len(c.data))
+	}
+}
+
+func TestNewHTTPServerAppliesDefaultsAndOverrides(t *testing.T) {
+	srv := newHTTPServer(Config{ListenAddr: ":8080"}, http.NewServeMux())
+	if srv.ReadHeaderTimeout != defaultReadHeaderTimeout {
+		t.Fatalf("default read header timeout mismatch: got=%s want=%s", srv.ReadHeaderTimeout, defaultReadHeaderTimeout)
+	}
+	if srv.IdleTimeout != defaultIdleTimeout {
+		t.Fatalf("default idle timeout mismatch: got=%s want=%s", srv.IdleTimeout, defaultIdleTimeout)
+	}
+	if srv.MaxHeaderBytes != defaultMaxHeaderBytes {
+		t.Fatalf("default max header bytes mismatch: got=%d want=%d", srv.MaxHeaderBytes, defaultMaxHeaderBytes)
+	}
+
+	overrideCfg := Config{
+		ListenAddr:        ":9090",
+		ReadHeaderTimeout: 3 * time.Second,
+		ReadTimeout:       11 * time.Second,
+		WriteTimeout:      12 * time.Second,
+		IdleTimeout:       13 * time.Second,
+		MaxHeaderBytes:    8192,
+	}
+	overrideSrv := newHTTPServer(overrideCfg, http.NewServeMux())
+	if overrideSrv.ReadHeaderTimeout != 3*time.Second {
+		t.Fatalf("override read header timeout mismatch: got=%s", overrideSrv.ReadHeaderTimeout)
+	}
+	if overrideSrv.ReadTimeout != 11*time.Second {
+		t.Fatalf("override read timeout mismatch: got=%s", overrideSrv.ReadTimeout)
+	}
+	if overrideSrv.WriteTimeout != 12*time.Second {
+		t.Fatalf("override write timeout mismatch: got=%s", overrideSrv.WriteTimeout)
+	}
+	if overrideSrv.IdleTimeout != 13*time.Second {
+		t.Fatalf("override idle timeout mismatch: got=%s", overrideSrv.IdleTimeout)
+	}
+	if overrideSrv.MaxHeaderBytes != 8192 {
+		t.Fatalf("override max header bytes mismatch: got=%d", overrideSrv.MaxHeaderBytes)
+	}
+}
+
 func TestGatewayPreservesUpstreamErrorStatusAndHeaders(t *testing.T) {
 	ctx := context.Background()
 

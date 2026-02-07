@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
@@ -17,10 +18,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -37,9 +40,10 @@ import (
 type Config struct {
 	ListenAddr string
 
-	LDAPURL  string
-	BaseDN   string
-	GroupTTL time.Duration
+	LDAPURL              string
+	BaseDN               string
+	GroupTTL             time.Duration
+	GroupCacheMaxEntries int
 
 	UpstreamEndpoint       string
 	UpstreamRegion         string
@@ -47,11 +51,30 @@ type Config struct {
 	UpstreamSecretKey      string
 	UpstreamForcePathStyle bool
 
-	SigV4Secret  string // constant, default "password"
-	SigV4Service string // default "s3"
+	SigV4Secret  string        // constant, default "password"
+	SigV4Service string        // default "s3"
+	SigV4MaxSkew time.Duration // max absolute request age/skew based on x-amz-date
+
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
+	ShutdownTimeout   time.Duration
+	MaxHeaderBytes    int
 }
 
 const maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
+
+const (
+	defaultSigV4MaxSkew         = 15 * time.Minute
+	defaultGroupCacheMaxEntries = 10000
+	defaultReadHeaderTimeout    = 10 * time.Second
+	defaultReadTimeout          = 0 * time.Second
+	defaultWriteTimeout         = 0 * time.Second
+	defaultIdleTimeout          = 120 * time.Second
+	defaultShutdownTimeout      = 20 * time.Second
+	defaultMaxHeaderBytes       = 1 << 20 // 1 MiB
+)
 
 func env(key, def string) string {
 	v := strings.TrimSpace(os.Getenv(key))
@@ -68,19 +91,64 @@ func envRequired(key string) string {
 	return v
 }
 
-func loadConfig() Config {
-	ttl := 2 * time.Minute
-	if s := strings.TrimSpace(os.Getenv("LDAP_GROUP_TTL")); s != "" {
-		if d, err := time.ParseDuration(s); err == nil {
-			ttl = d
-		}
+func envDuration(key string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
 	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		log.Fatalf("invalid duration for %s: %v", key, err)
+	}
+	return d
+}
+
+func envInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		log.Fatalf("invalid int for %s: %v", key, err)
+	}
+	return n
+}
+
+func loadConfig() Config {
+	ttl := envDuration("LDAP_GROUP_TTL", 2*time.Minute)
+	groupCacheMaxEntries := envInt("LDAP_GROUP_CACHE_MAX_ENTRIES", defaultGroupCacheMaxEntries)
+	if groupCacheMaxEntries <= 0 {
+		log.Fatalf("LDAP_GROUP_CACHE_MAX_ENTRIES must be > 0")
+	}
+	sigV4MaxSkew := envDuration("SIGV4_MAX_SKEW", defaultSigV4MaxSkew)
+	if sigV4MaxSkew <= 0 {
+		log.Fatalf("SIGV4_MAX_SKEW must be > 0")
+	}
+	readHeaderTimeout := envDuration("HTTP_READ_HEADER_TIMEOUT", defaultReadHeaderTimeout)
+	if readHeaderTimeout <= 0 {
+		log.Fatalf("HTTP_READ_HEADER_TIMEOUT must be > 0")
+	}
+	idleTimeout := envDuration("HTTP_IDLE_TIMEOUT", defaultIdleTimeout)
+	if idleTimeout <= 0 {
+		log.Fatalf("HTTP_IDLE_TIMEOUT must be > 0")
+	}
+	shutdownTimeout := envDuration("HTTP_SHUTDOWN_TIMEOUT", defaultShutdownTimeout)
+	if shutdownTimeout <= 0 {
+		log.Fatalf("HTTP_SHUTDOWN_TIMEOUT must be > 0")
+	}
+	maxHeaderBytes := envInt("HTTP_MAX_HEADER_BYTES", defaultMaxHeaderBytes)
+	if maxHeaderBytes <= 0 {
+		log.Fatalf("HTTP_MAX_HEADER_BYTES must be > 0")
+	}
+
 	return Config{
 		ListenAddr: env("LISTEN_ADDR", ":8080"),
 
-		LDAPURL:  envRequired("LDAP_URL"),
-		BaseDN:   envRequired("LDAP_BASE_DN"),
-		GroupTTL: ttl,
+		LDAPURL:              envRequired("LDAP_URL"),
+		BaseDN:               envRequired("LDAP_BASE_DN"),
+		GroupTTL:             ttl,
+		GroupCacheMaxEntries: groupCacheMaxEntries,
 
 		UpstreamEndpoint:       envRequired("S3_ENDPOINT"),
 		UpstreamRegion:         env("S3_REGION", "us-east-1"),
@@ -90,6 +158,14 @@ func loadConfig() Config {
 
 		SigV4Secret:  env("SIGV4_SECRET", "password"),
 		SigV4Service: env("SIGV4_SERVICE", "s3"),
+		SigV4MaxSkew: sigV4MaxSkew,
+
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       envDuration("HTTP_READ_TIMEOUT", defaultReadTimeout),
+		WriteTimeout:      envDuration("HTTP_WRITE_TIMEOUT", defaultWriteTimeout),
+		IdleTimeout:       idleTimeout,
+		ShutdownTimeout:   shutdownTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 	}
 }
 
@@ -173,32 +249,120 @@ func cnFromDN(dn string) string {
 
 // ==================== Cache ====================
 type groupCacheEntry struct {
-	groups  map[string]struct{}
-	expires time.Time
+	groups         map[string]struct{}
+	credentialHash [32]byte
+	expires        time.Time
+	lastSeen       time.Time
 }
 type groupCache struct {
-	mu   sync.Mutex
-	data map[string]groupCacheEntry
-	ttl  time.Duration
+	mu         sync.Mutex
+	data       map[string]groupCacheEntry
+	ttl        time.Duration
+	maxEntries int
 }
 
 func newGroupCache(ttl time.Duration) *groupCache {
-	return &groupCache{data: map[string]groupCacheEntry{}, ttl: ttl}
+	return newGroupCacheWithMaxEntries(ttl, defaultGroupCacheMaxEntries)
 }
 
-func (c *groupCache) get(upn string) (map[string]struct{}, bool) {
+func newGroupCacheWithMaxEntries(ttl time.Duration, maxEntries int) *groupCache {
+	if maxEntries <= 0 {
+		maxEntries = defaultGroupCacheMaxEntries
+	}
+	return &groupCache{
+		data:       map[string]groupCacheEntry{},
+		ttl:        ttl,
+		maxEntries: maxEntries,
+	}
+}
+
+func cacheCredentialHash(upn, password string) [32]byte {
+	return sha256.Sum256([]byte(upn + "\x00" + password))
+}
+
+func cloneGroups(groups map[string]struct{}) map[string]struct{} {
+	if len(groups) == 0 {
+		return map[string]struct{}{}
+	}
+	out := make(map[string]struct{}, len(groups))
+	for g := range groups {
+		out[g] = struct{}{}
+	}
+	return out
+}
+
+func (c *groupCache) get(upn, password string) (map[string]struct{}, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	now := time.Now()
 	e, ok := c.data[upn]
-	if !ok || time.Now().After(e.expires) {
+	if !ok {
 		return nil, false
 	}
-	return e.groups, true
+	if now.After(e.expires) {
+		delete(c.data, upn)
+		return nil, false
+	}
+	wantHash := cacheCredentialHash(upn, password)
+	if subtle.ConstantTimeCompare(e.credentialHash[:], wantHash[:]) != 1 {
+		return nil, false
+	}
+	e.lastSeen = now
+	c.data[upn] = e
+	return cloneGroups(e.groups), true
 }
-func (c *groupCache) set(upn string, groups map[string]struct{}) {
+
+func (c *groupCache) evictExpiredLocked(now time.Time) {
+	for upn, e := range c.data {
+		if now.After(e.expires) {
+			delete(c.data, upn)
+		}
+	}
+}
+
+func (c *groupCache) evictOneOldestLocked() {
+	var victim string
+	var victimEntry groupCacheEntry
+	found := false
+
+	for upn, e := range c.data {
+		if !found {
+			victim, victimEntry, found = upn, e, true
+			continue
+		}
+		if e.expires.Before(victimEntry.expires) {
+			victim, victimEntry = upn, e
+			continue
+		}
+		if e.expires.Equal(victimEntry.expires) && e.lastSeen.Before(victimEntry.lastSeen) {
+			victim, victimEntry = upn, e
+		}
+	}
+	if found {
+		delete(c.data, victim)
+	}
+}
+
+func (c *groupCache) set(upn, password string, groups map[string]struct{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.data[upn] = groupCacheEntry{groups: groups, expires: time.Now().Add(c.ttl)}
+
+	now := time.Now()
+	c.evictExpiredLocked(now)
+
+	if _, exists := c.data[upn]; !exists {
+		for len(c.data) >= c.maxEntries {
+			c.evictOneOldestLocked()
+		}
+	}
+
+	c.data[upn] = groupCacheEntry{
+		groups:         cloneGroups(groups),
+		credentialHash: cacheCredentialHash(upn, password),
+		expires:        now.Add(c.ttl),
+		lastSeen:       now,
+	}
 }
 
 // ==================== AuthZ: <prefix>-r / <prefix>-rw => bucket prefix "<prefix>-" ====================
@@ -323,6 +487,38 @@ type sigv4Auth struct {
 	SignedHeaders []string
 	SignatureHex  string
 	AmzDate       string
+}
+
+var (
+	errInvalidAmzDate             = errors.New("invalid x-amz-date")
+	errSigV4DateScopeMismatch     = errors.New("credential scope date mismatch")
+	errSigV4RequestOutsideMaxSkew = errors.New("request outside allowed time skew")
+)
+
+func effectiveSigV4MaxSkew(cfg Config) time.Duration {
+	if cfg.SigV4MaxSkew <= 0 {
+		return defaultSigV4MaxSkew
+	}
+	return cfg.SigV4MaxSkew
+}
+
+func validateSigV4RequestTime(auth *sigv4Auth, now time.Time, maxSkew time.Duration) error {
+	amzTime, err := time.Parse("20060102T150405Z", strings.TrimSpace(auth.AmzDate))
+	if err != nil {
+		return errInvalidAmzDate
+	}
+	if auth.Date != amzTime.UTC().Format("20060102") {
+		return errSigV4DateScopeMismatch
+	}
+	if maxSkew <= 0 {
+		return nil
+	}
+
+	delta := now.UTC().Sub(amzTime.UTC())
+	if delta > maxSkew || delta < -maxSkew {
+		return errSigV4RequestOutsideMaxSkew
+	}
+	return nil
 }
 
 func parseSigV4Authorization(r *http.Request) (*sigv4Auth, error) {
@@ -1302,6 +1498,10 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
+		if err := validateSigV4RequestTime(auth, time.Now(), effectiveSigV4MaxSkew(s.cfg)); err != nil {
+			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
+			return
+		}
 		if err := verifySigV4(r, auth, s.cfg.SigV4Secret); err != nil {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
@@ -1313,14 +1513,14 @@ func (s *server) withAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		grps, ok := s.gcache.get(upn)
+		grps, ok := s.gcache.get(upn, pass)
 		if !ok {
 			grps, err = fetchGroupsUPN(s.cfg, upn, pass)
 			if err != nil {
 				writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Bad credentials")
 				return
 			}
-			s.gcache.set(upn, grps)
+			s.gcache.set(upn, pass, grps)
 		}
 
 		rules := rulesFromGroups(grps)
@@ -4551,6 +4751,38 @@ func (s *server) handleAbortMultipart(w http.ResponseWriter, r *http.Request, bu
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func effectiveShutdownTimeout(cfg Config) time.Duration {
+	if cfg.ShutdownTimeout <= 0 {
+		return defaultShutdownTimeout
+	}
+	return cfg.ShutdownTimeout
+}
+
+func newHTTPServer(cfg Config, handler http.Handler) *http.Server {
+	readHeaderTimeout := cfg.ReadHeaderTimeout
+	if readHeaderTimeout <= 0 {
+		readHeaderTimeout = defaultReadHeaderTimeout
+	}
+	idleTimeout := cfg.IdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = defaultIdleTimeout
+	}
+	maxHeaderBytes := cfg.MaxHeaderBytes
+	if maxHeaderBytes <= 0 {
+		maxHeaderBytes = defaultMaxHeaderBytes
+	}
+
+	return &http.Server{
+		Addr:              cfg.ListenAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
+	}
+}
+
 func main() {
 	cfg := loadConfig()
 
@@ -4562,15 +4794,42 @@ func main() {
 	s := &server{
 		cfg:    cfg,
 		up:     up,
-		gcache: newGroupCache(cfg.GroupTTL),
+		gcache: newGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
 	}
 
-	httpSrv := &http.Server{
-		Addr:              cfg.ListenAddr,
-		Handler:           s.withAuth(s),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	httpSrv := newHTTPServer(cfg, s.withAuth(s))
 
 	log.Printf("listening on %s", cfg.ListenAddr)
-	log.Fatal(httpSrv.ListenAndServe())
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- httpSrv.ListenAndServe()
+	}()
+
+	shutdownSignalsCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	select {
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server error: %v", err)
+		}
+		return
+	case <-shutdownSignalsCtx.Done():
+		log.Printf("shutdown signal received")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), effectiveShutdownTimeout(cfg))
+	defer cancel()
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("graceful shutdown failed: %v", err)
+		if closeErr := httpSrv.Close(); closeErr != nil {
+			log.Printf("force close failed: %v", closeErr)
+		}
+	}
+
+	if err := <-serverErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatalf("server shutdown error: %v", err)
+	}
+	log.Printf("server stopped")
 }
