@@ -460,6 +460,11 @@ func TestParseGroupPermissions(t *testing.T) {
 			wantOK: false,
 		},
 		{
+			name:   "group has separator but no access flag",
+			group:  "team2-   ",
+			wantOK: false,
+		},
+		{
 			name:   "unsupported permission letter",
 			group:  "team2-rx",
 			wantOK: false,
@@ -516,5 +521,19 @@ func TestRulesFromGroupsCombinesPermissions(t *testing.T) {
 	})
 	if canWrite(readOnlyRules, bucket) || canCreateBucket(readOnlyRules, bucket) || canDeleteObject(readOnlyRules, bucket) || canDeleteBucket(readOnlyRules, bucket) {
 		t.Fatalf("read-only permissions unexpectedly granted write/create/delete")
+	}
+}
+
+func TestRulesFromGroupsIgnoresGroupWithoutAccessFlag(t *testing.T) {
+	rules := rulesFromGroups(map[string]struct{}{
+		"team2-":    {},
+		"team2-   ": {},
+	})
+
+	if len(rules) != 0 {
+		t.Fatalf("expected no rules from groups without access flags, got=%+v", rules)
+	}
+	if canRead(rules, "team2-any") || canWrite(rules, "team2-any") || canCreateBucket(rules, "team2-any") || canDeleteObject(rules, "team2-any") || canDeleteBucket(rules, "team2-any") {
+		t.Fatalf("expected no permissions from groups without access flags")
 	}
 }
