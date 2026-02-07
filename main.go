@@ -2455,7 +2455,7 @@ func lifecycleRuleLegacyPrefix(r types.LifecycleRule) *string {
 
 func (s *server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
-	if !canWrite(rules, bucket) {
+	if !canCreateBucket(rules, bucket) {
 		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}

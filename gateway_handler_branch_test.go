@@ -1688,6 +1688,42 @@ func TestBucketLifecycleHandlersBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("put lifecycle forbidden with write-only permission", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?lifecycle", strings.NewReader(validLifecycle))
+		req = reqWithRules(req, []Rule{{
+			BucketPrefix: "team2-",
+			Perm:         PermWrite,
+		}})
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put lifecycle success with create-only permission", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?lifecycle", strings.NewReader(validLifecycle))
+		req = reqWithRules(req, []Rule{{
+			BucketPrefix: "team2-",
+			Perm:         PermCreateBucket,
+		}})
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketLifecycleConfiguration(rr, req, "team2-bucket")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
 	t.Run("put lifecycle malformed xml", func(t *testing.T) {
 		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 			t.Fatalf("upstream should not be called")

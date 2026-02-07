@@ -65,7 +65,7 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 | Bucket | `POST /<bucket>?delete` | Multi-object delete | `d` on target bucket prefix |
 | Bucket | `PUT /<bucket>?versioning` | Put bucket versioning | `w` on target bucket prefix |
 | Bucket | `GET /<bucket>?versioning` | Get bucket versioning | `r` on target bucket prefix |
-| Bucket | `PUT /<bucket>?lifecycle` | Put lifecycle configuration | `w` on target bucket prefix |
+| Bucket | `PUT /<bucket>?lifecycle` | Put lifecycle configuration | `c` on target bucket prefix |
 | Bucket | `GET /<bucket>?lifecycle` | Get lifecycle configuration | `r` on target bucket prefix |
 | Bucket | `DELETE /<bucket>?lifecycle` | Delete lifecycle configuration | `w` on target bucket prefix |
 | Bucket | `GET /<bucket>?uploads` | List multipart uploads | `r` on target bucket prefix |
