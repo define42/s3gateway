@@ -42,7 +42,7 @@ jobs:
 
       - name: Run tests with coverage
         run: |
-          go test ./... -coverprofile=coverage.out -coverpkg=./...
+          go test ./... -coverprofile=coverage.out  -covermode=atomic -coverpkg=./...
 
       - name: Show coverage in job summary
         run: |
