@@ -1829,13 +1829,13 @@ type integrationEnv struct {
 	cleanup        func()
 }
 
-func setupIntegrationEnv(t *testing.T) *integrationEnv {
-	t.Helper()
+func setupIntegrationEnv(tb testing.TB) *integrationEnv {
+	tb.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	ldapCfgPath := WriteGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
-	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
+	ldapCfgPath := WriteGatewayGlauthConfig(tb)
+	ldapURL, stopLDAP := StartGlauthWithConfig(ctx, tb, ldapCfgPath, "ldap")
+	minioURL, stopMinio := StartMinio(ctx, tb, "minioadmin", "minioadmin")
 
 	cfg := Config{
 		LDAPURL:                ldapURL,
@@ -1855,16 +1855,16 @@ func setupIntegrationEnv(t *testing.T) *integrationEnv {
 		stopMinio()
 		stopLDAP()
 		cancel()
-		t.Fatalf("init upstream s3: %v", err)
+		tb.Fatalf("init upstream s3: %v", err)
 	}
 	gw := newServer(cfg, up)
 	gwSrv := httptest.NewServer(gw.withAuth(gw))
 
 	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser@example.com:dogood"))
-	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	roAccessKey := base64.StdEncoding.EncodeToString([]byte("readonly@example.com:dogood"))
-	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
-	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+	roClient := NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	upstreamClient := NewS3Client(tb, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	env := &integrationEnv{
 		ctx:            ctx,
@@ -1879,8 +1879,167 @@ func setupIntegrationEnv(t *testing.T) *integrationEnv {
 		stopLDAP()
 		cancel()
 	}
-	t.Cleanup(env.cleanup)
+	tb.Cleanup(env.cleanup)
 	return env
+}
+
+func TestFullIntegrationPerformance(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping full integration performance test in short mode")
+	}
+
+	env := setupIntegrationEnv(t)
+	payload := bytes.Repeat([]byte("perf-gateway-"), 16*1024) // ~192 KiB
+	ops := 24
+
+	gatewayBucket := fmt.Sprintf("team2-perf-%d", time.Now().UnixNano())
+	if _, err := env.rwClient.CreateBucket(env.ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(gatewayBucket),
+	}); err != nil {
+		t.Fatalf("create gateway performance bucket: %v", err)
+	}
+	t.Cleanup(func() {
+		for i := 0; i < ops; i++ {
+			key := fmt.Sprintf("perf/gateway/%03d.bin", i)
+			_, _ = env.rwClient.DeleteObject(env.ctx, &s3.DeleteObjectInput{
+				Bucket: aws.String(gatewayBucket),
+				Key:    aws.String(key),
+			})
+		}
+		_, _ = env.rwClient.DeleteBucket(env.ctx, &s3.DeleteBucketInput{
+			Bucket: aws.String(gatewayBucket),
+		})
+	})
+
+	upstreamBucket := fmt.Sprintf("upstream-perf-%d", time.Now().UnixNano())
+	if _, err := env.upstreamClient.CreateBucket(env.ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(upstreamBucket),
+	}); err != nil {
+		t.Fatalf("create upstream performance bucket: %v", err)
+	}
+	t.Cleanup(func() {
+		for i := 0; i < ops; i++ {
+			key := fmt.Sprintf("perf/upstream/%03d.bin", i)
+			_, _ = env.upstreamClient.DeleteObject(env.ctx, &s3.DeleteObjectInput{
+				Bucket: aws.String(upstreamBucket),
+				Key:    aws.String(key),
+			})
+		}
+		_, _ = env.upstreamClient.DeleteBucket(env.ctx, &s3.DeleteBucketInput{
+			Bucket: aws.String(upstreamBucket),
+		})
+	})
+
+	gatewayPutStart := time.Now()
+	for i := 0; i < ops; i++ {
+		key := fmt.Sprintf("perf/gateway/%03d.bin", i)
+		if _, err := env.rwClient.PutObject(env.ctx, &s3.PutObjectInput{
+			Bucket:        aws.String(gatewayBucket),
+			Key:           aws.String(key),
+			Body:          bytes.NewReader(payload),
+			ContentLength: aws.Int64(int64(len(payload))),
+			ContentType:   aws.String("application/octet-stream"),
+		}); err != nil {
+			t.Fatalf("gateway put object %q: %v", key, err)
+		}
+	}
+	gatewayPutDur := time.Since(gatewayPutStart)
+
+	gatewayGetStart := time.Now()
+	for i := 0; i < ops; i++ {
+		key := fmt.Sprintf("perf/gateway/%03d.bin", i)
+		out, err := env.rwClient.GetObject(env.ctx, &s3.GetObjectInput{
+			Bucket: aws.String(gatewayBucket),
+			Key:    aws.String(key),
+		})
+		if err != nil {
+			t.Fatalf("gateway get object %q: %v", key, err)
+		}
+		body, readErr := io.ReadAll(out.Body)
+		closeErr := out.Body.Close()
+		if readErr != nil {
+			t.Fatalf("read gateway object %q: %v", key, readErr)
+		}
+		if closeErr != nil {
+			t.Fatalf("close gateway object %q body: %v", key, closeErr)
+		}
+		if !bytes.Equal(body, payload) {
+			t.Fatalf("gateway payload mismatch for key %q: got=%d want=%d", key, len(body), len(payload))
+		}
+	}
+	gatewayGetDur := time.Since(gatewayGetStart)
+
+	upstreamPutStart := time.Now()
+	for i := 0; i < ops; i++ {
+		key := fmt.Sprintf("perf/upstream/%03d.bin", i)
+		if _, err := env.upstreamClient.PutObject(env.ctx, &s3.PutObjectInput{
+			Bucket:        aws.String(upstreamBucket),
+			Key:           aws.String(key),
+			Body:          bytes.NewReader(payload),
+			ContentLength: aws.Int64(int64(len(payload))),
+			ContentType:   aws.String("application/octet-stream"),
+		}); err != nil {
+			t.Fatalf("upstream put object %q: %v", key, err)
+		}
+	}
+	upstreamPutDur := time.Since(upstreamPutStart)
+
+	upstreamGetStart := time.Now()
+	for i := 0; i < ops; i++ {
+		key := fmt.Sprintf("perf/upstream/%03d.bin", i)
+		out, err := env.upstreamClient.GetObject(env.ctx, &s3.GetObjectInput{
+			Bucket: aws.String(upstreamBucket),
+			Key:    aws.String(key),
+		})
+		if err != nil {
+			t.Fatalf("upstream get object %q: %v", key, err)
+		}
+		body, readErr := io.ReadAll(out.Body)
+		closeErr := out.Body.Close()
+		if readErr != nil {
+			t.Fatalf("read upstream object %q: %v", key, readErr)
+		}
+		if closeErr != nil {
+			t.Fatalf("close upstream object %q body: %v", key, closeErr)
+		}
+		if !bytes.Equal(body, payload) {
+			t.Fatalf("upstream payload mismatch for key %q: got=%d want=%d", key, len(body), len(payload))
+		}
+	}
+	upstreamGetDur := time.Since(upstreamGetStart)
+
+	totalBytes := float64(len(payload) * ops)
+	gatewayPutMBps := totalBytes / gatewayPutDur.Seconds() / (1024 * 1024)
+	gatewayGetMBps := totalBytes / gatewayGetDur.Seconds() / (1024 * 1024)
+	upstreamPutMBps := totalBytes / upstreamPutDur.Seconds() / (1024 * 1024)
+	upstreamGetMBps := totalBytes / upstreamGetDur.Seconds() / (1024 * 1024)
+
+	gatewayPutRatio := float64(gatewayPutDur) / float64(upstreamPutDur)
+	gatewayGetRatio := float64(gatewayGetDur) / float64(upstreamGetDur)
+
+	t.Logf(
+		"performance summary: ops=%d payload=%dB gatewayPut=%s (%.2f MiB/s) gatewayGet=%s (%.2f MiB/s) upstreamPut=%s (%.2f MiB/s) upstreamGet=%s (%.2f MiB/s) putRatio=%.2fx getRatio=%.2fx",
+		ops, len(payload),
+		gatewayPutDur, gatewayPutMBps,
+		gatewayGetDur, gatewayGetMBps,
+		upstreamPutDur, upstreamPutMBps,
+		upstreamGetDur, upstreamGetMBps,
+		gatewayPutRatio, gatewayGetRatio,
+	)
+
+	// Validate performance results with conservative thresholds to avoid flaky CI failures.
+	if gatewayPutMBps <= 0 || gatewayGetMBps <= 0 {
+		t.Fatalf("gateway throughput should be > 0 MiB/s: put=%.2f get=%.2f", gatewayPutMBps, gatewayGetMBps)
+	}
+	if upstreamPutMBps <= 0 || upstreamGetMBps <= 0 {
+		t.Fatalf("upstream throughput should be > 0 MiB/s: put=%.2f get=%.2f", upstreamPutMBps, upstreamGetMBps)
+	}
+	if gatewayPutRatio > 50 {
+		t.Fatalf("gateway put slowdown too high: ratio=%.2fx threshold=50x", gatewayPutRatio)
+	}
+	if gatewayGetRatio > 50 {
+		t.Fatalf("gateway get slowdown too high: ratio=%.2fx threshold=50x", gatewayGetRatio)
+	}
 }
 
 func TestLdapS3upstreamHeadAndDeleteBucket(t *testing.T) {
@@ -2484,11 +2643,11 @@ func TestLdapS3upstreamListObjectsV2FullSemantics(t *testing.T) {
 	}, "start-after")
 }
 
-func StartGlauthWithConfig(ctx context.Context, t *testing.T, cfg string, scheme string) (string, func()) {
-	t.Helper()
+func StartGlauthWithConfig(ctx context.Context, tb testing.TB, cfg string, scheme string) (string, func()) {
+	tb.Helper()
 
-	cert := pathRelative(t, "testldap", "cert.pem")
-	key := pathRelative(t, "testldap", "key.pem")
+	cert := pathRelative(tb, "testldap", "cert.pem")
+	key := pathRelative(tb, "testldap", "key.pem")
 	waitLog := "LDAPS server listening"
 	if strings.EqualFold(scheme, "ldap") {
 		waitLog = "LDAP server listening"
@@ -2516,16 +2675,16 @@ func StartGlauthWithConfig(ctx context.Context, t *testing.T, cfg string, scheme
 		Started:          true,
 	})
 	if err != nil {
-		t.Fatalf("failed to start glauth container: %v", err)
+		tb.Fatalf("failed to start glauth container: %v", err)
 	}
 
 	host, err := container.Host(ctx)
 	if err != nil {
-		t.Fatalf("get host: %v", err)
+		tb.Fatalf("get host: %v", err)
 	}
 	port, err := container.MappedPort(ctx, "389/tcp")
 	if err != nil {
-		t.Fatalf("get mapped port: %v", err)
+		tb.Fatalf("get mapped port: %v", err)
 	}
 
 	url := fmt.Sprintf("%s://%s:%s", scheme, host, port.Port())
@@ -2535,8 +2694,8 @@ func StartGlauthWithConfig(ctx context.Context, t *testing.T, cfg string, scheme
 	}
 }
 
-func WriteGatewayGlauthConfig(t *testing.T) string {
-	t.Helper()
+func WriteGatewayGlauthConfig(tb testing.TB) string {
+	tb.Helper()
 
 	const cfg = `
 debug = true
@@ -2587,9 +2746,9 @@ debug = true
   gidnumber = 5507
 `
 
-	cfgPath := filepath.Join(t.TempDir(), "glauth-integration.cfg")
+	cfgPath := filepath.Join(tb.TempDir(), "glauth-integration.cfg")
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
-		t.Fatalf("write glauth config: %v", err)
+		tb.Fatalf("write glauth config: %v", err)
 	}
 	return cfgPath
 }
@@ -2674,8 +2833,8 @@ func tamperFirstChunkSignatureForTest(t *testing.T, encoded string) string {
 	return string(out)
 }
 
-func NewS3Client(t *testing.T, ctx context.Context, endpoint, region, accessKey, secretKey string) *s3.Client {
-	t.Helper()
+func NewS3Client(tb testing.TB, ctx context.Context, endpoint, region, accessKey, secretKey string) *s3.Client {
+	tb.Helper()
 
 	awsCfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion(region),
@@ -2684,7 +2843,7 @@ func NewS3Client(t *testing.T, ctx context.Context, endpoint, region, accessKey,
 		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 	)
 	if err != nil {
-		t.Fatalf("load aws config for %s: %v", endpoint, err)
+		tb.Fatalf("load aws config for %s: %v", endpoint, err)
 	}
 
 	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
@@ -2711,18 +2870,18 @@ func newMinioGatewayClient(t *testing.T, gatewayURL, accessKey, secretKey string
 	return client
 }
 
-func pathRelative(t *testing.T, elems ...string) string {
-	t.Helper()
+func pathRelative(tb testing.TB, elems ...string) string {
+	tb.Helper()
 	p := filepath.Join(elems...)
 	abs, err := filepath.Abs(p)
 	if err != nil {
-		t.Fatalf("abs path: %v", err)
+		tb.Fatalf("abs path: %v", err)
 	}
 	return abs
 }
 
-func StartMinio(ctx context.Context, t *testing.T, accessKey string, secretKey string) (string, func()) {
-	t.Helper()
+func StartMinio(ctx context.Context, tb testing.TB, accessKey string, secretKey string) (string, func()) {
+	tb.Helper()
 
 	req := testcontainers.ContainerRequest{
 		Image:        "minio/minio:latest",
@@ -2750,17 +2909,17 @@ func StartMinio(ctx context.Context, t *testing.T, accessKey string, secretKey s
 		},
 	)
 	if err != nil {
-		t.Fatalf("failed to start minio container: %v", err)
+		tb.Fatalf("failed to start minio container: %v", err)
 	}
 
 	host, err := container.Host(ctx)
 	if err != nil {
-		t.Fatalf("get host: %v", err)
+		tb.Fatalf("get host: %v", err)
 	}
 
 	port, err := container.MappedPort(ctx, "9000/tcp")
 	if err != nil {
-		t.Fatalf("get mapped port: %v", err)
+		tb.Fatalf("get mapped port: %v", err)
 	}
 
 	endpoint := fmt.Sprintf("http://%s:%s", host, port.Port())
