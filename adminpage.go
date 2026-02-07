@@ -4,15 +4,19 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"html/template"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
@@ -23,6 +27,7 @@ const (
 	defaultAdminSessionTTL = 30 * time.Minute
 	adminSessionValueUser  = "username"
 	adminSessionValueGrps  = "groups"
+	adminPreviewMaxKeys    = int32(25)
 )
 
 func isBrowser(r *http.Request) bool {
@@ -54,7 +59,7 @@ func normalizeAdminRoutePath(path string) string {
 
 func isAdminRoute(path string) bool {
 	switch normalizeAdminRoutePath(path) {
-	case "/", "/login", "/admin", "/logout":
+	case "/", "/login", "/admin", "/admin/bucket", "/logout":
 		return true
 	default:
 		return false
@@ -71,7 +76,27 @@ type adminGroupAccessView struct {
 	BucketPrefix      string
 	PermissionLetters string
 	Permissions       []adminPermissionView
-	Buckets           []string
+	Buckets           []adminBucketView
+}
+
+type adminBucketView struct {
+	Name             string
+	CanRead          bool
+	ObjectKeys       []string
+	ObjectsTruncated bool
+	ObjectListError  string
+}
+
+type adminBucketPageData struct {
+	Username    string
+	BucketName  string
+	Error       string
+	GeneratedAt string
+	ObjectKeys  []string
+	HasNext     bool
+	HasPrev     bool
+	NextURL     string
+	PrevURL     string
 }
 
 type adminPageData struct {
@@ -453,7 +478,7 @@ func permViews(perm Perm) []adminPermissionView {
 	return out
 }
 
-func buildAdminGroupAccess(groups map[string]struct{}, buckets []string) ([]adminGroupAccessView, []string) {
+func buildAdminGroupAccess(groups map[string]struct{}, buckets []string, previews map[string]adminBucketView) ([]adminGroupAccessView, []string) {
 	allBuckets := make([]string, 0, len(buckets))
 	for _, bucket := range buckets {
 		bucket = strings.TrimSpace(bucket)
@@ -479,11 +504,18 @@ func buildAdminGroupAccess(groups map[string]struct{}, buckets []string) ([]admi
 			BucketPrefix:      bucketPrefix,
 			PermissionLetters: permLetters(perm),
 			Permissions:       permViews(perm),
-			Buckets:           make([]string, 0),
+			Buckets:           make([]adminBucketView, 0),
 		}
 		for _, bucket := range allBuckets {
 			if strings.HasPrefix(strings.ToLower(bucket), bucketPrefix) {
-				row.Buckets = append(row.Buckets, bucket)
+				bucketView, ok := previews[bucket]
+				if !ok {
+					bucketView = adminBucketView{Name: bucket}
+				}
+				if bucketView.Name == "" {
+					bucketView.Name = bucket
+				}
+				row.Buckets = append(row.Buckets, bucketView)
 			}
 		}
 
@@ -502,7 +534,10 @@ func countUniqueBuckets(rows []adminGroupAccessView) int {
 	seen := make(map[string]struct{})
 	for _, row := range rows {
 		for _, bucket := range row.Buckets {
-			seen[bucket] = struct{}{}
+			if bucket.Name == "" {
+				continue
+			}
+			seen[bucket.Name] = struct{}{}
 		}
 	}
 	return len(seen)
@@ -534,6 +569,112 @@ func (s *server) listAllBuckets(ctx context.Context) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+func (s *server) listBucketObjectKeys(ctx context.Context, bucket, continuationToken string, maxKeys int32) ([]string, string, bool, error) {
+	if s == nil {
+		return nil, "", false, errors.New("server not configured")
+	}
+	if s.up == nil {
+		return nil, "", false, errors.New("upstream s3 client is not configured")
+	}
+	if strings.TrimSpace(bucket) == "" {
+		return nil, "", false, errors.New("bucket is required")
+	}
+	if maxKeys <= 0 {
+		maxKeys = adminPreviewMaxKeys
+	}
+
+	in := &s3.ListObjectsV2Input{
+		Bucket:  &bucket,
+		MaxKeys: aws.Int32(maxKeys),
+	}
+	if tok := strings.TrimSpace(continuationToken); tok != "" {
+		in.ContinuationToken = aws.String(tok)
+	}
+
+	out, err := s.up.ListObjectsV2(ctx, in)
+	if err != nil {
+		return nil, "", false, err
+	}
+
+	keys := make([]string, 0, len(out.Contents))
+	for _, obj := range out.Contents {
+		if obj.Key == nil {
+			continue
+		}
+		key := strings.TrimSpace(*obj.Key)
+		if key == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	return keys, strings.TrimSpace(aws.ToString(out.NextContinuationToken)), out.IsTruncated != nil && *out.IsTruncated, nil
+}
+
+func (s *server) bucketPreviewsForGroups(groups map[string]struct{}, buckets []string) map[string]adminBucketView {
+	previews := make(map[string]adminBucketView, len(buckets))
+	rules := rulesFromGroups(groups)
+
+	for _, bucket := range buckets {
+		bucket = strings.TrimSpace(bucket)
+		if bucket == "" {
+			continue
+		}
+
+		view := adminBucketView{
+			Name:    bucket,
+			CanRead: canRead(rules, bucket),
+		}
+		previews[bucket] = view
+	}
+
+	return previews
+}
+
+func decodeAdminCursorHistory(raw string) ([]string, error) {
+	v := strings.TrimSpace(raw)
+	if v == "" {
+		return nil, nil
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(v)
+	if err != nil {
+		return nil, err
+	}
+
+	var history []string
+	if err := json.Unmarshal(payload, &history); err != nil {
+		return nil, err
+	}
+	for i := range history {
+		history[i] = strings.TrimSpace(history[i])
+	}
+	return history, nil
+}
+
+func encodeAdminCursorHistory(history []string) string {
+	if len(history) == 0 {
+		return ""
+	}
+
+	payload, err := json.Marshal(history)
+	if err != nil {
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func adminBucketPageURL(bucket, cursor string, history []string) string {
+	q := url.Values{}
+	q.Set("name", bucket)
+	if strings.TrimSpace(cursor) != "" {
+		q.Set("cursor", cursor)
+	}
+	if encoded := encodeAdminCursorHistory(history); encoded != "" {
+		q.Set("history", encoded)
+	}
+	return "/admin/bucket?" + q.Encode()
 }
 
 func (s *server) currentAdminSession(r *http.Request) (adminSession, *sessions.Session, bool) {
@@ -581,6 +722,15 @@ func writeAdminDashboardPage(w http.ResponseWriter, r *http.Request, status int,
 		return
 	}
 	_ = adminDashboardTmpl.Execute(w, data)
+}
+
+func writeAdminBucketPage(w http.ResponseWriter, r *http.Request, status int, data adminBucketPageData) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if r.Method == http.MethodHead {
+		return
+	}
+	_ = adminBucketTmpl.Execute(w, data)
 }
 
 func handleAdminRoot(w http.ResponseWriter, r *http.Request) {
@@ -701,17 +851,103 @@ func handleAdminDashboard(s *server, w http.ResponseWriter, r *http.Request) {
 	buckets, err := s.listAllBuckets(r.Context())
 	if err != nil {
 		data.Error = "Could not list S3 buckets."
-		data.Groups, data.IgnoredGroups = buildAdminGroupAccess(session.Groups, nil)
+		data.Groups, data.IgnoredGroups = buildAdminGroupAccess(session.Groups, nil, nil)
 		data.GroupCount = len(data.Groups)
 		writeAdminDashboardPage(w, r, http.StatusBadGateway, data)
 		return
 	}
 
-	data.Groups, data.IgnoredGroups = buildAdminGroupAccess(session.Groups, buckets)
+	previews := s.bucketPreviewsForGroups(session.Groups, buckets)
+	data.Groups, data.IgnoredGroups = buildAdminGroupAccess(session.Groups, buckets, previews)
 	data.GroupCount = len(data.Groups)
 	data.TotalBuckets = countUniqueBuckets(data.Groups)
 
 	writeAdminDashboardPage(w, r, http.StatusOK, data)
+}
+
+func handleAdminBucketPage(s *server, w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+	default:
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+
+	session, webSession, ok := s.currentAdminSession(r)
+	if !ok {
+		if webSession != nil {
+			clearAdminSession(w, r, webSession)
+		}
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	bucket := strings.TrimSpace(r.URL.Query().Get("name"))
+	if bucket == "" {
+		writeAdminBucketPage(w, r, http.StatusBadRequest, adminBucketPageData{
+			Username:    session.Username,
+			Error:       "Bucket name is required.",
+			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		})
+		return
+	}
+
+	rules := rulesFromGroups(session.Groups)
+	if !canRead(rules, bucket) {
+		writeAdminBucketPage(w, r, http.StatusForbidden, adminBucketPageData{
+			Username:    session.Username,
+			BucketName:  bucket,
+			Error:       "Read permission is required for this bucket.",
+			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		})
+		return
+	}
+
+	cursor := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	history, err := decodeAdminCursorHistory(r.URL.Query().Get("history"))
+	if err != nil {
+		writeAdminBucketPage(w, r, http.StatusBadRequest, adminBucketPageData{
+			Username:    session.Username,
+			BucketName:  bucket,
+			Error:       "Invalid pagination cursor state.",
+			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		})
+		return
+	}
+
+	keys, nextCursor, truncated, err := s.listBucketObjectKeys(r.Context(), bucket, cursor, adminPreviewMaxKeys)
+	if err != nil {
+		writeAdminBucketPage(w, r, http.StatusBadGateway, adminBucketPageData{
+			Username:    session.Username,
+			BucketName:  bucket,
+			Error:       "Could not list bucket objects.",
+			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		})
+		return
+	}
+
+	data := adminBucketPageData{
+		Username:    session.Username,
+		BucketName:  bucket,
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		ObjectKeys:  keys,
+	}
+
+	if len(history) > 0 {
+		prevCursor := history[len(history)-1]
+		prevHistory := append([]string(nil), history[:len(history)-1]...)
+		data.HasPrev = true
+		data.PrevURL = adminBucketPageURL(bucket, prevCursor, prevHistory)
+	}
+
+	if truncated && nextCursor != "" {
+		nextHistory := append(append([]string(nil), history...), cursor)
+		data.HasNext = true
+		data.NextURL = adminBucketPageURL(bucket, nextCursor, nextHistory)
+	}
+
+	writeAdminBucketPage(w, r, http.StatusOK, data)
 }
 
 func handleAdminLogout(s *server, w http.ResponseWriter, r *http.Request) {
@@ -740,6 +976,8 @@ func adminWebpageHandler(s *server) http.Handler {
 			handleAdminLogin(s, w, r)
 		case "/admin":
 			handleAdminDashboard(s, w, r)
+		case "/admin/bucket":
+			handleAdminBucketPage(s, w, r)
 		case "/logout":
 			handleAdminLogout(s, w, r)
 		default:
@@ -1051,7 +1289,14 @@ var adminDashboardTmpl = template.Must(template.New("admin-dashboard-page").Pars
               {{if .Buckets}}
               <ul>
                 {{range .Buckets}}
-                <li><code>{{.}}</code></li>
+                <li>
+                  {{if .CanRead}}
+                  <a href="/admin/bucket?name={{.Name | urlquery}}"><code>{{.Name}}</code></a>
+                  {{else}}
+                  <code>{{.Name}}</code>
+                  <div class="muted">Read permission required to list objects.</div>
+                  {{end}}
+                </li>
                 {{end}}
               </ul>
               {{else}}
@@ -1075,6 +1320,112 @@ var adminDashboardTmpl = template.Must(template.New("admin-dashboard-page").Pars
         {{end}}
       </ul>
       {{end}}
+    </section>
+  </main>
+</body>
+</html>`))
+
+var adminBucketTmpl = template.Must(template.New("admin-bucket-page").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>S3 Bucket Viewer</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --text: #10212f;
+      --muted: #5f7283;
+      --accent: #0b5cab;
+      --border: #d6dce2;
+      --error: #b00020;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Avenir Next", "Trebuchet MS", sans-serif;
+      background: linear-gradient(160deg, #f4f6f8 0%, #dde8f1 100%);
+      color: var(--text);
+    }
+    main {
+      max-width: 980px;
+      margin: 2rem auto;
+      padding: 0 1rem 2rem;
+      display: grid;
+      gap: 1rem;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      box-shadow: 0 2px 8px rgba(16, 33, 47, 0.06);
+    }
+    .muted { color: var(--muted); }
+    .error {
+      margin-top: 0.75rem;
+      color: var(--error);
+      font-weight: 600;
+    }
+    ul {
+      margin: 0;
+      padding-left: 1rem;
+    }
+    .actions {
+      display: flex;
+      gap: 0.75rem;
+      margin-top: 1rem;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-block;
+      border-radius: 6px;
+      padding: 0.55rem 0.85rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: #fff;
+      background: var(--accent);
+      text-decoration: none;
+    }
+    .btn.disabled {
+      opacity: 0.45;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <p><a href="/admin">Back to admin</a></p>
+      <h1>Bucket: <code>{{.BucketName}}</code></h1>
+      <p>Signed in as <strong>{{.Username}}</strong></p>
+      <p class="muted">Generated: {{.GeneratedAt}}</p>
+      {{if .Error}}
+      <p class="error">{{.Error}}</p>
+      {{else if .ObjectKeys}}
+      <ul>
+        {{range .ObjectKeys}}
+        <li><code>{{.}}</code></li>
+        {{end}}
+      </ul>
+      {{else}}
+      <p class="muted">No objects found.</p>
+      {{end}}
+
+      <div class="actions">
+        {{if .HasPrev}}
+        <a class="btn" href="{{.PrevURL}}">Prev</a>
+        {{else}}
+        <span class="btn disabled">Prev</span>
+        {{end}}
+
+        {{if .HasNext}}
+        <a class="btn" href="{{.NextURL}}">Next</a>
+        {{else}}
+        <span class="btn disabled">Next</span>
+        {{end}}
+      </div>
     </section>
   </main>
 </body>

@@ -21,7 +21,17 @@ func TestBuildAdminGroupAccess(t *testing.T) {
 		"misc",
 	}
 
-	rows, ignored := buildAdminGroupAccess(groups, buckets)
+	previews := map[string]adminBucketView{
+		"team2-data": {Name: "team2-data", CanRead: true, ObjectKeys: []string{"a.txt"}},
+		"team2-logs": {Name: "team2-logs", CanRead: true, ObjectKeys: []string{"b.txt"}},
+		"team3-archive": {
+			Name:            "team3-archive",
+			CanRead:         false,
+			ObjectListError: "",
+		},
+	}
+
+	rows, ignored := buildAdminGroupAccess(groups, buckets, previews)
 	if len(rows) != 2 {
 		t.Fatalf("row count mismatch: got=%d want=%d", len(rows), 2)
 	}
@@ -35,8 +45,11 @@ func TestBuildAdminGroupAccess(t *testing.T) {
 	if rows[0].PermissionLetters != "rw" {
 		t.Fatalf("team2 permission letters mismatch: got=%q want=%q", rows[0].PermissionLetters, "rw")
 	}
-	if got := strings.Join(rows[0].Buckets, ","); got != "team2-data,team2-logs" {
+	if got := strings.Join([]string{rows[0].Buckets[0].Name, rows[0].Buckets[1].Name}, ","); got != "team2-data,team2-logs" {
 		t.Fatalf("team2 buckets mismatch: got=%q want=%q", got, "team2-data,team2-logs")
+	}
+	if got := strings.Join(rows[0].Buckets[0].ObjectKeys, ","); got != "a.txt" {
+		t.Fatalf("team2-data object list mismatch: got=%q want=%q", got, "a.txt")
 	}
 
 	if rows[1].GroupName != "team3-cdb" {
@@ -45,15 +58,15 @@ func TestBuildAdminGroupAccess(t *testing.T) {
 	if rows[1].PermissionLetters != "cdb" {
 		t.Fatalf("team3 permission letters mismatch: got=%q want=%q", rows[1].PermissionLetters, "cdb")
 	}
-	if got := strings.Join(rows[1].Buckets, ","); got != "team3-archive" {
+	if got := strings.Join([]string{rows[1].Buckets[0].Name}, ","); got != "team3-archive" {
 		t.Fatalf("team3 buckets mismatch: got=%q want=%q", got, "team3-archive")
 	}
 }
 
 func TestCountUniqueBuckets(t *testing.T) {
 	rows := []adminGroupAccessView{
-		{Buckets: []string{"team2-a", "team2-b"}},
-		{Buckets: []string{"team2-b", "team3-c"}},
+		{Buckets: []adminBucketView{{Name: "team2-a"}, {Name: "team2-b"}}},
+		{Buckets: []adminBucketView{{Name: "team2-b"}, {Name: "team3-c"}}},
 	}
 
 	if got := countUniqueBuckets(rows); got != 3 {
@@ -94,6 +107,7 @@ func TestIsAdminRoute(t *testing.T) {
 		{path: "/", want: true},
 		{path: "/login", want: true},
 		{path: "/admin", want: true},
+		{path: "/admin/bucket", want: true},
 		{path: "/logout", want: true},
 		{path: "/login/", want: true},
 		{path: "/team2-bucket", want: false},
@@ -209,7 +223,7 @@ func TestAdminDashboardRequiresSession(t *testing.T) {
 func TestAdminDashboardWithSessionRendersGroupsAndBuckets(t *testing.T) {
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/" {
-			t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
+			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 		}
 		w.Header().Set("Content-Type", "application/xml")
 		w.WriteHeader(http.StatusOK)
@@ -218,6 +232,7 @@ func TestAdminDashboardWithSessionRendersGroupsAndBuckets(t *testing.T) {
   <Owner><ID>owner</ID><DisplayName>owner</DisplayName></Owner>
   <Buckets>
     <Bucket><Name>team2-logs</Name></Bucket>
+    <Bucket><Name>team3-writeonly</Name></Bucket>
     <Bucket><Name>team9-hidden</Name></Bucket>
   </Buckets>
 </ListAllMyBucketsResult>`))
@@ -226,6 +241,7 @@ func TestAdminDashboardWithSessionRendersGroupsAndBuckets(t *testing.T) {
 
 	gw.gcache.set("alice", "secret", map[string]struct{}{
 		"team2-rw":   {},
+		"team3-w":    {},
 		"misc-group": {},
 	})
 
@@ -272,8 +288,109 @@ func TestAdminDashboardWithSessionRendersGroupsAndBuckets(t *testing.T) {
 	if !strings.Contains(body, "team2-logs") {
 		t.Fatalf("missing bucket in admin page: %q", body)
 	}
+	if !strings.Contains(body, "/admin/bucket?name=team2-logs") {
+		t.Fatalf("missing bucket link for readable bucket in admin page: %q", body)
+	}
+	if !strings.Contains(body, "Read permission required to list objects.") {
+		t.Fatalf("missing no-read-permission message in admin page: %q", body)
+	}
 	if strings.Contains(body, "team9-hidden") {
 		t.Fatalf("unexpected bucket shown in admin page: %q", body)
+	}
+}
+
+func TestAdminBucketPagePagination(t *testing.T) {
+	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/team2-logs" || r.URL.Query().Get("list-type") != "2" {
+			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if r.URL.Query().Get("max-keys") != "25" {
+			t.Fatalf("expected max-keys=25, got %q", r.URL.Query().Get("max-keys"))
+		}
+
+		w.Header().Set("Content-Type", "application/xml")
+		switch r.URL.Query().Get("continuation-token") {
+		case "":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>team2-logs</Name>
+  <IsTruncated>true</IsTruncated>
+  <NextContinuationToken>tok2</NextContinuationToken>
+  <Contents><Key>logs/p1.txt</Key></Contents>
+</ListBucketResult>`))
+		case "tok2":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>team2-logs</Name>
+  <IsTruncated>false</IsTruncated>
+  <Contents><Key>logs/p2.txt</Key></Contents>
+</ListBucketResult>`))
+		default:
+			t.Fatalf("unexpected continuation token: %q", r.URL.Query().Get("continuation-token"))
+		}
+	})
+	defer cleanup()
+
+	gw.gcache.set("alice", "secret", map[string]struct{}{
+		"team2-r": {},
+	})
+	handler := adminWebpageHandler(gw)
+
+	loginForm := url.Values{
+		"username": []string{"alice"},
+		"password": []string{"secret"},
+	}
+	loginReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(loginForm.Encode()))
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginRR := httptest.NewRecorder()
+	handler.ServeHTTP(loginRR, loginReq)
+	if loginRR.Code != http.StatusSeeOther {
+		t.Fatalf("login status mismatch: got=%d want=%d body=%s", loginRR.Code, http.StatusSeeOther, loginRR.Body.String())
+	}
+
+	var sessionCookie *http.Cookie
+	for _, ck := range loginRR.Result().Cookies() {
+		if ck.Name == adminSessionCookieName && ck.Value != "" {
+			clone := *ck
+			sessionCookie = &clone
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatalf("missing session cookie from login response")
+	}
+
+	page1Req := httptest.NewRequest(http.MethodGet, "/admin/bucket?name=team2-logs", nil)
+	page1Req.AddCookie(sessionCookie)
+	page1RR := httptest.NewRecorder()
+	handler.ServeHTTP(page1RR, page1Req)
+	if page1RR.Code != http.StatusOK {
+		t.Fatalf("page1 status mismatch: got=%d want=%d body=%s", page1RR.Code, http.StatusOK, page1RR.Body.String())
+	}
+	page1Body := page1RR.Body.String()
+	if !strings.Contains(page1Body, "logs/p1.txt") {
+		t.Fatalf("missing page1 object key: %q", page1Body)
+	}
+	if !strings.Contains(page1Body, "cursor=tok2") {
+		t.Fatalf("missing next cursor on page1: %q", page1Body)
+	}
+
+	page2URL := adminBucketPageURL("team2-logs", "tok2", []string{""})
+	page2Req := httptest.NewRequest(http.MethodGet, page2URL, nil)
+	page2Req.AddCookie(sessionCookie)
+	page2RR := httptest.NewRecorder()
+	handler.ServeHTTP(page2RR, page2Req)
+	if page2RR.Code != http.StatusOK {
+		t.Fatalf("page2 status mismatch: got=%d want=%d body=%s", page2RR.Code, http.StatusOK, page2RR.Body.String())
+	}
+	page2Body := page2RR.Body.String()
+	if !strings.Contains(page2Body, "logs/p2.txt") {
+		t.Fatalf("missing page2 object key: %q", page2Body)
+	}
+	if !strings.Contains(page2Body, `href="/admin/bucket?name=team2-logs"`) {
+		t.Fatalf("missing prev link on page2: %q", page2Body)
 	}
 }
 
