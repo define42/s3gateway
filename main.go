@@ -232,13 +232,26 @@ func (c *groupCache) set(upn, password string, groups map[string]struct{}) {
 	}
 }
 
-// ==================== AuthZ: <prefix>-r / <prefix>-rw => bucket prefix "<prefix>-" ====================
-type Perm int
+// ==================== AuthZ: <prefix>-<letters> => bucket prefix "<prefix>-" ====================
+// Permission letters:
+//
+//	r = read
+//	w = write
+//	c = create bucket
+//	d = delete object(s)
+//	b = delete bucket
+type Perm uint32
 
 const (
-	PermNone Perm = iota
-	PermRead
-	PermReadWrite
+	PermNone Perm = 0
+
+	PermRead Perm = 1 << iota
+	PermWrite
+	PermCreateBucket
+	PermDeleteObject
+	PermDeleteBucket
+
+	PermReadWrite = PermRead | PermWrite
 )
 
 type Rule struct {
@@ -254,9 +267,7 @@ func rulesFromGroups(groups map[string]struct{}) []Rule {
 			continue
 		}
 		bp := strings.ToLower(prefix) + "-"
-		if cur, ok := byPrefix[bp]; !ok || perm > cur {
-			byPrefix[bp] = perm
-		}
+		byPrefix[bp] |= perm
 	}
 	out := make([]Rule, 0, len(byPrefix))
 	for p, perm := range byPrefix {
@@ -267,31 +278,61 @@ func rulesFromGroups(groups map[string]struct{}) []Rule {
 
 func parseGroup(g string) (prefix string, perm Perm, ok bool) {
 	g = strings.ToLower(strings.TrimSpace(g))
-	switch {
-	case strings.HasSuffix(g, "-rw"):
-		p := strings.TrimSpace(strings.TrimSuffix(g, "-rw"))
-		return p, PermReadWrite, p != ""
-	case strings.HasSuffix(g, "-r"):
-		p := strings.TrimSpace(strings.TrimSuffix(g, "-r"))
-		return p, PermRead, p != ""
-	default:
+	i := strings.LastIndex(g, "-")
+	if i <= 0 || i >= len(g)-1 {
 		return "", PermNone, false
 	}
+	p := strings.TrimSpace(g[:i])
+	letters := strings.TrimSpace(g[i+1:])
+	if p == "" || letters == "" {
+		return "", PermNone, false
+	}
+
+	var out Perm
+	for _, ch := range letters {
+		switch ch {
+		case 'r':
+			out |= PermRead
+		case 'w':
+			out |= PermWrite
+		case 'c':
+			out |= PermCreateBucket
+		case 'd':
+			out |= PermDeleteObject
+		case 'b':
+			out |= PermDeleteBucket
+		default:
+			return "", PermNone, false
+		}
+	}
+	if out == PermNone {
+		return "", PermNone, false
+	}
+	return p, out, true
 }
 
 func bucketPerm(rules []Rule, bucket string) Perm {
 	b := strings.ToLower(bucket)
 	best := PermNone
 	for _, r := range rules {
-		if strings.HasPrefix(b, r.BucketPrefix) && r.Perm > best {
-			best = r.Perm
+		if strings.HasPrefix(b, r.BucketPrefix) {
+			best |= r.Perm
 		}
 	}
 	return best
 }
 
-func canRead(rules []Rule, bucket string) bool  { return bucketPerm(rules, bucket) >= PermRead }
-func canWrite(rules []Rule, bucket string) bool { return bucketPerm(rules, bucket) >= PermReadWrite }
+func canRead(rules []Rule, bucket string) bool  { return bucketPerm(rules, bucket)&PermRead != 0 }
+func canWrite(rules []Rule, bucket string) bool { return bucketPerm(rules, bucket)&PermWrite != 0 }
+func canCreateBucket(rules []Rule, bucket string) bool {
+	return bucketPerm(rules, bucket)&PermCreateBucket != 0
+}
+func canDeleteObject(rules []Rule, bucket string) bool {
+	return bucketPerm(rules, bucket)&PermDeleteObject != 0
+}
+func canDeleteBucket(rules []Rule, bucket string) bool {
+	return bucketPerm(rules, bucket)&PermDeleteBucket != 0
+}
 
 // ==================== Upstream S3 client (service creds) ====================
 //
@@ -1587,7 +1628,7 @@ func (s *server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
 		if bk.Name == nil {
 			continue
 		}
-		if bucketPerm(rules, *bk.Name) >= PermRead {
+		if canRead(rules, *bk.Name) {
 			b.WriteString("<Bucket><Name>")
 			b.WriteString(xmlEscape(*bk.Name))
 			b.WriteString("</Name></Bucket>")
@@ -1602,7 +1643,7 @@ func (s *server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleCreateBucket(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
-	if !canWrite(rules, bucket) {
+	if !canCreateBucket(rules, bucket) {
 		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
@@ -2421,7 +2462,7 @@ func (s *server) handleHeadBucket(w http.ResponseWriter, r *http.Request, bucket
 
 func (s *server) handleDeleteBucket(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
-	if !canWrite(rules, bucket) {
+	if !canDeleteBucket(rules, bucket) {
 		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
@@ -2500,7 +2541,7 @@ func (s *server) handleGetBucketVersioning(w http.ResponseWriter, r *http.Reques
 
 func (s *server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
-	if !canWrite(rules, bucket) {
+	if !canDeleteObject(rules, bucket) {
 		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
@@ -4243,7 +4284,7 @@ func (s *server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bu
 
 func (s *server) handleDeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := rulesFromCtx(r)
-	if !canWrite(rules, bucket) {
+	if !canDeleteObject(rules, bucket) {
 		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}

@@ -412,3 +412,109 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 		}
 	})
 }
+
+func TestParseGroupPermissions(t *testing.T) {
+	tests := []struct {
+		name       string
+		group      string
+		wantPrefix string
+		wantPerm   Perm
+		wantOK     bool
+	}{
+		{
+			name:       "read only",
+			group:      "team2-r",
+			wantPrefix: "team2",
+			wantPerm:   PermRead,
+			wantOK:     true,
+		},
+		{
+			name:       "read write",
+			group:      "team2-rw",
+			wantPrefix: "team2",
+			wantPerm:   PermRead | PermWrite,
+			wantOK:     true,
+		},
+		{
+			name:       "full letters mixed order",
+			group:      "team2-bcdwr",
+			wantPrefix: "team2",
+			wantPerm:   PermRead | PermWrite | PermCreateBucket | PermDeleteObject | PermDeleteBucket,
+			wantOK:     true,
+		},
+		{
+			name:       "trimmed and case insensitive",
+			group:      "  TEAM2-RWCDB  ",
+			wantPrefix: "team2",
+			wantPerm:   PermRead | PermWrite | PermCreateBucket | PermDeleteObject | PermDeleteBucket,
+			wantOK:     true,
+		},
+		{
+			name:   "missing prefix",
+			group:  "-r",
+			wantOK: false,
+		},
+		{
+			name:   "missing permission letters",
+			group:  "team2-",
+			wantOK: false,
+		},
+		{
+			name:   "unsupported permission letter",
+			group:  "team2-rx",
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPrefix, gotPerm, gotOK := parseGroup(tt.group)
+			if gotOK != tt.wantOK {
+				t.Fatalf("parseGroup() ok = %v, want %v", gotOK, tt.wantOK)
+			}
+			if !gotOK {
+				return
+			}
+			if gotPrefix != tt.wantPrefix {
+				t.Fatalf("parseGroup() prefix = %q, want %q", gotPrefix, tt.wantPrefix)
+			}
+			if gotPerm != tt.wantPerm {
+				t.Fatalf("parseGroup() perm = %v, want %v", gotPerm, tt.wantPerm)
+			}
+		})
+	}
+}
+
+func TestRulesFromGroupsCombinesPermissions(t *testing.T) {
+	rules := rulesFromGroups(map[string]struct{}{
+		"team2-r": {},
+		"team2-w": {},
+		"team2-c": {},
+		"team2-d": {},
+		"team2-b": {},
+	})
+	bucket := "team2-bucket"
+
+	if !canRead(rules, bucket) {
+		t.Fatalf("expected read permission")
+	}
+	if !canWrite(rules, bucket) {
+		t.Fatalf("expected write permission")
+	}
+	if !canCreateBucket(rules, bucket) {
+		t.Fatalf("expected create-bucket permission")
+	}
+	if !canDeleteObject(rules, bucket) {
+		t.Fatalf("expected delete-object permission")
+	}
+	if !canDeleteBucket(rules, bucket) {
+		t.Fatalf("expected delete-bucket permission")
+	}
+
+	readOnlyRules := rulesFromGroups(map[string]struct{}{
+		"team2-r": {},
+	})
+	if canWrite(readOnlyRules, bucket) || canCreateBucket(readOnlyRules, bucket) || canDeleteObject(readOnlyRules, bucket) || canDeleteBucket(readOnlyRules, bucket) {
+		t.Fatalf("read-only permissions unexpectedly granted write/create/delete")
+	}
+}

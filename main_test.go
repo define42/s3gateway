@@ -60,7 +60,16 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 		t.Fatalf("ldap auth/group lookup failed: %v", err)
 	}
 	if !canWrite(rulesFromGroups(grps), "team2-integration-check") {
-		t.Fatalf("expected team2-rw write permission, got groups: %v", mapKeys(grps))
+		t.Fatalf("expected team2-rwcdb write permission, got groups: %v", mapKeys(grps))
+	}
+	if !canCreateBucket(rulesFromGroups(grps), "team2-integration-check") {
+		t.Fatalf("expected team2-rwcdb create-bucket permission, got groups: %v", mapKeys(grps))
+	}
+	if !canDeleteObject(rulesFromGroups(grps), "team2-integration-check") {
+		t.Fatalf("expected team2-rwcdb delete-object permission, got groups: %v", mapKeys(grps))
+	}
+	if !canDeleteBucket(rulesFromGroups(grps), "team2-integration-check") {
+		t.Fatalf("expected team2-rwcdb delete-bucket permission, got groups: %v", mapKeys(grps))
 	}
 	roGrps, err := fetchGroupsUPN(cfg, "readonly@example.com", "dogood")
 	if err != nil {
@@ -69,6 +78,9 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	roRules := rulesFromGroups(roGrps)
 	if !canRead(roRules, "team2-integration-check") || canWrite(roRules, "team2-integration-check") {
 		t.Fatalf("expected team2-r read-only permission, got groups: %v", mapKeys(roGrps))
+	}
+	if canCreateBucket(roRules, "team2-integration-check") || canDeleteObject(roRules, "team2-integration-check") || canDeleteBucket(roRules, "team2-integration-check") {
+		t.Fatalf("expected team2-r to deny create/delete permissions, got groups: %v", mapKeys(roGrps))
 	}
 
 	up, err := newUpstreamS3(ctx, cfg)
@@ -2510,7 +2522,7 @@ debug = true
     object = "*"
 
 [[groups]]
-  name = "team2-rw"
+  name = "team2-rwcdb"
   gidnumber = 5506
 
 [[groups]]

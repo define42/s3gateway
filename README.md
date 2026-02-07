@@ -28,14 +28,21 @@ Important:
 LDAP groups define bucket prefix permissions:
 
 - `<prefix>-r` -> read access
-- `<prefix>-rw` -> read/write access
+- `<prefix>-w` -> write access
+- `<prefix>-c` -> create bucket
+- `<prefix>-d` -> delete object(s)
+- `<prefix>-b` -> delete bucket
 
-Gateway maps each group to bucket prefix `<prefix>-` and grants the strongest matching permission.
+You can combine permission letters in one group, for example:
+
+- `<prefix>-rwcdb` -> full access for this gateway's operations
+
+Gateway maps each group to bucket prefix `<prefix>-` and combines matching permissions.
 
 Examples:
 
 - `team2-r` can read buckets like `team2-logs`, `team2-data`.
-- `team2-rw` can read and write those buckets.
+- `team2-rwcdb` can read, write, create buckets, delete objects, and delete buckets.
 
 For copy operations (`CopyObject`, `UploadPartCopy`):
 
