@@ -145,6 +145,7 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	bucket := fmt.Sprintf("team2-boot-%d", time.Now().UnixNano())
 	key := "boot/object.txt"
 	sseKey := "boot/object-sse-aes256.txt"
+	mpuKey := "boot/multipart/pending.bin"
 	payload := []byte("bootS3Gateway integration payload")
 	ssePayload := []byte("bootS3Gateway integration payload (sse aes256)")
 
@@ -327,6 +328,92 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	}
 	if !minioSeen[key] {
 		t.Fatalf("minio list objects via gateway missing %q; got=%v", key, minioSeen)
+	}
+
+	mpuCreateOut, err := rwClient.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(mpuKey),
+	})
+	if err != nil {
+		t.Fatalf("create multipart upload through booted gateway: %v", err)
+	}
+	if mpuCreateOut.UploadId == nil || *mpuCreateOut.UploadId == "" {
+		t.Fatalf("create multipart upload should return non-empty upload id")
+	}
+	mpuPartBody := []byte("x")
+	if _, err := rwClient.UploadPart(ctx, &s3.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(mpuKey),
+		UploadId:      mpuCreateOut.UploadId,
+		PartNumber:    aws.Int32(1),
+		Body:          bytes.NewReader(mpuPartBody),
+		ContentLength: aws.Int64(int64(len(mpuPartBody))),
+	}); err != nil {
+		t.Fatalf("upload part for multipart upload through booted gateway: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = rwClient.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+			Bucket:   aws.String(bucket),
+			Key:      aws.String(mpuKey),
+			UploadId: mpuCreateOut.UploadId,
+		})
+	})
+
+	var upstreamMPUList *s3.ListMultipartUploadsOutput
+	var gatewayMPUList *s3.ListMultipartUploadsOutput
+	listDeadline := time.Now().Add(10 * time.Second)
+	for {
+		upstreamMPUList, err = upstreamClient.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+			Bucket: aws.String(bucket),
+		})
+		if err != nil {
+			t.Fatalf("list multipart uploads from upstream: %v", err)
+		}
+		gatewayMPUList, err = rwClient.ListMultipartUploads(ctx, &s3.ListMultipartUploadsInput{
+			Bucket: aws.String(bucket),
+		})
+		if err != nil {
+			t.Fatalf("list multipart uploads through booted gateway: %v", err)
+		}
+		if len(upstreamMPUList.Uploads) > 0 && len(gatewayMPUList.Uploads) > 0 {
+			break
+		}
+		if time.Now().After(listDeadline) {
+			t.Fatalf("multipart upload not visible in list within timeout: upstreamUploads=%d gatewayUploads=%d", len(upstreamMPUList.Uploads), len(gatewayMPUList.Uploads))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	findUploadByKey := func(out *s3.ListMultipartUploadsOutput, wantKey string) *s3types.MultipartUpload {
+		for i := range out.Uploads {
+			u := out.Uploads[i]
+			if aws.ToString(u.Key) == wantKey {
+				return &out.Uploads[i]
+			}
+		}
+		return nil
+	}
+
+	upstreamUpload := findUploadByKey(upstreamMPUList, mpuKey)
+	if upstreamUpload == nil {
+		t.Fatalf("upstream list multipart uploads missing expected upload key=%q", mpuKey)
+	}
+	if upstreamUpload.Initiator == nil {
+		t.Fatalf("upstream multipart upload initiator should not be nil for key=%q", mpuKey)
+	}
+
+	gatewayUpload := findUploadByKey(gatewayMPUList, mpuKey)
+	if gatewayUpload == nil {
+		t.Fatalf("gateway list multipart uploads missing expected upload key=%q", mpuKey)
+	}
+	if gatewayUpload.Initiator == nil {
+		t.Fatalf("gateway multipart upload initiator should not be nil for key=%q", mpuKey)
+	}
+	if aws.ToString(gatewayUpload.Initiator.ID) != aws.ToString(upstreamUpload.Initiator.ID) {
+		t.Fatalf("multipart upload initiator id mismatch: gateway=%q upstream=%q", aws.ToString(gatewayUpload.Initiator.ID), aws.ToString(upstreamUpload.Initiator.ID))
+	}
+	if aws.ToString(gatewayUpload.Initiator.DisplayName) != aws.ToString(upstreamUpload.Initiator.DisplayName) {
+		t.Fatalf("multipart upload initiator display name mismatch: gateway=%q upstream=%q", aws.ToString(gatewayUpload.Initiator.DisplayName), aws.ToString(upstreamUpload.Initiator.DisplayName))
 	}
 
 	roObj, err := roClient.GetObject(ctx, &s3.GetObjectInput{
