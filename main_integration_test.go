@@ -145,6 +145,7 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	bucket := fmt.Sprintf("team2-boot-%d", time.Now().UnixNano())
 	key := "boot/object.txt"
 	sseKey := "boot/object-sse-aes256.txt"
+	getPartKey := "boot/object-multipart-parts.txt"
 	mpuKey := "boot/multipart/pending.bin"
 	payload := []byte("bootS3Gateway integration payload")
 	ssePayload := []byte("bootS3Gateway integration payload (sse aes256)")
@@ -162,6 +163,10 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 		_, _ = rwClient.DeleteObject(ctx, &s3.DeleteObjectInput{
 			Bucket: aws.String(bucket),
 			Key:    aws.String(sseKey),
+		})
+		_, _ = rwClient.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(getPartKey),
 		})
 		_, _ = rwClient.DeleteBucket(ctx, &s3.DeleteBucketInput{
 			Bucket: aws.String(bucket),
@@ -415,6 +420,116 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	if aws.ToString(gatewayUpload.Initiator.DisplayName) != aws.ToString(upstreamUpload.Initiator.DisplayName) {
 		t.Fatalf("multipart upload initiator display name mismatch: gateway=%q upstream=%q", aws.ToString(gatewayUpload.Initiator.DisplayName), aws.ToString(upstreamUpload.Initiator.DisplayName))
 	}
+
+	part1Body := bytes.Repeat([]byte("p"), 5*1024*1024)
+	part2Body := []byte("tail-part-2")
+	getPartCreateOut, err := rwClient.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(getPartKey),
+	})
+	if err != nil {
+		t.Fatalf("create multipart upload for get-object partNumber through booted gateway: %v", err)
+	}
+	getPartCompleted := false
+	t.Cleanup(func() {
+		if getPartCompleted {
+			return
+		}
+		_, _ = rwClient.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+			Bucket:   aws.String(bucket),
+			Key:      aws.String(getPartKey),
+			UploadId: getPartCreateOut.UploadId,
+		})
+	})
+	getPart1Out, err := rwClient.UploadPart(ctx, &s3.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(getPartKey),
+		UploadId:      getPartCreateOut.UploadId,
+		PartNumber:    aws.Int32(1),
+		Body:          bytes.NewReader(part1Body),
+		ContentLength: aws.Int64(int64(len(part1Body))),
+	})
+	if err != nil {
+		t.Fatalf("upload part 1 for get-object partNumber through booted gateway: %v", err)
+	}
+	getPart2Out, err := rwClient.UploadPart(ctx, &s3.UploadPartInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(getPartKey),
+		UploadId:      getPartCreateOut.UploadId,
+		PartNumber:    aws.Int32(2),
+		Body:          bytes.NewReader(part2Body),
+		ContentLength: aws.Int64(int64(len(part2Body))),
+	})
+	if err != nil {
+		t.Fatalf("upload part 2 for get-object partNumber through booted gateway: %v", err)
+	}
+	if _, err := rwClient.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(getPartKey),
+		UploadId: getPartCreateOut.UploadId,
+		MultipartUpload: &s3types.CompletedMultipartUpload{
+			Parts: []s3types.CompletedPart{
+				{PartNumber: aws.Int32(1), ETag: getPart1Out.ETag},
+				{PartNumber: aws.Int32(2), ETag: getPart2Out.ETag},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("complete multipart upload for get-object partNumber through booted gateway: %v", err)
+	}
+	getPartCompleted = true
+
+	assertGetObjectPartMatchesUpstream := func(partNumber int32, wantBody []byte) {
+		t.Helper()
+		upstreamPartOut, upstreamPartErr := upstreamClient.GetObject(ctx, &s3.GetObjectInput{
+			Bucket:     aws.String(bucket),
+			Key:        aws.String(getPartKey),
+			PartNumber: aws.Int32(partNumber),
+		})
+		gatewayPartOut, gatewayPartErr := rwClient.GetObject(ctx, &s3.GetObjectInput{
+			Bucket:     aws.String(bucket),
+			Key:        aws.String(getPartKey),
+			PartNumber: aws.Int32(partNumber),
+		})
+		if (upstreamPartErr != nil) != (gatewayPartErr != nil) {
+			t.Fatalf("get object with partNumber=%d error mismatch: gatewayErr=%v upstreamErr=%v", partNumber, gatewayPartErr, upstreamPartErr)
+		}
+		if upstreamPartErr != nil {
+			var upstreamAPIErr smithy.APIError
+			var gatewayAPIErr smithy.APIError
+			if !errors.As(upstreamPartErr, &upstreamAPIErr) || !errors.As(gatewayPartErr, &gatewayAPIErr) {
+				t.Fatalf("get object with partNumber=%d expected smithy errors: gatewayErr=%v upstreamErr=%v", partNumber, gatewayPartErr, upstreamPartErr)
+			}
+			if gatewayAPIErr.ErrorCode() != upstreamAPIErr.ErrorCode() {
+				t.Fatalf("get object with partNumber=%d error code mismatch: gateway=%q upstream=%q", partNumber, gatewayAPIErr.ErrorCode(), upstreamAPIErr.ErrorCode())
+			}
+			return
+		}
+		defer upstreamPartOut.Body.Close()
+		defer gatewayPartOut.Body.Close()
+
+		upstreamPartBody, err := io.ReadAll(upstreamPartOut.Body)
+		if err != nil {
+			t.Fatalf("read upstream get object partNumber=%d body: %v", partNumber, err)
+		}
+		gatewayPartBody, err := io.ReadAll(gatewayPartOut.Body)
+		if err != nil {
+			t.Fatalf("read gateway get object partNumber=%d body: %v", partNumber, err)
+		}
+		if !bytes.Equal(gatewayPartBody, upstreamPartBody) {
+			t.Fatalf("get object partNumber=%d body mismatch between gateway and upstream", partNumber)
+		}
+		if !bytes.Equal(gatewayPartBody, wantBody) {
+			t.Fatalf("get object partNumber=%d body mismatch: gotLen=%d wantLen=%d", partNumber, len(gatewayPartBody), len(wantBody))
+		}
+		if aws.ToInt64(gatewayPartOut.ContentLength) != aws.ToInt64(upstreamPartOut.ContentLength) {
+			t.Fatalf("get object partNumber=%d content-length mismatch: gateway=%d upstream=%d", partNumber, aws.ToInt64(gatewayPartOut.ContentLength), aws.ToInt64(upstreamPartOut.ContentLength))
+		}
+		if aws.ToInt32(gatewayPartOut.PartsCount) != aws.ToInt32(upstreamPartOut.PartsCount) {
+			t.Fatalf("get object partNumber=%d parts-count mismatch: gateway=%d upstream=%d", partNumber, aws.ToInt32(gatewayPartOut.PartsCount), aws.ToInt32(upstreamPartOut.PartsCount))
+		}
+	}
+	assertGetObjectPartMatchesUpstream(1, part1Body)
+	assertGetObjectPartMatchesUpstream(2, part2Body)
 
 	roObj, err := roClient.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucket),
