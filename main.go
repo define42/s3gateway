@@ -1557,6 +1557,7 @@ type server struct {
 	up               *s3.Client
 	gcache           *groupCache
 	groupLookupSF    singleflight.Group
+	fetchGroups      func(cfg Config, upn, pass string) (map[string]struct{}, error)
 	adminSessions    *adminSessionStore
 	adminWebSessions *adminGorillaStore
 }
@@ -1568,6 +1569,7 @@ func newServer(cfg Config, up *s3.Client) *server {
 		cfg:              cfg,
 		up:               up,
 		gcache:           newGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
+		fetchGroups:      fetchGroupsUPN,
 		adminSessions:    adminSessions,
 		adminWebSessions: newAdminGorillaStore(cfg.SigV4Secret, defaultAdminSessionTTL, adminSessions),
 	}
@@ -1584,11 +1586,15 @@ func (s *server) groupsForCredentials(upn, pass string) (map[string]struct{}, er
 	}
 
 	sfKey := singleflightCredentialKey(upn, pass)
+	fetchGroups := s.fetchGroups
+	if fetchGroups == nil {
+		fetchGroups = fetchGroupsUPN
+	}
 	v, err, _ := s.groupLookupSF.Do(sfKey, func() (any, error) {
 		if cached, ok := s.gcache.get(upn, pass); ok {
 			return cached, nil
 		}
-		fetched, err := fetchGroupsUPN(s.cfg, upn, pass)
+		fetched, err := fetchGroups(s.cfg, upn, pass)
 		if err != nil {
 			return nil, err
 		}
