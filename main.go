@@ -43,6 +43,8 @@ const maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
 const (
 	defaultLDAPDialTimeout   = 5 * time.Second
 	defaultReadyCheckTimeout = 2 * time.Second
+	s3XMLNamespace           = "http://s3.amazonaws.com/doc/2006-03-01/"
+	s3TimeMillisFormat       = "2006-01-02T15:04:05.000Z"
 )
 
 // ==================== Credential hack ====================
@@ -684,7 +686,7 @@ func xmlEscape(s string) string {
 }
 
 func formatS3Time(t time.Time) string {
-	return t.UTC().Format("2006-01-02T15:04:05.000Z")
+	return t.UTC().Format(s3TimeMillisFormat)
 }
 
 func boolString(v bool) string {
@@ -702,6 +704,150 @@ func writeXMLError(w http.ResponseWriter, status int, code, msg string) {
 	_, _ = w.Write([]byte("<Code>" + xmlEscape(code) + "</Code>"))
 	_, _ = w.Write([]byte("<Message>" + xmlEscape(msg) + "</Message>"))
 	_, _ = w.Write([]byte("</Error>"))
+}
+
+func beginXMLResponse(w http.ResponseWriter, status int) *bufio.Writer {
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(status)
+	return bufio.NewWriterSize(w, 32*1024)
+}
+
+type xmlWriter struct {
+	enc *xml.Encoder
+	err error
+}
+
+func beginXMLWriterResponse(w http.ResponseWriter, status int) (*bufio.Writer, *xmlWriter) {
+	bw := beginXMLResponse(w, status)
+	return bw, &xmlWriter{enc: xml.NewEncoder(bw)}
+}
+
+func writeXMLDeclaration(w io.Writer) {
+	_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?>`)
+}
+
+func flushXMLWriterResponse(bw *bufio.Writer, xw *xmlWriter) {
+	_ = xw.Flush()
+	_ = bw.Flush()
+}
+
+func (xw *xmlWriter) setErr(err error) {
+	if xw.err == nil {
+		xw.err = err
+	}
+}
+
+func (xw *xmlWriter) Start(name string, attrs ...xml.Attr) {
+	if xw.err != nil {
+		return
+	}
+	xw.setErr(xw.enc.EncodeToken(xml.StartElement{Name: xml.Name{Local: name}, Attr: attrs}))
+}
+
+func (xw *xmlWriter) End(name string) {
+	if xw.err != nil {
+		return
+	}
+	xw.setErr(xw.enc.EncodeToken(xml.EndElement{Name: xml.Name{Local: name}}))
+}
+
+func (xw *xmlWriter) Elem(name, value string) {
+	if xw.err != nil {
+		return
+	}
+	xw.setErr(xw.enc.EncodeElement(value, xml.StartElement{Name: xml.Name{Local: name}}))
+}
+
+func (xw *xmlWriter) ElemInt(name string, value int64) {
+	xw.Elem(name, strconv.FormatInt(value, 10))
+}
+
+func (xw *xmlWriter) ElemBool(name string, value bool) {
+	xw.Elem(name, boolString(value))
+}
+
+func (xw *xmlWriter) Flush() error {
+	if xw.err != nil {
+		return xw.err
+	}
+	if err := xw.enc.Flush(); err != nil {
+		xw.setErr(err)
+	}
+	return xw.err
+}
+
+func encodeS3RootStart(xw *xmlWriter, name string) {
+	xw.Start(name, xml.Attr{
+		Name:  xml.Name{Local: "xmlns"},
+		Value: s3XMLNamespace,
+	})
+}
+
+func encodeCommonPrefixes(xw *xmlWriter, prefixes []types.CommonPrefix) {
+	for _, cp := range prefixes {
+		if cp.Prefix == nil {
+			continue
+		}
+		xw.Start("CommonPrefixes")
+		xw.Elem("Prefix", *cp.Prefix)
+		xw.End("CommonPrefixes")
+	}
+}
+
+func encodeOwnerIDThenDisplayName(xw *xmlWriter, owner *types.Owner) {
+	if owner == nil {
+		return
+	}
+	xw.Start("Owner")
+	if owner.ID != nil {
+		xw.Elem("ID", *owner.ID)
+	}
+	if owner.DisplayName != nil {
+		xw.Elem("DisplayName", *owner.DisplayName)
+	}
+	xw.End("Owner")
+}
+
+func encodeOwnerDisplayNameThenID(xw *xmlWriter, owner *types.Owner) {
+	if owner == nil {
+		return
+	}
+	xw.Start("Owner")
+	if owner.DisplayName != nil {
+		xw.Elem("DisplayName", *owner.DisplayName)
+	}
+	if owner.ID != nil {
+		xw.Elem("ID", *owner.ID)
+	}
+	xw.End("Owner")
+}
+
+func encodeInitiatorDisplayNameThenID(xw *xmlWriter, initiator *types.Initiator) {
+	if initiator == nil {
+		return
+	}
+	xw.Start("Initiator")
+	if initiator.DisplayName != nil {
+		xw.Elem("DisplayName", *initiator.DisplayName)
+	}
+	if initiator.ID != nil {
+		xw.Elem("ID", *initiator.ID)
+	}
+	xw.End("Initiator")
+}
+
+func encodeRestoreStatus(xw *xmlWriter, restore *types.RestoreStatus) {
+	if restore == nil {
+		return
+	}
+	xw.Start("RestoreStatus")
+	if restore.IsRestoreInProgress != nil {
+		xw.ElemBool("IsRestoreInProgress", *restore.IsRestoreInProgress)
+	}
+	if restore.RestoreExpiryDate != nil {
+		xw.Elem("RestoreExpiryDate", formatS3Time(*restore.RestoreExpiryDate))
+	}
+	xw.End("RestoreStatus")
 }
 
 type upstreamErrorInfo struct {
@@ -1750,25 +1896,24 @@ func (s *server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	b.WriteString(`<ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
-	b.WriteString(`<Buckets>`)
+	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(bw, xw)
+
+	writeXMLDeclaration(bw)
+	encodeS3RootStart(xw, "ListAllMyBucketsResult")
+	xw.Start("Buckets")
 	for _, bk := range out.Buckets {
 		if bk.Name == nil {
 			continue
 		}
 		if bucketPerm(rules, *bk.Name) != PermNone {
-			b.WriteString("<Bucket><Name>")
-			b.WriteString(xmlEscape(*bk.Name))
-			b.WriteString("</Name></Bucket>")
+			xw.Start("Bucket")
+			xw.Elem("Name", *bk.Name)
+			xw.End("Bucket")
 		}
 	}
-	b.WriteString(`</Buckets></ListAllMyBucketsResult>`)
-
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(b.String()))
+	xw.End("Buckets")
+	xw.End("ListAllMyBucketsResult")
 }
 
 func (s *server) handleCreateBucket(w http.ResponseWriter, r *http.Request, bucket string) {
@@ -2744,46 +2889,44 @@ func (s *server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	b.WriteString(`<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(bw, xw)
+
+	writeXMLDeclaration(bw)
+	encodeS3RootStart(xw, "DeleteResult")
 	for _, d := range out.Deleted {
-		b.WriteString("<Deleted>")
+		xw.Start("Deleted")
 		if d.Key != nil {
-			b.WriteString("<Key>" + xmlEscape(*d.Key) + "</Key>")
+			xw.Elem("Key", *d.Key)
 		}
 		if d.VersionId != nil {
-			b.WriteString("<VersionId>" + xmlEscape(*d.VersionId) + "</VersionId>")
+			xw.Elem("VersionId", *d.VersionId)
 		}
 		if d.DeleteMarker != nil {
-			b.WriteString("<DeleteMarker>" + boolString(*d.DeleteMarker) + "</DeleteMarker>")
+			xw.ElemBool("DeleteMarker", *d.DeleteMarker)
 		}
 		if d.DeleteMarkerVersionId != nil {
-			b.WriteString("<DeleteMarkerVersionId>" + xmlEscape(*d.DeleteMarkerVersionId) + "</DeleteMarkerVersionId>")
+			xw.Elem("DeleteMarkerVersionId", *d.DeleteMarkerVersionId)
 		}
-		b.WriteString("</Deleted>")
+		xw.End("Deleted")
 	}
 	for _, e := range out.Errors {
-		b.WriteString("<Error>")
+		xw.Start("Error")
 		if e.Key != nil {
-			b.WriteString("<Key>" + xmlEscape(*e.Key) + "</Key>")
+			xw.Elem("Key", *e.Key)
 		}
 		if e.VersionId != nil {
-			b.WriteString("<VersionId>" + xmlEscape(*e.VersionId) + "</VersionId>")
+			xw.Elem("VersionId", *e.VersionId)
 		}
 		if e.Code != nil {
-			b.WriteString("<Code>" + xmlEscape(*e.Code) + "</Code>")
+			xw.Elem("Code", *e.Code)
 		}
 		if e.Message != nil {
-			b.WriteString("<Message>" + xmlEscape(*e.Message) + "</Message>")
+			xw.Elem("Message", *e.Message)
 		}
-		b.WriteString("</Error>")
+		xw.End("Error")
 	}
-	b.WriteString(`</DeleteResult>`)
-
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(b.String()))
+	xw.End("DeleteResult")
 }
 
 func (s *server) handleListObjectVersions(w http.ResponseWriter, r *http.Request, bucket string) {
@@ -2850,119 +2993,85 @@ func (s *server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	b.WriteString(`<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(bw, xw)
+
+	writeXMLDeclaration(bw)
+	encodeS3RootStart(xw, "ListVersionsResult")
 	if out.Name != nil {
-		b.WriteString("<Name>" + xmlEscape(*out.Name) + "</Name>")
+		xw.Elem("Name", *out.Name)
 	}
 	if out.Prefix != nil {
-		b.WriteString("<Prefix>" + xmlEscape(*out.Prefix) + "</Prefix>")
+		xw.Elem("Prefix", *out.Prefix)
 	}
 	if out.KeyMarker != nil {
-		b.WriteString("<KeyMarker>" + xmlEscape(*out.KeyMarker) + "</KeyMarker>")
+		xw.Elem("KeyMarker", *out.KeyMarker)
 	}
 	if out.VersionIdMarker != nil {
-		b.WriteString("<VersionIdMarker>" + xmlEscape(*out.VersionIdMarker) + "</VersionIdMarker>")
+		xw.Elem("VersionIdMarker", *out.VersionIdMarker)
 	}
 	if out.NextKeyMarker != nil {
-		b.WriteString("<NextKeyMarker>" + xmlEscape(*out.NextKeyMarker) + "</NextKeyMarker>")
+		xw.Elem("NextKeyMarker", *out.NextKeyMarker)
 	}
 	if out.NextVersionIdMarker != nil {
-		b.WriteString("<NextVersionIdMarker>" + xmlEscape(*out.NextVersionIdMarker) + "</NextVersionIdMarker>")
+		xw.Elem("NextVersionIdMarker", *out.NextVersionIdMarker)
 	}
 	if out.Delimiter != nil {
-		b.WriteString("<Delimiter>" + xmlEscape(*out.Delimiter) + "</Delimiter>")
+		xw.Elem("Delimiter", *out.Delimiter)
 	}
 	if out.MaxKeys != nil {
-		b.WriteString("<MaxKeys>" + strconv.Itoa(int(*out.MaxKeys)) + "</MaxKeys>")
+		xw.ElemInt("MaxKeys", int64(*out.MaxKeys))
 	}
 	if out.EncodingType != "" {
-		b.WriteString("<EncodingType>" + xmlEscape(string(out.EncodingType)) + "</EncodingType>")
+		xw.Elem("EncodingType", string(out.EncodingType))
 	}
-	b.WriteString("<IsTruncated>" + boolString(aws.ToBool(out.IsTruncated)) + "</IsTruncated>")
-	for _, cp := range out.CommonPrefixes {
-		if cp.Prefix == nil {
-			continue
-		}
-		b.WriteString("<CommonPrefixes><Prefix>" + xmlEscape(*cp.Prefix) + "</Prefix></CommonPrefixes>")
-	}
+	xw.ElemBool("IsTruncated", aws.ToBool(out.IsTruncated))
+	encodeCommonPrefixes(xw, out.CommonPrefixes)
 	for _, v := range out.Versions {
-		b.WriteString("<Version>")
+		xw.Start("Version")
 		if v.Key != nil {
-			b.WriteString("<Key>" + xmlEscape(*v.Key) + "</Key>")
+			xw.Elem("Key", *v.Key)
 		}
 		if v.VersionId != nil {
-			b.WriteString("<VersionId>" + xmlEscape(*v.VersionId) + "</VersionId>")
+			xw.Elem("VersionId", *v.VersionId)
 		}
 		if v.IsLatest != nil {
-			b.WriteString("<IsLatest>" + boolString(*v.IsLatest) + "</IsLatest>")
+			xw.ElemBool("IsLatest", *v.IsLatest)
 		}
 		if v.LastModified != nil {
-			b.WriteString("<LastModified>" + formatS3Time(*v.LastModified) + "</LastModified>")
+			xw.Elem("LastModified", formatS3Time(*v.LastModified))
 		}
 		if v.ETag != nil {
-			b.WriteString("<ETag>" + xmlEscape(*v.ETag) + "</ETag>")
+			xw.Elem("ETag", *v.ETag)
 		}
 		if v.Size != nil {
-			b.WriteString("<Size>" + strconv.FormatInt(*v.Size, 10) + "</Size>")
+			xw.ElemInt("Size", *v.Size)
 		}
 		if v.StorageClass != "" {
-			b.WriteString("<StorageClass>" + xmlEscape(string(v.StorageClass)) + "</StorageClass>")
+			xw.Elem("StorageClass", string(v.StorageClass))
 		}
-		if v.Owner != nil {
-			b.WriteString("<Owner>")
-			if v.Owner.ID != nil {
-				b.WriteString("<ID>" + xmlEscape(*v.Owner.ID) + "</ID>")
-			}
-			if v.Owner.DisplayName != nil {
-				b.WriteString("<DisplayName>" + xmlEscape(*v.Owner.DisplayName) + "</DisplayName>")
-			}
-			b.WriteString("</Owner>")
-		}
-		if v.RestoreStatus != nil {
-			b.WriteString("<RestoreStatus>")
-			if v.RestoreStatus.IsRestoreInProgress != nil {
-				b.WriteString("<IsRestoreInProgress>" + boolString(*v.RestoreStatus.IsRestoreInProgress) + "</IsRestoreInProgress>")
-			}
-			if v.RestoreStatus.RestoreExpiryDate != nil {
-				b.WriteString("<RestoreExpiryDate>" + formatS3Time(*v.RestoreStatus.RestoreExpiryDate) + "</RestoreExpiryDate>")
-			}
-			b.WriteString("</RestoreStatus>")
-		}
-		b.WriteString("</Version>")
+		encodeOwnerIDThenDisplayName(xw, v.Owner)
+		encodeRestoreStatus(xw, v.RestoreStatus)
+		xw.End("Version")
 	}
 	for _, d := range out.DeleteMarkers {
-		b.WriteString("<DeleteMarker>")
+		xw.Start("DeleteMarker")
 		if d.Key != nil {
-			b.WriteString("<Key>" + xmlEscape(*d.Key) + "</Key>")
+			xw.Elem("Key", *d.Key)
 		}
 		if d.VersionId != nil {
-			b.WriteString("<VersionId>" + xmlEscape(*d.VersionId) + "</VersionId>")
+			xw.Elem("VersionId", *d.VersionId)
 		}
 		if d.IsLatest != nil {
-			b.WriteString("<IsLatest>" + boolString(*d.IsLatest) + "</IsLatest>")
+			xw.ElemBool("IsLatest", *d.IsLatest)
 		}
 		if d.LastModified != nil {
-			b.WriteString("<LastModified>" + formatS3Time(*d.LastModified) + "</LastModified>")
+			xw.Elem("LastModified", formatS3Time(*d.LastModified))
 		}
-		if d.Owner != nil {
-			b.WriteString("<Owner>")
-			if d.Owner.ID != nil {
-				b.WriteString("<ID>" + xmlEscape(*d.Owner.ID) + "</ID>")
-			}
-			if d.Owner.DisplayName != nil {
-				b.WriteString("<DisplayName>" + xmlEscape(*d.Owner.DisplayName) + "</DisplayName>")
-			}
-			b.WriteString("</Owner>")
-		}
-		b.WriteString("</DeleteMarker>")
+		encodeOwnerIDThenDisplayName(xw, d.Owner)
+		xw.End("DeleteMarker")
 	}
-	b.WriteString(`</ListVersionsResult>`)
-
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(b.String()))
+	xw.End("ListVersionsResult")
 }
 
 func (s *server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) {
@@ -3035,96 +3144,71 @@ func (s *server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	b.WriteString(`<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(bw, xw)
+
+	writeXMLDeclaration(bw)
+	encodeS3RootStart(xw, "ListBucketResult")
 	if out.Name != nil {
-		b.WriteString("<Name>" + xmlEscape(*out.Name) + "</Name>")
+		xw.Elem("Name", *out.Name)
 	}
 	if out.Prefix != nil {
-		b.WriteString("<Prefix>" + xmlEscape(*out.Prefix) + "</Prefix>")
+		xw.Elem("Prefix", *out.Prefix)
 	}
 	if out.StartAfter != nil {
-		b.WriteString("<StartAfter>" + xmlEscape(*out.StartAfter) + "</StartAfter>")
+		xw.Elem("StartAfter", *out.StartAfter)
 	}
 	if out.Delimiter != nil {
-		b.WriteString("<Delimiter>" + xmlEscape(*out.Delimiter) + "</Delimiter>")
+		xw.Elem("Delimiter", *out.Delimiter)
 	}
 	if out.MaxKeys != nil {
-		b.WriteString("<MaxKeys>" + strconv.Itoa(int(*out.MaxKeys)) + "</MaxKeys>")
+		xw.ElemInt("MaxKeys", int64(*out.MaxKeys))
 	}
 	if out.KeyCount != nil {
-		b.WriteString("<KeyCount>" + strconv.Itoa(int(*out.KeyCount)) + "</KeyCount>")
+		xw.ElemInt("KeyCount", int64(*out.KeyCount))
 	}
 	if out.EncodingType != "" {
-		b.WriteString("<EncodingType>" + xmlEscape(string(out.EncodingType)) + "</EncodingType>")
+		xw.Elem("EncodingType", string(out.EncodingType))
 	}
 	if out.ContinuationToken != nil {
-		b.WriteString("<ContinuationToken>" + xmlEscape(*out.ContinuationToken) + "</ContinuationToken>")
+		xw.Elem("ContinuationToken", *out.ContinuationToken)
 	}
 	if out.NextContinuationToken != nil {
-		b.WriteString("<NextContinuationToken>" + xmlEscape(*out.NextContinuationToken) + "</NextContinuationToken>")
+		xw.Elem("NextContinuationToken", *out.NextContinuationToken)
 	}
-	b.WriteString("<IsTruncated>" + boolString(aws.ToBool(out.IsTruncated)) + "</IsTruncated>")
-	for _, cp := range out.CommonPrefixes {
-		if cp.Prefix == nil {
-			continue
-		}
-		b.WriteString("<CommonPrefixes><Prefix>" + xmlEscape(*cp.Prefix) + "</Prefix></CommonPrefixes>")
-	}
+	xw.ElemBool("IsTruncated", aws.ToBool(out.IsTruncated))
+	encodeCommonPrefixes(xw, out.CommonPrefixes)
 	for _, o := range out.Contents {
-		b.WriteString("<Contents>")
+		xw.Start("Contents")
 		if o.Key != nil {
-			b.WriteString("<Key>" + xmlEscape(*o.Key) + "</Key>")
+			xw.Elem("Key", *o.Key)
 		}
 		if o.LastModified != nil {
-			b.WriteString("<LastModified>" + formatS3Time(*o.LastModified) + "</LastModified>")
+			xw.Elem("LastModified", formatS3Time(*o.LastModified))
 		}
 		if o.ETag != nil {
-			b.WriteString("<ETag>" + xmlEscape(*o.ETag) + "</ETag>")
+			xw.Elem("ETag", *o.ETag)
 		}
 		for _, c := range o.ChecksumAlgorithm {
 			if c == "" {
 				continue
 			}
-			b.WriteString("<ChecksumAlgorithm>" + xmlEscape(string(c)) + "</ChecksumAlgorithm>")
+			xw.Elem("ChecksumAlgorithm", string(c))
 		}
 		if o.ChecksumType != "" {
-			b.WriteString("<ChecksumType>" + xmlEscape(string(o.ChecksumType)) + "</ChecksumType>")
+			xw.Elem("ChecksumType", string(o.ChecksumType))
 		}
 		if o.Size != nil {
-			b.WriteString("<Size>" + strconv.FormatInt(*o.Size, 10) + "</Size>")
+			xw.ElemInt("Size", *o.Size)
 		}
 		if o.StorageClass != "" {
-			b.WriteString("<StorageClass>" + xmlEscape(string(o.StorageClass)) + "</StorageClass>")
+			xw.Elem("StorageClass", string(o.StorageClass))
 		}
-		if o.Owner != nil {
-			b.WriteString("<Owner>")
-			if o.Owner.ID != nil {
-				b.WriteString("<ID>" + xmlEscape(*o.Owner.ID) + "</ID>")
-			}
-			if o.Owner.DisplayName != nil {
-				b.WriteString("<DisplayName>" + xmlEscape(*o.Owner.DisplayName) + "</DisplayName>")
-			}
-			b.WriteString("</Owner>")
-		}
-		if o.RestoreStatus != nil {
-			b.WriteString("<RestoreStatus>")
-			if o.RestoreStatus.IsRestoreInProgress != nil {
-				b.WriteString("<IsRestoreInProgress>" + boolString(*o.RestoreStatus.IsRestoreInProgress) + "</IsRestoreInProgress>")
-			}
-			if o.RestoreStatus.RestoreExpiryDate != nil {
-				b.WriteString("<RestoreExpiryDate>" + formatS3Time(*o.RestoreStatus.RestoreExpiryDate) + "</RestoreExpiryDate>")
-			}
-			b.WriteString("</RestoreStatus>")
-		}
-		b.WriteString("</Contents>")
+		encodeOwnerIDThenDisplayName(xw, o.Owner)
+		encodeRestoreStatus(xw, o.RestoreStatus)
+		xw.End("Contents")
 	}
-	b.WriteString(`</ListBucketResult>`)
-
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(b.String()))
+	xw.End("ListBucketResult")
 }
 
 func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Request, bucket string) {
@@ -3166,91 +3250,60 @@ func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	b.WriteString(`<ListMultipartUploadsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
-	b.WriteString("<Bucket>" + xmlEscape(bucket) + "</Bucket>")
+	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(bw, xw)
+
+	writeXMLDeclaration(bw)
+	encodeS3RootStart(xw, "ListMultipartUploadsResult")
+	xw.Elem("Bucket", bucket)
 	if out.KeyMarker != nil {
-		b.WriteString("<KeyMarker>" + xmlEscape(*out.KeyMarker) + "</KeyMarker>")
+		xw.Elem("KeyMarker", *out.KeyMarker)
 	}
 	if out.UploadIdMarker != nil {
-		b.WriteString("<UploadIdMarker>" + xmlEscape(*out.UploadIdMarker) + "</UploadIdMarker>")
+		xw.Elem("UploadIdMarker", *out.UploadIdMarker)
 	}
 	if out.NextKeyMarker != nil {
-		b.WriteString("<NextKeyMarker>" + xmlEscape(*out.NextKeyMarker) + "</NextKeyMarker>")
+		xw.Elem("NextKeyMarker", *out.NextKeyMarker)
 	}
 	if out.NextUploadIdMarker != nil {
-		b.WriteString("<NextUploadIdMarker>" + xmlEscape(*out.NextUploadIdMarker) + "</NextUploadIdMarker>")
+		xw.Elem("NextUploadIdMarker", *out.NextUploadIdMarker)
 	}
 	if out.Prefix != nil {
-		b.WriteString("<Prefix>" + xmlEscape(*out.Prefix) + "</Prefix>")
+		xw.Elem("Prefix", *out.Prefix)
 	}
 	if out.Delimiter != nil {
-		b.WriteString("<Delimiter>" + xmlEscape(*out.Delimiter) + "</Delimiter>")
+		xw.Elem("Delimiter", *out.Delimiter)
 	}
 	if out.MaxUploads != nil {
-		b.WriteString("<MaxUploads>" + strconv.Itoa(int(*out.MaxUploads)) + "</MaxUploads>")
+		xw.ElemInt("MaxUploads", int64(*out.MaxUploads))
 	}
-	b.WriteString("<IsTruncated>")
-	if aws.ToBool(out.IsTruncated) {
-		b.WriteString("true")
-	} else {
-		b.WriteString("false")
-	}
-	b.WriteString("</IsTruncated>")
-	for _, cp := range out.CommonPrefixes {
-		if cp.Prefix == nil {
-			continue
-		}
-		b.WriteString("<CommonPrefixes><Prefix>" + xmlEscape(*cp.Prefix) + "</Prefix></CommonPrefixes>")
-	}
+	xw.ElemBool("IsTruncated", aws.ToBool(out.IsTruncated))
+	encodeCommonPrefixes(xw, out.CommonPrefixes)
 	for _, u := range out.Uploads {
-		b.WriteString("<Upload>")
+		xw.Start("Upload")
 		if u.Key != nil {
-			b.WriteString("<Key>" + xmlEscape(*u.Key) + "</Key>")
+			xw.Elem("Key", *u.Key)
 		}
 		if u.UploadId != nil {
-			b.WriteString("<UploadId>" + xmlEscape(*u.UploadId) + "</UploadId>")
+			xw.Elem("UploadId", *u.UploadId)
 		}
 		if u.Initiated != nil {
-			b.WriteString("<Initiated>" + u.Initiated.UTC().Format("2006-01-02T15:04:05.000Z") + "</Initiated>")
+			xw.Elem("Initiated", formatS3Time(*u.Initiated))
 		}
 		if u.StorageClass != "" {
-			b.WriteString("<StorageClass>" + xmlEscape(string(u.StorageClass)) + "</StorageClass>")
+			xw.Elem("StorageClass", string(u.StorageClass))
 		}
 		if u.ChecksumAlgorithm != "" {
-			b.WriteString("<ChecksumAlgorithm>" + xmlEscape(string(u.ChecksumAlgorithm)) + "</ChecksumAlgorithm>")
+			xw.Elem("ChecksumAlgorithm", string(u.ChecksumAlgorithm))
 		}
 		if u.ChecksumType != "" {
-			b.WriteString("<ChecksumType>" + xmlEscape(string(u.ChecksumType)) + "</ChecksumType>")
+			xw.Elem("ChecksumType", string(u.ChecksumType))
 		}
-		if u.Owner != nil {
-			b.WriteString("<Owner>")
-			if u.Owner.DisplayName != nil {
-				b.WriteString("<DisplayName>" + xmlEscape(*u.Owner.DisplayName) + "</DisplayName>")
-			}
-			if u.Owner.ID != nil {
-				b.WriteString("<ID>" + xmlEscape(*u.Owner.ID) + "</ID>")
-			}
-			b.WriteString("</Owner>")
-		}
-		if u.Initiator != nil {
-			b.WriteString("<Initiator>")
-			if u.Initiator.DisplayName != nil {
-				b.WriteString("<DisplayName>" + xmlEscape(*u.Initiator.DisplayName) + "</DisplayName>")
-			}
-			if u.Initiator.ID != nil {
-				b.WriteString("<ID>" + xmlEscape(*u.Initiator.ID) + "</ID>")
-			}
-			b.WriteString("</Initiator>")
-		}
-		b.WriteString("</Upload>")
+		encodeOwnerDisplayNameThenID(xw, u.Owner)
+		encodeInitiatorDisplayNameThenID(xw, u.Initiator)
+		xw.End("Upload")
 	}
-	b.WriteString(`</ListMultipartUploadsResult>`)
-
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(b.String()))
+	xw.End("ListMultipartUploadsResult")
 }
 
 func (s *server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
@@ -3766,93 +3819,85 @@ func (s *server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Reques
 		w.Header().Set("x-amz-delete-marker", strconv.FormatBool(*out.DeleteMarker))
 	}
 
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	b.WriteString(`<GetObjectAttributesOutput xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(bw, xw)
+
+	writeXMLDeclaration(bw)
+	encodeS3RootStart(xw, "GetObjectAttributesOutput")
 	if out.ETag != nil {
-		b.WriteString("<ETag>" + xmlEscape(*out.ETag) + "</ETag>")
+		xw.Elem("ETag", *out.ETag)
 	}
 	if out.ObjectSize != nil {
-		b.WriteString("<ObjectSize>" + strconv.FormatInt(*out.ObjectSize, 10) + "</ObjectSize>")
+		xw.ElemInt("ObjectSize", *out.ObjectSize)
 	}
 	if out.StorageClass != "" {
-		b.WriteString("<StorageClass>" + xmlEscape(string(out.StorageClass)) + "</StorageClass>")
+		xw.Elem("StorageClass", string(out.StorageClass))
 	}
 	if out.Checksum != nil {
-		b.WriteString("<Checksum>")
+		xw.Start("Checksum")
 		if out.Checksum.ChecksumCRC32 != nil {
-			b.WriteString("<ChecksumCRC32>" + xmlEscape(*out.Checksum.ChecksumCRC32) + "</ChecksumCRC32>")
+			xw.Elem("ChecksumCRC32", *out.Checksum.ChecksumCRC32)
 		}
 		if out.Checksum.ChecksumCRC32C != nil {
-			b.WriteString("<ChecksumCRC32C>" + xmlEscape(*out.Checksum.ChecksumCRC32C) + "</ChecksumCRC32C>")
+			xw.Elem("ChecksumCRC32C", *out.Checksum.ChecksumCRC32C)
 		}
 		if out.Checksum.ChecksumCRC64NVME != nil {
-			b.WriteString("<ChecksumCRC64NVME>" + xmlEscape(*out.Checksum.ChecksumCRC64NVME) + "</ChecksumCRC64NVME>")
+			xw.Elem("ChecksumCRC64NVME", *out.Checksum.ChecksumCRC64NVME)
 		}
 		if out.Checksum.ChecksumSHA1 != nil {
-			b.WriteString("<ChecksumSHA1>" + xmlEscape(*out.Checksum.ChecksumSHA1) + "</ChecksumSHA1>")
+			xw.Elem("ChecksumSHA1", *out.Checksum.ChecksumSHA1)
 		}
 		if out.Checksum.ChecksumSHA256 != nil {
-			b.WriteString("<ChecksumSHA256>" + xmlEscape(*out.Checksum.ChecksumSHA256) + "</ChecksumSHA256>")
+			xw.Elem("ChecksumSHA256", *out.Checksum.ChecksumSHA256)
 		}
 		if out.Checksum.ChecksumType != "" {
-			b.WriteString("<ChecksumType>" + xmlEscape(string(out.Checksum.ChecksumType)) + "</ChecksumType>")
+			xw.Elem("ChecksumType", string(out.Checksum.ChecksumType))
 		}
-		b.WriteString("</Checksum>")
+		xw.End("Checksum")
 	}
 	if out.ObjectParts != nil {
-		b.WriteString("<ObjectParts>")
+		xw.Start("ObjectParts")
 		if out.ObjectParts.PartNumberMarker != nil {
-			b.WriteString("<PartNumberMarker>" + xmlEscape(*out.ObjectParts.PartNumberMarker) + "</PartNumberMarker>")
+			xw.Elem("PartNumberMarker", *out.ObjectParts.PartNumberMarker)
 		}
 		if out.ObjectParts.NextPartNumberMarker != nil {
-			b.WriteString("<NextPartNumberMarker>" + xmlEscape(*out.ObjectParts.NextPartNumberMarker) + "</NextPartNumberMarker>")
+			xw.Elem("NextPartNumberMarker", *out.ObjectParts.NextPartNumberMarker)
 		}
 		if out.ObjectParts.MaxParts != nil {
-			b.WriteString("<MaxParts>" + strconv.Itoa(int(*out.ObjectParts.MaxParts)) + "</MaxParts>")
+			xw.ElemInt("MaxParts", int64(*out.ObjectParts.MaxParts))
 		}
 		if out.ObjectParts.TotalPartsCount != nil {
-			b.WriteString("<PartsCount>" + strconv.Itoa(int(*out.ObjectParts.TotalPartsCount)) + "</PartsCount>")
+			xw.ElemInt("PartsCount", int64(*out.ObjectParts.TotalPartsCount))
 		}
-		b.WriteString("<IsTruncated>")
-		if aws.ToBool(out.ObjectParts.IsTruncated) {
-			b.WriteString("true")
-		} else {
-			b.WriteString("false")
-		}
-		b.WriteString("</IsTruncated>")
+		xw.ElemBool("IsTruncated", aws.ToBool(out.ObjectParts.IsTruncated))
 		for _, p := range out.ObjectParts.Parts {
-			b.WriteString("<Part>")
+			xw.Start("Part")
 			if p.PartNumber != nil {
-				b.WriteString("<PartNumber>" + strconv.Itoa(int(*p.PartNumber)) + "</PartNumber>")
+				xw.ElemInt("PartNumber", int64(*p.PartNumber))
 			}
 			if p.Size != nil {
-				b.WriteString("<Size>" + strconv.FormatInt(*p.Size, 10) + "</Size>")
+				xw.ElemInt("Size", *p.Size)
 			}
 			if p.ChecksumCRC32 != nil {
-				b.WriteString("<ChecksumCRC32>" + xmlEscape(*p.ChecksumCRC32) + "</ChecksumCRC32>")
+				xw.Elem("ChecksumCRC32", *p.ChecksumCRC32)
 			}
 			if p.ChecksumCRC32C != nil {
-				b.WriteString("<ChecksumCRC32C>" + xmlEscape(*p.ChecksumCRC32C) + "</ChecksumCRC32C>")
+				xw.Elem("ChecksumCRC32C", *p.ChecksumCRC32C)
 			}
 			if p.ChecksumCRC64NVME != nil {
-				b.WriteString("<ChecksumCRC64NVME>" + xmlEscape(*p.ChecksumCRC64NVME) + "</ChecksumCRC64NVME>")
+				xw.Elem("ChecksumCRC64NVME", *p.ChecksumCRC64NVME)
 			}
 			if p.ChecksumSHA1 != nil {
-				b.WriteString("<ChecksumSHA1>" + xmlEscape(*p.ChecksumSHA1) + "</ChecksumSHA1>")
+				xw.Elem("ChecksumSHA1", *p.ChecksumSHA1)
 			}
 			if p.ChecksumSHA256 != nil {
-				b.WriteString("<ChecksumSHA256>" + xmlEscape(*p.ChecksumSHA256) + "</ChecksumSHA256>")
+				xw.Elem("ChecksumSHA256", *p.ChecksumSHA256)
 			}
-			b.WriteString("</Part>")
+			xw.End("Part")
 		}
-		b.WriteString("</ObjectParts>")
+		xw.End("ObjectParts")
 	}
-	b.WriteString(`</GetObjectAttributesOutput>`)
-
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(b.String()))
+	xw.End("GetObjectAttributesOutput")
 }
 
 func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
@@ -4235,40 +4280,38 @@ func (s *server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	b.WriteString(`<CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(bw, xw)
+
+	writeXMLDeclaration(bw)
+	encodeS3RootStart(xw, "CopyObjectResult")
 	if out.CopyObjectResult != nil {
 		if out.CopyObjectResult.LastModified != nil {
-			b.WriteString("<LastModified>" + formatS3Time(*out.CopyObjectResult.LastModified) + "</LastModified>")
+			xw.Elem("LastModified", formatS3Time(*out.CopyObjectResult.LastModified))
 		}
 		if out.CopyObjectResult.ETag != nil {
-			b.WriteString("<ETag>" + xmlEscape(*out.CopyObjectResult.ETag) + "</ETag>")
+			xw.Elem("ETag", *out.CopyObjectResult.ETag)
 		}
 		if out.CopyObjectResult.ChecksumCRC32 != nil {
-			b.WriteString("<ChecksumCRC32>" + xmlEscape(*out.CopyObjectResult.ChecksumCRC32) + "</ChecksumCRC32>")
+			xw.Elem("ChecksumCRC32", *out.CopyObjectResult.ChecksumCRC32)
 		}
 		if out.CopyObjectResult.ChecksumCRC32C != nil {
-			b.WriteString("<ChecksumCRC32C>" + xmlEscape(*out.CopyObjectResult.ChecksumCRC32C) + "</ChecksumCRC32C>")
+			xw.Elem("ChecksumCRC32C", *out.CopyObjectResult.ChecksumCRC32C)
 		}
 		if out.CopyObjectResult.ChecksumCRC64NVME != nil {
-			b.WriteString("<ChecksumCRC64NVME>" + xmlEscape(*out.CopyObjectResult.ChecksumCRC64NVME) + "</ChecksumCRC64NVME>")
+			xw.Elem("ChecksumCRC64NVME", *out.CopyObjectResult.ChecksumCRC64NVME)
 		}
 		if out.CopyObjectResult.ChecksumSHA1 != nil {
-			b.WriteString("<ChecksumSHA1>" + xmlEscape(*out.CopyObjectResult.ChecksumSHA1) + "</ChecksumSHA1>")
+			xw.Elem("ChecksumSHA1", *out.CopyObjectResult.ChecksumSHA1)
 		}
 		if out.CopyObjectResult.ChecksumSHA256 != nil {
-			b.WriteString("<ChecksumSHA256>" + xmlEscape(*out.CopyObjectResult.ChecksumSHA256) + "</ChecksumSHA256>")
+			xw.Elem("ChecksumSHA256", *out.CopyObjectResult.ChecksumSHA256)
 		}
 		if out.CopyObjectResult.ChecksumType != "" {
-			b.WriteString("<ChecksumType>" + xmlEscape(string(out.CopyObjectResult.ChecksumType)) + "</ChecksumType>")
+			xw.Elem("ChecksumType", string(out.CopyObjectResult.ChecksumType))
 		}
 	}
-	b.WriteString(`</CopyObjectResult>`)
-
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(b.String()))
+	xw.End("CopyObjectResult")
 }
 
 func (s *server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string, partNumber int32) {
@@ -4384,37 +4427,35 @@ func (s *server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bu
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	b.WriteString(`<CopyPartResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
+	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(bw, xw)
+
+	writeXMLDeclaration(bw)
+	encodeS3RootStart(xw, "CopyPartResult")
 	if out.CopyPartResult != nil {
 		if out.CopyPartResult.LastModified != nil {
-			b.WriteString("<LastModified>" + formatS3Time(*out.CopyPartResult.LastModified) + "</LastModified>")
+			xw.Elem("LastModified", formatS3Time(*out.CopyPartResult.LastModified))
 		}
 		if out.CopyPartResult.ETag != nil {
-			b.WriteString("<ETag>" + xmlEscape(*out.CopyPartResult.ETag) + "</ETag>")
+			xw.Elem("ETag", *out.CopyPartResult.ETag)
 		}
 		if out.CopyPartResult.ChecksumCRC32 != nil {
-			b.WriteString("<ChecksumCRC32>" + xmlEscape(*out.CopyPartResult.ChecksumCRC32) + "</ChecksumCRC32>")
+			xw.Elem("ChecksumCRC32", *out.CopyPartResult.ChecksumCRC32)
 		}
 		if out.CopyPartResult.ChecksumCRC32C != nil {
-			b.WriteString("<ChecksumCRC32C>" + xmlEscape(*out.CopyPartResult.ChecksumCRC32C) + "</ChecksumCRC32C>")
+			xw.Elem("ChecksumCRC32C", *out.CopyPartResult.ChecksumCRC32C)
 		}
 		if out.CopyPartResult.ChecksumCRC64NVME != nil {
-			b.WriteString("<ChecksumCRC64NVME>" + xmlEscape(*out.CopyPartResult.ChecksumCRC64NVME) + "</ChecksumCRC64NVME>")
+			xw.Elem("ChecksumCRC64NVME", *out.CopyPartResult.ChecksumCRC64NVME)
 		}
 		if out.CopyPartResult.ChecksumSHA1 != nil {
-			b.WriteString("<ChecksumSHA1>" + xmlEscape(*out.CopyPartResult.ChecksumSHA1) + "</ChecksumSHA1>")
+			xw.Elem("ChecksumSHA1", *out.CopyPartResult.ChecksumSHA1)
 		}
 		if out.CopyPartResult.ChecksumSHA256 != nil {
-			b.WriteString("<ChecksumSHA256>" + xmlEscape(*out.CopyPartResult.ChecksumSHA256) + "</ChecksumSHA256>")
+			xw.Elem("ChecksumSHA256", *out.CopyPartResult.ChecksumSHA256)
 		}
 	}
-	b.WriteString(`</CopyPartResult>`)
-
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(b.String()))
+	xw.End("CopyPartResult")
 }
 
 func (s *server) handleDeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
@@ -4593,17 +4634,15 @@ func (s *server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 		return
 	}
 
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	b.WriteString(`<InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
-	b.WriteString("<Bucket>" + xmlEscape(bucket) + "</Bucket>")
-	b.WriteString("<Key>" + xmlEscape(key) + "</Key>")
-	b.WriteString("<UploadId>" + xmlEscape(aws.ToString(out.UploadId)) + "</UploadId>")
-	b.WriteString(`</InitiateMultipartUploadResult>`)
+	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(bw, xw)
 
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(b.String()))
+	writeXMLDeclaration(bw)
+	encodeS3RootStart(xw, "InitiateMultipartUploadResult")
+	xw.Elem("Bucket", bucket)
+	xw.Elem("Key", key)
+	xw.Elem("UploadId", aws.ToString(out.UploadId))
+	xw.End("InitiateMultipartUploadResult")
 }
 
 func (s *server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string, partNumber int32) {
@@ -4725,39 +4764,31 @@ func (s *server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 		return
 	}
 
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	b.WriteString(`<ListPartsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
-	b.WriteString("<Bucket>" + xmlEscape(bucket) + "</Bucket>")
-	b.WriteString("<Key>" + xmlEscape(key) + "</Key>")
-	b.WriteString("<UploadId>" + xmlEscape(uploadID) + "</UploadId>")
-	b.WriteString("<PartNumberMarker>" + xmlEscape(aws.ToString(out.PartNumberMarker)) + "</PartNumberMarker>")
-	b.WriteString("<NextPartNumberMarker>" + xmlEscape(aws.ToString(out.NextPartNumberMarker)) + "</NextPartNumberMarker>")
-	b.WriteString("<MaxParts>" + strconv.Itoa(int(aws.ToInt32(out.MaxParts))) + "</MaxParts>")
-	b.WriteString("<IsTruncated>")
-	if aws.ToBool(out.IsTruncated) {
-		b.WriteString("true")
-	} else {
-		b.WriteString("false")
-	}
-	b.WriteString("</IsTruncated>")
+	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(bw, xw)
+
+	writeXMLDeclaration(bw)
+	encodeS3RootStart(xw, "ListPartsResult")
+	xw.Elem("Bucket", bucket)
+	xw.Elem("Key", key)
+	xw.Elem("UploadId", uploadID)
+	xw.Elem("PartNumberMarker", aws.ToString(out.PartNumberMarker))
+	xw.Elem("NextPartNumberMarker", aws.ToString(out.NextPartNumberMarker))
+	xw.ElemInt("MaxParts", int64(aws.ToInt32(out.MaxParts)))
+	xw.ElemBool("IsTruncated", aws.ToBool(out.IsTruncated))
 	for _, p := range out.Parts {
-		b.WriteString("<Part>")
-		b.WriteString("<PartNumber>" + strconv.Itoa(int(aws.ToInt32(p.PartNumber))) + "</PartNumber>")
+		xw.Start("Part")
+		xw.ElemInt("PartNumber", int64(aws.ToInt32(p.PartNumber)))
 		if p.LastModified != nil {
-			b.WriteString("<LastModified>" + p.LastModified.UTC().Format("2006-01-02T15:04:05.000Z") + "</LastModified>")
+			xw.Elem("LastModified", formatS3Time(*p.LastModified))
 		}
 		if p.ETag != nil {
-			b.WriteString("<ETag>" + xmlEscape(*p.ETag) + "</ETag>")
+			xw.Elem("ETag", *p.ETag)
 		}
-		b.WriteString("<Size>" + strconv.FormatInt(aws.ToInt64(p.Size), 10) + "</Size>")
-		b.WriteString("</Part>")
+		xw.ElemInt("Size", aws.ToInt64(p.Size))
+		xw.End("Part")
 	}
-	b.WriteString(`</ListPartsResult>`)
-
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(b.String()))
+	xw.End("ListPartsResult")
 }
 
 // CompleteMultipartUpload requires PartNumber + ETag for each part. :contentReference[oaicite:12]{index=12}
@@ -4815,19 +4846,22 @@ func (s *server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	var b strings.Builder
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	b.WriteString(`<CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`)
-	b.WriteString("<Bucket>" + xmlEscape(bucket) + "</Bucket>")
-	b.WriteString("<Key>" + xmlEscape(key) + "</Key>")
-	if out.ETag != nil {
-		b.WriteString("<ETag>\"" + xmlEscape(strings.Trim(*out.ETag, `"`)) + "\"</ETag>")
-	}
-	b.WriteString(`</CompleteMultipartUploadResult>`)
+	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(bw, xw)
 
-	w.Header().Set("Content-Type", "application/xml")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(b.String()))
+	writeXMLDeclaration(bw)
+	encodeS3RootStart(xw, "CompleteMultipartUploadResult")
+	xw.Elem("Bucket", bucket)
+	xw.Elem("Key", key)
+	if out.ETag != nil {
+		xw.Start("ETag")
+		if xw.err == nil {
+			_, err := io.WriteString(bw, `"`+xmlEscape(strings.Trim(*out.ETag, `"`))+`"`)
+			xw.setErr(err)
+		}
+		xw.End("ETag")
+	}
+	xw.End("CompleteMultipartUploadResult")
 }
 
 func (s *server) handleAbortMultipart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
