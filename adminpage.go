@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
@@ -170,6 +171,7 @@ func newAdminSessionStore(ttl time.Duration, maxEntries int) *adminSessionStore 
 		data:       map[string]adminSession{},
 	}
 }
+
 func (s *adminSessionStore) save(sessionID, username string, groups map[string]struct{}) (string, error) {
 	if username == "" {
 		return "", errors.New("missing username")
@@ -1318,71 +1320,163 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	const maxUploadFieldBytes = int64(1 << 20) // 1 MiB
+
+	var (
+		bucket  string
+		key     string
+		cursor  string
+		history string
+		size    int64 = -1
+	)
+
+	redirectUploadPayloadError := func(pageErr string) {
+		if strings.TrimSpace(bucket) == "" {
+			http.Redirect(w, r, "/admin", http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, cursor, history, "", pageErr), http.StatusSeeOther)
+	}
+
+	reader, err := r.MultipartReader()
+	if err != nil {
+		redirectUploadPayloadError("Could not process upload payload.")
 		return
 	}
-	defer func() {
-		if r.MultipartForm != nil {
-			_ = r.MultipartForm.RemoveAll()
-		}
-	}()
 
-	bucket := strings.TrimSpace(r.FormValue("name"))
+	rules := rulesFromGroups(session.Groups)
+
+	for {
+		part, partErr := reader.NextPart()
+		if errors.Is(partErr, io.EOF) {
+			break
+		}
+		if partErr != nil {
+			redirectUploadPayloadError("Could not process upload payload.")
+			return
+		}
+
+		partName := strings.TrimSpace(part.FormName())
+		switch partName {
+		case "name", "key", "cursor", "history", "size":
+			valueBytes, readErr := io.ReadAll(io.LimitReader(part, maxUploadFieldBytes+1))
+			_ = part.Close()
+			if readErr != nil || int64(len(valueBytes)) > maxUploadFieldBytes {
+				redirectUploadPayloadError("Could not process upload payload.")
+				return
+			}
+
+			value := strings.TrimSpace(string(valueBytes))
+			switch partName {
+			case "name":
+				if bucket == "" {
+					bucket = value
+				}
+			case "key":
+				if key == "" {
+					key = value
+				}
+			case "cursor":
+				if cursor == "" {
+					cursor = value
+				}
+			case "history":
+				if history == "" {
+					history = value
+				}
+			case "size":
+				if size >= 0 || value == "" {
+					break
+				}
+				parsedSize, parseErr := strconv.ParseInt(value, 10, 64)
+				if parseErr != nil || parsedSize < 0 {
+					redirectUploadPayloadError("Invalid file size.")
+					return
+				}
+				size = parsedSize
+			}
+		case "file":
+			fileName := strings.TrimSpace(part.FileName())
+			fileContentType := strings.TrimSpace(part.Header.Get("Content-Type"))
+
+			if bucket == "" {
+				_ = part.Close()
+				redirectUploadPayloadError("Bucket name is required.")
+				return
+			}
+
+			redirectToBucket := func(notice, pageErr string) {
+				http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, cursor, history, notice, pageErr), http.StatusSeeOther)
+			}
+			if !canWrite(rules, bucket) {
+				_ = part.Close()
+				redirectToBucket("", "Write permission is required for uploads.")
+				return
+			}
+
+			finalKey := key
+			if finalKey == "" {
+				finalKey = fileName
+			}
+			finalKey = strings.TrimSpace(strings.TrimPrefix(finalKey, "/"))
+			if finalKey == "" {
+				_ = part.Close()
+				redirectToBucket("", "Object key is required.")
+				return
+			}
+			if size < 0 {
+				_ = part.Close()
+				redirectToBucket("", "File size is required for upload.")
+				return
+			}
+			if size > maxSinglePutObjectSize {
+				_ = part.Close()
+				redirectToBucket("", "File is too large. Use multipart upload for files larger than 5 GiB.")
+				return
+			}
+
+			putIn := &s3.PutObjectInput{
+				Bucket:        &bucket,
+				Key:           &finalKey,
+				Body:          part,
+				ContentLength: aws.Int64(size),
+				Metadata: map[string]string{
+					"uploaded-by": strings.TrimSpace(session.Username),
+				},
+			}
+			if fileContentType != "" {
+				putIn.ContentType = aws.String(fileContentType)
+			}
+
+			if _, err := s.up.PutObject(r.Context(), putIn,
+				s3.WithAPIOptions(v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware),
+				func(o *s3.Options) {
+					o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+				},
+			); err != nil {
+				_ = part.Close()
+				redirectToBucket("", "Could not upload object.")
+				return
+			}
+
+			_ = part.Close()
+			redirectToBucket("Uploaded object: "+finalKey, "")
+			return
+		default:
+			_, _ = io.Copy(io.Discard, part)
+			_ = part.Close()
+		}
+	}
+
 	if bucket == "" {
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
-	rules := rulesFromGroups(session.Groups)
 	if !canWrite(rules, bucket) {
-		http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "", "Write permission is required for uploads."), http.StatusSeeOther)
+		http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, cursor, history, "", "Write permission is required for uploads."), http.StatusSeeOther)
 		return
 	}
-
-	file, fileHeader, err := r.FormFile("file")
-	if err != nil {
-		http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "", "A file is required for upload."), http.StatusSeeOther)
-		return
-	}
-	defer file.Close()
-
-	key := strings.TrimSpace(r.FormValue("key"))
-	if key == "" && fileHeader != nil {
-		key = strings.TrimSpace(fileHeader.Filename)
-	}
-	key = strings.TrimSpace(strings.TrimPrefix(key, "/"))
-	if key == "" {
-		http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "", "Object key is required."), http.StatusSeeOther)
-		return
-	}
-
-	putIn := &s3.PutObjectInput{
-		Bucket: &bucket,
-		Key:    &key,
-		Body:   file,
-		Metadata: map[string]string{
-			"uploaded-by": strings.TrimSpace(session.Username),
-		},
-	}
-	if fileHeader != nil {
-		if fileHeader.Size > maxSinglePutObjectSize {
-			http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "", "File is too large. Use multipart upload for files larger than 5 GiB."), http.StatusSeeOther)
-			return
-		}
-		if fileHeader.Size >= 0 {
-			putIn.ContentLength = aws.Int64(fileHeader.Size)
-		}
-		if contentType := strings.TrimSpace(fileHeader.Header.Get("Content-Type")); contentType != "" {
-			putIn.ContentType = aws.String(contentType)
-		}
-	}
-
-	if _, err := s.up.PutObject(r.Context(), putIn); err != nil {
-		http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "", "Could not upload object."), http.StatusSeeOther)
-		return
-	}
-
-	http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "Uploaded object: "+key, ""), http.StatusSeeOther)
+	http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, cursor, history, "", "A file is required for upload."), http.StatusSeeOther)
 }
 
 func handleAdminBucketDelete(s *server, w http.ResponseWriter, r *http.Request) {

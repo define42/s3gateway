@@ -259,6 +259,7 @@
           <input type="hidden" name="name" value="{{.BucketName}}">
           <input type="hidden" name="cursor" value="{{.CurrentCursor}}">
           <input type="hidden" name="history" value="{{.CurrentHistory}}">
+          <input type="hidden" name="size" value="">
           <label>
             Object key (optional)
             <input type="text" name="key" placeholder="folder/file.txt">
@@ -357,5 +358,25 @@
       </div>
     </section>
   </main>
+  <script>
+    (() => {
+      const forms = document.querySelectorAll(".upload-form");
+      for (const form of forms) {
+        const fileInput = form.querySelector('input[name="file"]');
+        const sizeInput = form.querySelector('input[name="size"]');
+        if (!fileInput || !sizeInput) {
+          continue;
+        }
+
+        const syncSize = () => {
+          const file = fileInput.files && fileInput.files[0];
+          sizeInput.value = file ? String(file.size) : "";
+        };
+
+        fileInput.addEventListener("change", syncSize);
+        form.addEventListener("submit", syncSize);
+      }
+    })();
+  </script>
 </body>
 </html>

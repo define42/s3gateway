@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -696,6 +697,7 @@ func TestAdminBucketUploadAndDelete(t *testing.T) {
 	_ = uploadWriter.WriteField("key", "uploads/new.txt")
 	_ = uploadWriter.WriteField("cursor", "")
 	_ = uploadWriter.WriteField("history", "")
+	_ = uploadWriter.WriteField("size", strconv.Itoa(len("payload-123")))
 	filePart, err := uploadWriter.CreateFormFile("file", "new.txt")
 	if err != nil {
 		t.Fatalf("create multipart file: %v", err)
@@ -774,6 +776,7 @@ func TestAdminBucketUploadAndDeleteRequirePermissions(t *testing.T) {
 	uploadWriter := multipart.NewWriter(&uploadBuf)
 	_ = uploadWriter.WriteField("name", "team2-logs")
 	_ = uploadWriter.WriteField("key", "uploads/new.txt")
+	_ = uploadWriter.WriteField("size", strconv.Itoa(len("payload-123")))
 	filePart, err := uploadWriter.CreateFormFile("file", "new.txt")
 	if err != nil {
 		t.Fatalf("create multipart file: %v", err)
@@ -864,6 +867,7 @@ func TestAdminBucketUpload100MB(t *testing.T) {
 			"key":     "uploads/large-100mb.bin",
 			"cursor":  "",
 			"history": "",
+			"size":    strconv.FormatInt(uploadSize, 10),
 		}
 		for k, v := range fields {
 			if err := writer.WriteField(k, v); err != nil {
@@ -918,6 +922,68 @@ func TestAdminBucketUpload100MB(t *testing.T) {
 	}
 	if putUploadedBy != "alice" {
 		t.Fatalf("uploaded-by metadata mismatch: got=%q want=%q", putUploadedBy, "alice")
+	}
+}
+
+func TestAdminBucketUploadSmallFileWithoutWritableTempDir(t *testing.T) {
+	var putPath string
+	var putBody bytes.Buffer
+
+	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/team2-logs/uploads/no-tempdir.txt" {
+			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		putPath = r.URL.Path
+		_, _ = io.Copy(&putBody, r.Body)
+		w.WriteHeader(http.StatusOK)
+	})
+	defer cleanup()
+
+	gw.gcache.set("alice", "secret", map[string]struct{}{
+		"team2-w": {},
+	})
+	handler := adminWebpageHandler(gw)
+	sessionCookie := adminLoginSessionCookie(t, handler, "alice", "secret")
+
+	t.Setenv("TMPDIR", "/definitely-not-a-real-temp-dir")
+
+	var uploadBuf bytes.Buffer
+	uploadWriter := multipart.NewWriter(&uploadBuf)
+	_ = uploadWriter.WriteField("name", "team2-logs")
+	_ = uploadWriter.WriteField("key", "uploads/no-tempdir.txt")
+	_ = uploadWriter.WriteField("size", strconv.Itoa(len("payload-notmp")))
+	filePart, err := uploadWriter.CreateFormFile("file", "no-tempdir.txt")
+	if err != nil {
+		t.Fatalf("create multipart file: %v", err)
+	}
+	if _, err := filePart.Write([]byte("payload-notmp")); err != nil {
+		t.Fatalf("write multipart payload: %v", err)
+	}
+	if err := uploadWriter.Close(); err != nil {
+		t.Fatalf("close multipart payload: %v", err)
+	}
+
+	uploadReq := httptest.NewRequest(http.MethodPost, "/admin/bucket/upload", &uploadBuf)
+	uploadReq.Header.Set("Content-Type", uploadWriter.FormDataContentType())
+	uploadReq.AddCookie(sessionCookie)
+	uploadRR := httptest.NewRecorder()
+	handler.ServeHTTP(uploadRR, uploadReq)
+
+	if uploadRR.Code != http.StatusSeeOther {
+		t.Fatalf("upload status mismatch: got=%d want=%d body=%s", uploadRR.Code, http.StatusSeeOther, uploadRR.Body.String())
+	}
+	uploadLoc, err := url.Parse(uploadRR.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse upload location: %v", err)
+	}
+	if uploadLoc.Query().Get("msg") != "Uploaded object: uploads/no-tempdir.txt" {
+		t.Fatalf("upload message mismatch: got=%q", uploadLoc.Query().Get("msg"))
+	}
+	if putPath != "/team2-logs/uploads/no-tempdir.txt" {
+		t.Fatalf("put path mismatch: got=%q want=%q", putPath, "/team2-logs/uploads/no-tempdir.txt")
+	}
+	if putBody.String() != "payload-notmp" {
+		t.Fatalf("put body mismatch: got=%q want=%q", putBody.String(), "payload-notmp")
 	}
 }
 
