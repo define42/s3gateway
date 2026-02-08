@@ -36,6 +36,7 @@ import (
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	ldap "github.com/go-ldap/ldap/v3"
+	"golang.org/x/sync/singleflight"
 )
 
 const maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
@@ -158,6 +159,11 @@ func newGroupCacheWithMaxEntries(ttl time.Duration, maxEntries int) *groupCache 
 
 func cacheCredentialHash(upn, password string) [32]byte {
 	return sha256.Sum256([]byte(upn + "\x00" + password))
+}
+
+func singleflightCredentialKey(upn, password string) string {
+	h := cacheCredentialHash(upn, password)
+	return hex.EncodeToString(h[:])
 }
 
 func cloneGroups(groups map[string]struct{}) map[string]struct{} {
@@ -1539,6 +1545,7 @@ type server struct {
 	cfg              Config
 	up               *s3.Client
 	gcache           *groupCache
+	groupLookupSF    singleflight.Group
 	adminSessions    *adminSessionStore
 	adminWebSessions *adminGorillaStore
 }
@@ -1565,13 +1572,26 @@ func (s *server) groupsForCredentials(upn, pass string) (map[string]struct{}, er
 		return grps, nil
 	}
 
-	grps, err := fetchGroupsUPN(s.cfg, upn, pass)
+	sfKey := singleflightCredentialKey(upn, pass)
+	v, err, _ := s.groupLookupSF.Do(sfKey, func() (any, error) {
+		if cached, ok := s.gcache.get(upn, pass); ok {
+			return cached, nil
+		}
+		fetched, err := fetchGroupsUPN(s.cfg, upn, pass)
+		if err != nil {
+			return nil, err
+		}
+		s.gcache.set(upn, pass, fetched)
+		return fetched, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	s.gcache.set(upn, pass, grps)
-	return grps, nil
+	shared, ok := v.(map[string]struct{})
+	if !ok {
+		return nil, errors.New("internal auth error")
+	}
+	return cloneGroups(shared), nil
 }
 
 func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Handler {

@@ -15,6 +15,7 @@ require (
 	github.com/gorilla/sessions v1.4.0
 	github.com/minio/minio-go/v7 v7.0.85
 	github.com/testcontainers/testcontainers-go v0.40.0
+	golang.org/x/sync v0.19.0
 )
 
 require (
