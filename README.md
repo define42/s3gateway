@@ -68,6 +68,9 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 | Bucket | `PUT /<bucket>?lifecycle` | Put lifecycle configuration | `c` on target bucket prefix |
 | Bucket | `GET /<bucket>?lifecycle` | Get lifecycle configuration | `r` on target bucket prefix |
 | Bucket | `DELETE /<bucket>?lifecycle` | Delete lifecycle configuration | `b` on target bucket prefix |
+| Bucket | `PUT /<bucket>?tagging` | Put bucket tagging | `w` on target bucket prefix |
+| Bucket | `GET /<bucket>?tagging` | Get bucket tagging | `r` on target bucket prefix |
+| Bucket | `DELETE /<bucket>?tagging` | Delete bucket tagging | `w` on target bucket prefix |
 | Bucket | `GET /<bucket>?uploads` | List multipart uploads | `r` on target bucket prefix |
 | Object | `GET /<bucket>/<key>` | Get object | `r` on target bucket prefix |
 | Object | `HEAD /<bucket>/<key>` | Head object | `r` on target bucket prefix |
@@ -75,6 +78,9 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 | Object | `PUT /<bucket>/<key>` with `x-amz-copy-source` | Copy object | Destination bucket: `w`; source bucket: `r` |
 | Object | `GET /<bucket>/<key>?attributes` | Get object attributes | `r` on target bucket prefix |
 | Object | `DELETE /<bucket>/<key>` | Delete object | `d` on target bucket prefix |
+| Object | `PUT /<bucket>/<key>?tagging` | Put object tagging | `w` on target bucket prefix |
+| Object | `GET /<bucket>/<key>?tagging` | Get object tagging | `r` on target bucket prefix |
+| Object | `DELETE /<bucket>/<key>?tagging` | Delete object tagging | `w` on target bucket prefix |
 | Multipart | `POST /<bucket>/<key>?uploads` | Create multipart upload | `w` on target bucket prefix; if `REQUIRED_UPLOAD_METADATA_KEYS` is set, all listed `x-amz-meta-*` keys must be present |
 | Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` | Upload part | `w` on target bucket prefix |
 | Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` with `x-amz-copy-source` | Upload part copy | Destination bucket: `w`; source bucket: `r` |

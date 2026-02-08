@@ -439,6 +439,98 @@ func TestGatewayBucketHeadVersioningAndCreateDelete(t *testing.T) {
 	}
 }
 
+func TestGatewayBucketAndObjectTaggingRoutes(t *testing.T) {
+	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/team2-bucket" && strings.Contains(r.URL.RawQuery, "tagging"):
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && r.URL.Path == "/team2-bucket" && strings.Contains(r.URL.RawQuery, "tagging"):
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet><Tag><Key>bk</Key><Value>bv</Value></Tag></TagSet></Tagging>`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/team2-bucket" && strings.Contains(r.URL.RawQuery, "tagging"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPut && r.URL.Path == "/team2-bucket/object.txt" && strings.Contains(r.URL.RawQuery, "tagging"):
+			w.Header().Set("x-amz-version-id", "v-put")
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && r.URL.Path == "/team2-bucket/object.txt" && strings.Contains(r.URL.RawQuery, "tagging"):
+			w.Header().Set("x-amz-version-id", "v-get")
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet><Tag><Key>ok</Key><Value>ov</Value></Tag></TagSet></Tagging>`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/team2-bucket/object.txt" && strings.Contains(r.URL.RawQuery, "tagging"):
+			w.Header().Set("x-amz-version-id", "v-del")
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+	})
+	defer cleanup()
+
+	fullPerm := context.WithValue(context.Background(), ctxRulesKey, fullTeam2Rule())
+	bucketTaggingPayload := `<?xml version="1.0" encoding="UTF-8"?><Tagging><TagSet><Tag><Key>bk</Key><Value>bv</Value></Tag></TagSet></Tagging>`
+	objectTaggingPayload := `<?xml version="1.0" encoding="UTF-8"?><Tagging><TagSet><Tag><Key>ok</Key><Value>ov</Value></Tag></TagSet></Tagging>`
+
+	putBucketReq := httptest.NewRequest(http.MethodPut, "/team2-bucket?tagging", strings.NewReader(bucketTaggingPayload)).WithContext(fullPerm)
+	putBucketRR := httptest.NewRecorder()
+	gw.ServeHTTP(putBucketRR, putBucketReq)
+	if putBucketRR.Code != http.StatusOK {
+		t.Fatalf("put bucket tagging status mismatch: got=%d body=%s", putBucketRR.Code, putBucketRR.Body.String())
+	}
+
+	getBucketReq := httptest.NewRequest(http.MethodGet, "/team2-bucket?tagging", nil).WithContext(fullPerm)
+	getBucketRR := httptest.NewRecorder()
+	gw.ServeHTTP(getBucketRR, getBucketReq)
+	if getBucketRR.Code != http.StatusOK {
+		t.Fatalf("get bucket tagging status mismatch: got=%d body=%s", getBucketRR.Code, getBucketRR.Body.String())
+	}
+	if !strings.Contains(getBucketRR.Body.String(), "<Key>bk</Key>") {
+		t.Fatalf("missing bucket tagging key in response body: %s", getBucketRR.Body.String())
+	}
+
+	deleteBucketReq := httptest.NewRequest(http.MethodDelete, "/team2-bucket?tagging", nil).WithContext(fullPerm)
+	deleteBucketRR := httptest.NewRecorder()
+	gw.ServeHTTP(deleteBucketRR, deleteBucketReq)
+	if deleteBucketRR.Code != http.StatusNoContent {
+		t.Fatalf("delete bucket tagging status mismatch: got=%d body=%s", deleteBucketRR.Code, deleteBucketRR.Body.String())
+	}
+
+	putObjectReq := httptest.NewRequest(http.MethodPut, "/team2-bucket/object.txt?tagging&versionId=v1", strings.NewReader(objectTaggingPayload)).WithContext(fullPerm)
+	putObjectReq.Header.Set("x-amz-request-payer", "requester")
+	putObjectRR := httptest.NewRecorder()
+	gw.ServeHTTP(putObjectRR, putObjectReq)
+	if putObjectRR.Code != http.StatusOK {
+		t.Fatalf("put object tagging status mismatch: got=%d body=%s", putObjectRR.Code, putObjectRR.Body.String())
+	}
+	if putObjectRR.Header().Get("x-amz-version-id") != "v-put" {
+		t.Fatalf("put object tagging version mismatch: got=%q", putObjectRR.Header().Get("x-amz-version-id"))
+	}
+
+	getObjectReq := httptest.NewRequest(http.MethodGet, "/team2-bucket/object.txt?tagging&versionId=v1", nil).WithContext(fullPerm)
+	getObjectReq.Header.Set("x-amz-request-payer", "requester")
+	getObjectRR := httptest.NewRecorder()
+	gw.ServeHTTP(getObjectRR, getObjectReq)
+	if getObjectRR.Code != http.StatusOK {
+		t.Fatalf("get object tagging status mismatch: got=%d body=%s", getObjectRR.Code, getObjectRR.Body.String())
+	}
+	if getObjectRR.Header().Get("x-amz-version-id") != "v-get" {
+		t.Fatalf("get object tagging version mismatch: got=%q", getObjectRR.Header().Get("x-amz-version-id"))
+	}
+	if !strings.Contains(getObjectRR.Body.String(), "<Key>ok</Key>") {
+		t.Fatalf("missing object tagging key in response body: %s", getObjectRR.Body.String())
+	}
+
+	deleteObjectReq := httptest.NewRequest(http.MethodDelete, "/team2-bucket/object.txt?tagging&versionId=v1", nil).WithContext(fullPerm)
+	deleteObjectRR := httptest.NewRecorder()
+	gw.ServeHTTP(deleteObjectRR, deleteObjectReq)
+	if deleteObjectRR.Code != http.StatusNoContent {
+		t.Fatalf("delete object tagging status mismatch: got=%d body=%s", deleteObjectRR.Code, deleteObjectRR.Body.String())
+	}
+	if deleteObjectRR.Header().Get("x-amz-version-id") != "v-del" {
+		t.Fatalf("delete object tagging version mismatch: got=%q", deleteObjectRR.Header().Get("x-amz-version-id"))
+	}
+}
+
 func TestCoverageHelpersLifecycleAndShutdown(t *testing.T) {
 	if got := encodeLifecycleTag(nil); got != nil {
 		t.Fatalf("encodeLifecycleTag(nil) = %+v, want nil", got)

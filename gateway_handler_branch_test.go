@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1220,9 +1221,11 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 			{method: http.MethodPost, target: "/readyz", want: http.StatusMethodNotAllowed},
 			{method: http.MethodPatch, target: "/team2-bucket?lifecycle", want: http.StatusNotImplemented},
 			{method: http.MethodDelete, target: "/team2-bucket?versioning", want: http.StatusNotImplemented},
+			{method: http.MethodPatch, target: "/team2-bucket?tagging", want: http.StatusNotImplemented},
 			{method: http.MethodGet, target: "/team2-bucket", want: http.StatusNotImplemented},
 			{method: http.MethodPut, target: "/team2-bucket/key.txt?uploadId=u1&partNumber=abc", want: http.StatusBadRequest},
 			{method: http.MethodPatch, target: "/team2-bucket/key.txt?uploadId=u1&partNumber=1", want: http.StatusNotImplemented},
+			{method: http.MethodPost, target: "/team2-bucket/key.txt?tagging", want: http.StatusNotImplemented},
 			{method: http.MethodTrace, target: "/team2-bucket/key.txt", want: http.StatusNotImplemented},
 		}
 		for _, tc := range cases {
@@ -2014,6 +2017,493 @@ func TestHandlePutBucketVersioningBranches(t *testing.T) {
 		req = reqWithRules(req, fullTeam2Rule())
 		rr := httptest.NewRecorder()
 		gw.handlePutBucketVersioning(rr, req, "team2-bucket")
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+}
+
+func TestBucketTaggingHandlersBranches(t *testing.T) {
+	validTagging := `<?xml version="1.0" encoding="UTF-8"?><Tagging><TagSet><Tag><Key>k1</Key><Value>v1</Value></Tag></TagSet></Tagging>`
+
+	t.Run("put forbidden", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?tagging", strings.NewReader(validTagging))
+		req = reqWithRules(req, nil)
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put malformed xml", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?tagging", strings.NewReader(`<Tagging><TagSet><Tag><Key>k1</Key></Tag></TagSet></Tagging>`))
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put invalid checksum algorithm", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?tagging", strings.NewReader(validTagging))
+		req.Header.Set("x-amz-checksum-algorithm", "MD5")
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put success with optional headers", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPut || r.URL.Path != "/team2-bucket" {
+				t.Fatalf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+			}
+			if _, ok := r.URL.Query()["tagging"]; !ok {
+				t.Fatalf("missing tagging query in upstream request: %q", r.URL.RawQuery)
+			}
+			if got := r.Header.Get("Content-Md5"); got != "d41d8cd98f00b204e9800998ecf8427e" {
+				t.Fatalf("content-md5 mismatch: got=%q", got)
+			}
+			if got := r.Header.Get("X-Amz-Expected-Bucket-Owner"); got != "123456789012" {
+				t.Fatalf("expected bucket owner mismatch: got=%q", got)
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read request body: %v", err)
+			}
+			if !strings.Contains(string(body), "<Key>k1</Key>") {
+				t.Fatalf("missing tag key in request body: %s", string(body))
+			}
+			w.WriteHeader(http.StatusOK)
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?tagging", strings.NewReader(validTagging))
+		req.Header.Set("Content-MD5", "d41d8cd98f00b204e9800998ecf8427e")
+		req.Header.Set("x-amz-expected-bucket-owner", "123456789012")
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put upstream error", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>boom</Message></Error>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?tagging", strings.NewReader(validTagging))
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("get forbidden", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket?tagging", nil)
+		req = reqWithRules(req, nil)
+		rr := httptest.NewRecorder()
+		gw.handleGetBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("get success", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/team2-bucket" {
+				t.Fatalf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+			}
+			if _, ok := r.URL.Query()["tagging"]; !ok {
+				t.Fatalf("missing tagging query in upstream request: %q", r.URL.RawQuery)
+			}
+			if got := r.Header.Get("X-Amz-Expected-Bucket-Owner"); got != "123456789012" {
+				t.Fatalf("expected bucket owner mismatch: got=%q", got)
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet><Tag><Key>k1</Key><Value>v1</Value></Tag></TagSet></Tagging>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket?tagging", nil)
+		req.Header.Set("x-amz-expected-bucket-owner", "123456789012")
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handleGetBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if !strings.Contains(rr.Body.String(), "<Key>k1</Key>") {
+			t.Fatalf("expected tag key in response: %s", rr.Body.String())
+		}
+	})
+
+	t.Run("get upstream error", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>boom</Message></Error>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket?tagging", nil)
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handleGetBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("delete forbidden", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?tagging", nil)
+		req = reqWithRules(req, nil)
+		rr := httptest.NewRecorder()
+		gw.handleDeleteBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("delete success", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodDelete || r.URL.Path != "/team2-bucket" {
+				t.Fatalf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+			}
+			if _, ok := r.URL.Query()["tagging"]; !ok {
+				t.Fatalf("missing tagging query in upstream request: %q", r.URL.RawQuery)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?tagging", nil)
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handleDeleteBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusNoContent {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("delete upstream error", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>boom</Message></Error>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?tagging", nil)
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handleDeleteBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+}
+
+func TestObjectTaggingHandlersBranches(t *testing.T) {
+	validTagging := `<?xml version="1.0" encoding="UTF-8"?><Tagging><TagSet><Tag><Key>k1</Key><Value>v1</Value></Tag></TagSet></Tagging>`
+
+	t.Run("put forbidden", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/key.txt?tagging", strings.NewReader(validTagging))
+		req = reqWithRules(req, nil)
+		rr := httptest.NewRecorder()
+		gw.handlePutObjectTagging(rr, req, "team2-bucket", "key.txt")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put malformed xml", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/key.txt?tagging", strings.NewReader(`<Tagging><TagSet><Tag><Key>k1</Key></Tag></TagSet></Tagging>`))
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutObjectTagging(rr, req, "team2-bucket", "key.txt")
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put invalid request payer", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/key.txt?tagging", strings.NewReader(validTagging))
+		req.Header.Set("x-amz-request-payer", "owner")
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutObjectTagging(rr, req, "team2-bucket", "key.txt")
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put invalid checksum algorithm", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/key.txt?tagging", strings.NewReader(validTagging))
+		req.Header.Set("x-amz-checksum-algorithm", "MD5")
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutObjectTagging(rr, req, "team2-bucket", "key.txt")
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put success", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPut || r.URL.Path != "/team2-bucket/key.txt" {
+				t.Fatalf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+			}
+			if _, ok := r.URL.Query()["tagging"]; !ok {
+				t.Fatalf("missing tagging query in upstream request: %q", r.URL.RawQuery)
+			}
+			if got := r.URL.Query().Get("versionId"); got != "v1" {
+				t.Fatalf("version id query mismatch: got=%q", got)
+			}
+			if got := r.Header.Get("X-Amz-Request-Payer"); got != "requester" {
+				t.Fatalf("request payer mismatch: got=%q", got)
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read request body: %v", err)
+			}
+			if !strings.Contains(string(body), "<Value>v1</Value>") {
+				t.Fatalf("missing tag value in request body: %s", string(body))
+			}
+			w.Header().Set("x-amz-version-id", "v1")
+			w.WriteHeader(http.StatusOK)
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/key.txt?tagging&versionId=v1", strings.NewReader(validTagging))
+		req.Header.Set("x-amz-request-payer", "requester")
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutObjectTagging(rr, req, "team2-bucket", "key.txt")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if rr.Header().Get("x-amz-version-id") != "v1" {
+			t.Fatalf("missing version id response header: %q", rr.Header().Get("x-amz-version-id"))
+		}
+	})
+
+	t.Run("put upstream error", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>boom</Message></Error>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/key.txt?tagging", strings.NewReader(validTagging))
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handlePutObjectTagging(rr, req, "team2-bucket", "key.txt")
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("get forbidden", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket/key.txt?tagging", nil)
+		req = reqWithRules(req, nil)
+		rr := httptest.NewRecorder()
+		gw.handleGetObjectTagging(rr, req, "team2-bucket", "key.txt")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("get invalid request payer", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket/key.txt?tagging", nil)
+		req.Header.Set("x-amz-request-payer", "owner")
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handleGetObjectTagging(rr, req, "team2-bucket", "key.txt")
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("get success", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/team2-bucket/key.txt" {
+				t.Fatalf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+			}
+			if _, ok := r.URL.Query()["tagging"]; !ok {
+				t.Fatalf("missing tagging query in upstream request: %q", r.URL.RawQuery)
+			}
+			if got := r.URL.Query().Get("versionId"); got != "v1" {
+				t.Fatalf("version id query mismatch: got=%q", got)
+			}
+			if got := r.Header.Get("X-Amz-Request-Payer"); got != "requester" {
+				t.Fatalf("request payer mismatch: got=%q", got)
+			}
+			w.Header().Set("x-amz-version-id", "v1")
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet><Tag><Key>k1</Key><Value>v1</Value></Tag><Tag><Key>k2</Key><Value>v2</Value></Tag></TagSet></Tagging>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket/key.txt?tagging&versionId=v1", nil)
+		req.Header.Set("x-amz-request-payer", "requester")
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handleGetObjectTagging(rr, req, "team2-bucket", "key.txt")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if rr.Header().Get("x-amz-version-id") != "v1" {
+			t.Fatalf("missing version id response header: %q", rr.Header().Get("x-amz-version-id"))
+		}
+		for _, want := range []string{"<Key>k1</Key>", "<Key>k2</Key>"} {
+			if !strings.Contains(rr.Body.String(), want) {
+				t.Fatalf("missing %q in response body: %s", want, rr.Body.String())
+			}
+		}
+	})
+
+	t.Run("get upstream error", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>boom</Message></Error>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket/key.txt?tagging", nil)
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handleGetObjectTagging(rr, req, "team2-bucket", "key.txt")
+		if rr.Code != http.StatusInternalServerError {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("delete forbidden", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket/key.txt?tagging", nil)
+		req = reqWithRules(req, nil)
+		rr := httptest.NewRecorder()
+		gw.handleDeleteObjectTagging(rr, req, "team2-bucket", "key.txt")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("delete success", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodDelete || r.URL.Path != "/team2-bucket/key.txt" {
+				t.Fatalf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+			}
+			if _, ok := r.URL.Query()["tagging"]; !ok {
+				t.Fatalf("missing tagging query in upstream request: %q", r.URL.RawQuery)
+			}
+			if got := r.URL.Query().Get("versionId"); got != "v1" {
+				t.Fatalf("version id query mismatch: got=%q", got)
+			}
+			w.Header().Set("x-amz-version-id", "v1")
+			w.WriteHeader(http.StatusNoContent)
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket/key.txt?tagging&versionId=v1", nil)
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handleDeleteObjectTagging(rr, req, "team2-bucket", "key.txt")
+		if rr.Code != http.StatusNoContent {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if rr.Header().Get("x-amz-version-id") != "v1" {
+			t.Fatalf("missing version id response header: %q", rr.Header().Get("x-amz-version-id"))
+		}
+	})
+
+	t.Run("delete upstream error", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>boom</Message></Error>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket/key.txt?tagging", nil)
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.handleDeleteObjectTagging(rr, req, "team2-bucket", "key.txt")
 		if rr.Code != http.StatusInternalServerError {
 			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
 		}

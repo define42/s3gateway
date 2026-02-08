@@ -213,6 +213,127 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 		t.Fatalf("put object through booted gateway: %v", err)
 	}
 
+	assertAccessDenied := func(label string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("expected %s to fail with AccessDenied", label)
+		}
+		var apiErr smithy.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("expected smithy api error for %s, got: %v", label, err)
+		}
+		if apiErr.ErrorCode() != "AccessDenied" {
+			t.Fatalf("%s error code mismatch: got=%q want=%q", label, apiErr.ErrorCode(), "AccessDenied")
+		}
+	}
+	tagSetSig := func(tags []s3types.Tag) []string {
+		out := make([]string, 0, len(tags))
+		for _, tag := range tags {
+			out = append(out, fmt.Sprintf("%s=%s", aws.ToString(tag.Key), aws.ToString(tag.Value)))
+		}
+		sort.Strings(out)
+		return out
+	}
+	assertTagSetMatches := func(label string, got, want []s3types.Tag) {
+		t.Helper()
+		if gotSig, wantSig := fmt.Sprintf("%v", tagSetSig(got)), fmt.Sprintf("%v", tagSetSig(want)); gotSig != wantSig {
+			t.Fatalf("%s tag set mismatch: got=%q want=%q", label, gotSig, wantSig)
+		}
+	}
+
+	bucketTagging := &s3types.Tagging{
+		TagSet: []s3types.Tag{
+			{Key: aws.String("scope"), Value: aws.String("boot")},
+			{Key: aws.String("suite"), Value: aws.String("integration")},
+		},
+	}
+	if _, err := rwClient.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
+		Bucket:  aws.String(bucket),
+		Tagging: bucketTagging,
+	}); err != nil {
+		t.Fatalf("put bucket tagging through booted gateway: %v", err)
+	}
+	if _, err := roClient.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
+		Bucket:  aws.String(bucket),
+		Tagging: bucketTagging,
+	}); err == nil {
+		t.Fatalf("expected readonly PutBucketTagging to fail")
+	} else {
+		assertAccessDenied("readonly PutBucketTagging", err)
+	}
+
+	gatewayBucketTaggingOut, err := rwClient.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("get bucket tagging through booted gateway: %v", err)
+	}
+	upstreamBucketTaggingOut, err := upstreamClient.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("get bucket tagging from upstream: %v", err)
+	}
+	assertTagSetMatches("bucket tagging gateway vs upstream", gatewayBucketTaggingOut.TagSet, upstreamBucketTaggingOut.TagSet)
+	assertTagSetMatches("bucket tagging gateway vs expected", gatewayBucketTaggingOut.TagSet, bucketTagging.TagSet)
+
+	roBucketTaggingOut, err := roClient.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("readonly get bucket tagging through booted gateway: %v", err)
+	}
+	assertTagSetMatches("readonly bucket tagging vs expected", roBucketTaggingOut.TagSet, bucketTagging.TagSet)
+
+	objectTagging := &s3types.Tagging{
+		TagSet: []s3types.Tag{
+			{Key: aws.String("kind"), Value: aws.String("document")},
+			{Key: aws.String("owner"), Value: aws.String("testuser")},
+		},
+	}
+	if _, err := rwClient.PutObjectTagging(ctx, &s3.PutObjectTaggingInput{
+		Bucket:  aws.String(bucket),
+		Key:     aws.String(key),
+		Tagging: objectTagging,
+	}); err != nil {
+		t.Fatalf("put object tagging through booted gateway: %v", err)
+	}
+	if _, err := roClient.PutObjectTagging(ctx, &s3.PutObjectTaggingInput{
+		Bucket:  aws.String(bucket),
+		Key:     aws.String(key),
+		Tagging: objectTagging,
+	}); err == nil {
+		t.Fatalf("expected readonly PutObjectTagging to fail")
+	} else {
+		assertAccessDenied("readonly PutObjectTagging", err)
+	}
+
+	gatewayObjectTaggingOut, err := rwClient.GetObjectTagging(ctx, &s3.GetObjectTaggingInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("get object tagging through booted gateway: %v", err)
+	}
+	upstreamObjectTaggingOut, err := upstreamClient.GetObjectTagging(ctx, &s3.GetObjectTaggingInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("get object tagging from upstream: %v", err)
+	}
+	assertTagSetMatches("object tagging gateway vs upstream", gatewayObjectTaggingOut.TagSet, upstreamObjectTaggingOut.TagSet)
+	assertTagSetMatches("object tagging gateway vs expected", gatewayObjectTaggingOut.TagSet, objectTagging.TagSet)
+
+	roObjectTaggingOut, err := roClient.GetObjectTagging(ctx, &s3.GetObjectTaggingInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("readonly get object tagging through booted gateway: %v", err)
+	}
+	assertTagSetMatches("readonly object tagging vs expected", roObjectTaggingOut.TagSet, objectTagging.TagSet)
+
 	newSSEPutInput := func() *s3.PutObjectInput {
 		return &s3.PutObjectInput{
 			Bucket:               aws.String(bucket),

@@ -49,6 +49,14 @@ const (
 	xmlDeclaration           = `<?xml version="1.0" encoding="UTF-8"?>`
 )
 
+var xmlEscaper = strings.NewReplacer(
+	`&`, "&amp;",
+	`<`, "&lt;",
+	`>`, "&gt;",
+	`"`, "&quot;",
+	`'`, "&apos;",
+)
+
 // ==================== Credential hack ====================
 // accessKey = base64("userPrincipalName:password")
 // secretKey = constant "password"
@@ -682,14 +690,7 @@ func constantTimeEq(a, b string) bool {
 
 // ==================== XML helpers ====================
 func xmlEscape(s string) string {
-	repl := strings.NewReplacer(
-		`&`, "&amp;",
-		`<`, "&lt;",
-		`>`, "&gt;",
-		`"`, "&quot;",
-		`'`, "&apos;",
-	)
-	return repl.Replace(s)
+	return xmlEscaper.Replace(s)
 }
 
 func formatS3Time(t time.Time) string {
@@ -1758,6 +1759,22 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if _, ok := q["tagging"]; ok {
+			switch r.Method {
+			case http.MethodPut:
+				s.handlePutBucketTagging(w, r, bucket)
+				return
+			case http.MethodGet:
+				s.handleGetBucketTagging(w, r, bucket)
+				return
+			case http.MethodDelete:
+				s.handleDeleteBucketTagging(w, r, bucket)
+				return
+			default:
+				writeXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+				return
+			}
+		}
 		if _, ok := q["delete"]; ok && r.Method == http.MethodPost {
 			s.handleDeleteObjects(w, r, bucket)
 			return
@@ -1795,6 +1812,23 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// /bucket/key
 	key := parts[1]
 	q := r.URL.Query()
+
+	if _, ok := q["tagging"]; ok {
+		switch r.Method {
+		case http.MethodPut:
+			s.handlePutObjectTagging(w, r, bucket, key)
+			return
+		case http.MethodGet:
+			s.handleGetObjectTagging(w, r, bucket, key)
+			return
+		case http.MethodDelete:
+			s.handleDeleteObjectTagging(w, r, bucket, key)
+			return
+		default:
+			writeXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			return
+		}
+	}
 
 	// Multipart
 	if _, ok := q["uploads"]; ok && r.Method == http.MethodPost {
@@ -2033,6 +2067,62 @@ func encodeVersioningConfigXML(status types.BucketVersioningStatus, mfaDelete ty
 		return nil, err
 	}
 	return append([]byte(xml.Header), body...), nil
+}
+
+type taggingXML struct {
+	XMLName xml.Name   `xml:"Tagging"`
+	XMLNS   string     `xml:"xmlns,attr,omitempty"`
+	TagSet  []tagXMLKV `xml:"TagSet>Tag"`
+}
+
+type tagXMLKV struct {
+	Key   *string `xml:"Key"`
+	Value *string `xml:"Value"`
+}
+
+func decodeTaggingXML(r io.Reader) (*types.Tagging, error) {
+	var in taggingXML
+	if err := xml.NewDecoder(r).Decode(&in); err != nil {
+		return nil, err
+	}
+	out := &types.Tagging{
+		TagSet: make([]types.Tag, 0, len(in.TagSet)),
+	}
+	for i, t := range in.TagSet {
+		if t.Key == nil {
+			return nil, fmt.Errorf("tag[%d] missing key", i)
+		}
+		if t.Value == nil {
+			return nil, fmt.Errorf("tag[%d] missing value", i)
+		}
+		key := *t.Key
+		value := *t.Value
+		out.TagSet = append(out.TagSet, types.Tag{
+			Key:   aws.String(key),
+			Value: aws.String(value),
+		})
+	}
+	return out, nil
+}
+
+func writeTaggingXMLResponse(w http.ResponseWriter, status int, tagSet []types.Tag) {
+	xw := beginXMLWriterResponse(w, status)
+	defer flushXMLWriterResponse(xw)
+
+	encodeS3RootStart(xw, "Tagging")
+	xw.Start("TagSet")
+	for _, t := range tagSet {
+		xw.Start("Tag")
+		if t.Key != nil {
+			xw.Elem("Key", *t.Key)
+		}
+		if t.Value != nil {
+			xw.Elem("Value", *t.Value)
+		}
+		xw.End("Tag")
+	}
+	xw.End("TagSet")
+	xw.End("Tagging")
 }
 
 type deleteObjectsReqXML struct {
@@ -2848,6 +2938,209 @@ func (s *server) handleGetBucketVersioning(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+func (s *server) handlePutBucketTagging(w http.ResponseWriter, r *http.Request, bucket string) {
+	rules := rulesFromCtx(r)
+	if !canWrite(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	tagging, err := decodeTaggingXML(r.Body)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid tagging payload")
+		return
+	}
+	checksumAlgorithm, err := parseChecksumAlgorithmHeader(r.Header.Get("x-amz-checksum-algorithm"))
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum algorithm")
+		return
+	}
+
+	in := &s3.PutBucketTaggingInput{
+		Bucket:  &bucket,
+		Tagging: tagging,
+	}
+	if checksumAlgorithm != "" {
+		in.ChecksumAlgorithm = checksumAlgorithm
+	}
+	if contentMD5 := strings.TrimSpace(r.Header.Get("Content-MD5")); contentMD5 != "" {
+		in.ContentMD5 = aws.String(contentMD5)
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+
+	if _, err := s.up.PutBucketTagging(r.Context(), in); err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *server) handleGetBucketTagging(w http.ResponseWriter, r *http.Request, bucket string) {
+	rules := rulesFromCtx(r)
+	if !canRead(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	in := &s3.GetBucketTaggingInput{
+		Bucket: &bucket,
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+
+	out, err := s.up.GetBucketTagging(r.Context(), in)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	writeTaggingXMLResponse(w, http.StatusOK, out.TagSet)
+}
+
+func (s *server) handleDeleteBucketTagging(w http.ResponseWriter, r *http.Request, bucket string) {
+	rules := rulesFromCtx(r)
+	if !canWrite(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	in := &s3.DeleteBucketTaggingInput{
+		Bucket: &bucket,
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+
+	if _, err := s.up.DeleteBucketTagging(r.Context(), in); err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	rules := rulesFromCtx(r)
+	if !canWrite(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	tagging, err := decodeTaggingXML(r.Body)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid tagging payload")
+		return
+	}
+	payer, err := parseRequestPayerHeader(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	}
+	checksumAlgorithm, err := parseChecksumAlgorithmHeader(r.Header.Get("x-amz-checksum-algorithm"))
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum algorithm")
+		return
+	}
+
+	in := &s3.PutObjectTaggingInput{
+		Bucket:  &bucket,
+		Key:     &key,
+		Tagging: tagging,
+	}
+	if versionID := strings.TrimSpace(r.URL.Query().Get("versionId")); versionID != "" {
+		in.VersionId = aws.String(versionID)
+	}
+	if checksumAlgorithm != "" {
+		in.ChecksumAlgorithm = checksumAlgorithm
+	}
+	if contentMD5 := strings.TrimSpace(r.Header.Get("Content-MD5")); contentMD5 != "" {
+		in.ContentMD5 = aws.String(contentMD5)
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if payer != "" {
+		in.RequestPayer = payer
+	}
+
+	out, err := s.up.PutObjectTagging(r.Context(), in)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	if out.VersionId != nil {
+		w.Header().Set("x-amz-version-id", *out.VersionId)
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *server) handleGetObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	rules := rulesFromCtx(r)
+	if !canRead(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+	payer, err := parseRequestPayerHeader(r.Header)
+	if err != nil {
+		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	}
+
+	in := &s3.GetObjectTaggingInput{
+		Bucket: &bucket,
+		Key:    &key,
+	}
+	if versionID := strings.TrimSpace(r.URL.Query().Get("versionId")); versionID != "" {
+		in.VersionId = aws.String(versionID)
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if payer != "" {
+		in.RequestPayer = payer
+	}
+
+	out, err := s.up.GetObjectTagging(r.Context(), in)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	if out.VersionId != nil {
+		w.Header().Set("x-amz-version-id", *out.VersionId)
+	}
+	writeTaggingXMLResponse(w, http.StatusOK, out.TagSet)
+}
+
+func (s *server) handleDeleteObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	rules := rulesFromCtx(r)
+	if !canWrite(rules, bucket) {
+		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	in := &s3.DeleteObjectTaggingInput{
+		Bucket: &bucket,
+		Key:    &key,
+	}
+	if versionID := strings.TrimSpace(r.URL.Query().Get("versionId")); versionID != "" {
+		in.VersionId = aws.String(versionID)
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+
+	out, err := s.up.DeleteObjectTagging(r.Context(), in)
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	if out.VersionId != nil {
+		w.Header().Set("x-amz-version-id", *out.VersionId)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, bucket string) {
