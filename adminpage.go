@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -21,8 +22,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 )
@@ -1424,42 +1425,141 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 				redirectToBucket("", "Object key is required.")
 				return
 			}
-			if size < 0 {
+
+			// Guard against S3's maximum object size (5 TiB) when the browser provided file size.
+			const maxMultipartObjectSize = int64(5 * 1024 * 1024 * 1024 * 1024)
+			if size > maxMultipartObjectSize {
 				_ = part.Close()
-				redirectToBucket("", "File size is required for upload.")
-				return
-			}
-			if size > maxSinglePutObjectSize {
-				_ = part.Close()
-				redirectToBucket("", "File is too large. Use multipart upload for files larger than 5 GiB.")
+				redirectToBucket("", "File is too large. Maximum supported object size is 5 TiB.")
 				return
 			}
 
-			putIn := &s3.PutObjectInput{
-				Bucket:        &bucket,
-				Key:           &finalKey,
-				Body:          part,
-				ContentLength: aws.Int64(size),
+			createIn := &s3.CreateMultipartUploadInput{
+				Bucket: &bucket,
+				Key:    &finalKey,
 				Metadata: map[string]string{
 					"uploaded-by": strings.TrimSpace(session.Username),
 				},
 			}
 			if fileContentType != "" {
-				putIn.ContentType = aws.String(fileContentType)
+				createIn.ContentType = aws.String(fileContentType)
 			}
 
-			if _, err := s.up.PutObject(r.Context(), putIn,
-				s3.WithAPIOptions(v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware),
-				func(o *s3.Options) {
-					o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
-				},
-			); err != nil {
+			createOut, err := s.up.CreateMultipartUpload(r.Context(), createIn)
+			if err != nil {
+				_ = part.Close()
+				redirectToBucket("", "Could not upload object.")
+				return
+			}
+			uploadID := strings.TrimSpace(aws.ToString(createOut.UploadId))
+			if uploadID == "" {
 				_ = part.Close()
 				redirectToBucket("", "Could not upload object.")
 				return
 			}
 
+			completed := false
+			defer func() {
+				if completed {
+					return
+				}
+				_, _ = s.up.AbortMultipartUpload(r.Context(), &s3.AbortMultipartUploadInput{
+					Bucket:   &bucket,
+					Key:      &finalKey,
+					UploadId: &uploadID,
+				})
+			}()
+
+			const uploadPartSize = int64(16 << 20) // 16 MiB
+			buf := make([]byte, uploadPartSize)
+			completedParts := make([]types.CompletedPart, 0, 16)
+			var partNumber int32 = 1
+
+			for {
+				n, readErr := io.ReadFull(part, buf)
+				if errors.Is(readErr, io.EOF) {
+					break
+				}
+				if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+					_ = part.Close()
+					redirectToBucket("", "Could not upload object.")
+					return
+				}
+				if n == 0 {
+					break
+				}
+				if partNumber > 10000 {
+					_ = part.Close()
+					redirectToBucket("", "File is too large. Maximum multipart part count exceeded.")
+					return
+				}
+
+				partBody := bytes.NewReader(buf[:n])
+				uploadOut, uploadErr := s.up.UploadPart(r.Context(), &s3.UploadPartInput{
+					Bucket:        &bucket,
+					Key:           &finalKey,
+					UploadId:      &uploadID,
+					PartNumber:    aws.Int32(partNumber),
+					Body:          partBody,
+					ContentLength: aws.Int64(int64(n)),
+				})
+				if uploadErr != nil {
+					_ = part.Close()
+					redirectToBucket("", "Could not upload object.")
+					return
+				}
+
+				etag := strings.TrimSpace(aws.ToString(uploadOut.ETag))
+				if etag == "" {
+					_ = part.Close()
+					redirectToBucket("", "Could not upload object.")
+					return
+				}
+				completedParts = append(completedParts, types.CompletedPart{
+					ETag:       aws.String(etag),
+					PartNumber: aws.Int32(partNumber),
+				})
+				partNumber++
+
+				if errors.Is(readErr, io.ErrUnexpectedEOF) {
+					break
+				}
+			}
 			_ = part.Close()
+
+			if len(completedParts) == 0 {
+				// Multipart uploads require at least one uploaded part.
+				putOut, putErr := s.up.PutObject(r.Context(), &s3.PutObjectInput{
+					Bucket:        &bucket,
+					Key:           &finalKey,
+					Body:          bytes.NewReader(nil),
+					ContentLength: aws.Int64(0),
+					ContentType:   createIn.ContentType,
+					Metadata:      createIn.Metadata,
+				})
+				if putErr != nil || putOut == nil {
+					redirectToBucket("", "Could not upload object.")
+					return
+				}
+				completed = true
+				redirectToBucket("Uploaded object: "+finalKey, "")
+				return
+			}
+
+			_, err = s.up.CompleteMultipartUpload(r.Context(), &s3.CompleteMultipartUploadInput{
+				Bucket:   &bucket,
+				Key:      &finalKey,
+				UploadId: &uploadID,
+				MultipartUpload: &types.CompletedMultipartUpload{
+					Parts: completedParts,
+				},
+			})
+			if err != nil {
+				redirectToBucket("", "Could not upload object.")
+				return
+			}
+
+			completed = true
 			redirectToBucket("Uploaded object: "+finalKey, "")
 			return
 		default:

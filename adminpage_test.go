@@ -663,19 +663,32 @@ func TestAdminBucketDownload(t *testing.T) {
 }
 
 func TestAdminBucketUploadAndDelete(t *testing.T) {
-	var putBody bytes.Buffer
+	var uploadedPart1 bytes.Buffer
 	var putPath string
 	var putUploadedBy string
 	var deletePath string
+	const uploadID = "upload-new-1"
 
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
 		switch {
-		case r.Method == http.MethodPut && r.URL.Path == "/team2-logs/uploads/new.txt":
+		case r.Method == http.MethodPost && r.URL.Path == "/team2-logs/uploads/new.txt" && q.Has("uploads"):
 			putPath = r.URL.Path
 			putUploadedBy = r.Header.Get("x-amz-meta-uploaded-by")
-			_, _ = io.Copy(&putBody, r.Body)
-			w.Header().Set("ETag", `"etag-uploaded"`)
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>team2-logs</Bucket><Key>uploads/new.txt</Key><UploadId>`+uploadID+`</UploadId></InitiateMultipartUploadResult>`)
+		case r.Method == http.MethodPut && r.URL.Path == "/team2-logs/uploads/new.txt" && q.Get("uploadId") == uploadID:
+			if q.Get("partNumber") == "1" {
+				_, _ = io.Copy(&uploadedPart1, r.Body)
+			} else {
+				_, _ = io.Copy(io.Discard, r.Body)
+			}
+			w.Header().Set("ETag", `"etag-part-1"`)
 			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/team2-logs/uploads/new.txt" && q.Get("uploadId") == uploadID:
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>team2-logs</Bucket><Key>uploads/new.txt</Key><ETag>"etag-uploaded"</ETag></CompleteMultipartUploadResult>`)
 		case r.Method == http.MethodDelete && r.URL.Path == "/team2-logs/uploads/new.txt":
 			deletePath = r.URL.Path
 			w.WriteHeader(http.StatusNoContent)
@@ -731,8 +744,8 @@ func TestAdminBucketUploadAndDelete(t *testing.T) {
 	if putUploadedBy != "alice" {
 		t.Fatalf("uploaded-by metadata mismatch: got=%q want=%q", putUploadedBy, "alice")
 	}
-	if putBody.String() != "payload-123" {
-		t.Fatalf("put body mismatch: got=%q want=%q", putBody.String(), "payload-123")
+	if uploadedPart1.String() != "payload-123" {
+		t.Fatalf("put body mismatch: got=%q want=%q", uploadedPart1.String(), "payload-123")
 	}
 
 	deleteForm := url.Values{
@@ -832,19 +845,30 @@ func TestAdminBucketUpload100MB(t *testing.T) {
 
 	var putBytes int64
 	var putUploadedBy string
+	const uploadID = "upload-100mb-1"
 
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut || r.URL.Path != "/team2-logs/uploads/large-100mb.bin" {
+		q := r.URL.Query()
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/team2-logs/uploads/large-100mb.bin" && q.Has("uploads"):
+			putUploadedBy = r.Header.Get("x-amz-meta-uploaded-by")
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>team2-logs</Bucket><Key>uploads/large-100mb.bin</Key><UploadId>`+uploadID+`</UploadId></InitiateMultipartUploadResult>`)
+		case r.Method == http.MethodPut && r.URL.Path == "/team2-logs/uploads/large-100mb.bin" && q.Get("uploadId") == uploadID:
+			n, err := io.Copy(io.Discard, r.Body)
+			if err != nil {
+				t.Fatalf("read upstream upload-part body: %v", err)
+			}
+			putBytes += n
+			w.Header().Set("ETag", `"etag-part-`+q.Get("partNumber")+`"`)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/team2-logs/uploads/large-100mb.bin" && q.Get("uploadId") == uploadID:
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>team2-logs</Bucket><Key>uploads/large-100mb.bin</Key><ETag>"etag-100mb"</ETag></CompleteMultipartUploadResult>`)
+		default:
 			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 		}
-		putUploadedBy = r.Header.Get("x-amz-meta-uploaded-by")
-		n, err := io.Copy(io.Discard, r.Body)
-		if err != nil {
-			t.Fatalf("read upstream put body: %v", err)
-		}
-		putBytes = n
-		w.Header().Set("ETag", `"etag-100mb"`)
-		w.WriteHeader(http.StatusOK)
 	})
 	defer cleanup()
 
@@ -927,15 +951,31 @@ func TestAdminBucketUpload100MB(t *testing.T) {
 
 func TestAdminBucketUploadSmallFileWithoutWritableTempDir(t *testing.T) {
 	var putPath string
-	var putBody bytes.Buffer
+	var uploadedPart1 bytes.Buffer
+	const uploadID = "upload-notmp-1"
 
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut || r.URL.Path != "/team2-logs/uploads/no-tempdir.txt" {
+		q := r.URL.Query()
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/team2-logs/uploads/no-tempdir.txt" && q.Has("uploads"):
+			putPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>team2-logs</Bucket><Key>uploads/no-tempdir.txt</Key><UploadId>`+uploadID+`</UploadId></InitiateMultipartUploadResult>`)
+		case r.Method == http.MethodPut && r.URL.Path == "/team2-logs/uploads/no-tempdir.txt" && q.Get("uploadId") == uploadID:
+			if q.Get("partNumber") == "1" {
+				_, _ = io.Copy(&uploadedPart1, r.Body)
+			} else {
+				_, _ = io.Copy(io.Discard, r.Body)
+			}
+			w.Header().Set("ETag", `"etag-part-1"`)
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodPost && r.URL.Path == "/team2-logs/uploads/no-tempdir.txt" && q.Get("uploadId") == uploadID:
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>team2-logs</Bucket><Key>uploads/no-tempdir.txt</Key><ETag>"etag-notmp"</ETag></CompleteMultipartUploadResult>`)
+		default:
 			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 		}
-		putPath = r.URL.Path
-		_, _ = io.Copy(&putBody, r.Body)
-		w.WriteHeader(http.StatusOK)
 	})
 	defer cleanup()
 
@@ -982,8 +1022,8 @@ func TestAdminBucketUploadSmallFileWithoutWritableTempDir(t *testing.T) {
 	if putPath != "/team2-logs/uploads/no-tempdir.txt" {
 		t.Fatalf("put path mismatch: got=%q want=%q", putPath, "/team2-logs/uploads/no-tempdir.txt")
 	}
-	if putBody.String() != "payload-notmp" {
-		t.Fatalf("put body mismatch: got=%q want=%q", putBody.String(), "payload-notmp")
+	if uploadedPart1.String() != "payload-notmp" {
+		t.Fatalf("put body mismatch: got=%q want=%q", uploadedPart1.String(), "payload-notmp")
 	}
 }
 
