@@ -46,6 +46,7 @@ const (
 	defaultReadyCheckTimeout = 2 * time.Second
 	s3XMLNamespace           = "http://s3.amazonaws.com/doc/2006-03-01/"
 	s3TimeMillisFormat       = "2006-01-02T15:04:05.000Z"
+	xmlDeclaration           = `<?xml version="1.0" encoding="UTF-8"?>`
 )
 
 // ==================== Credential hack ====================
@@ -705,36 +706,34 @@ func boolString(v bool) string {
 func writeXMLError(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>`))
+	_, _ = w.Write([]byte(xmlDeclaration))
 	_, _ = w.Write([]byte("<Error>"))
 	_, _ = w.Write([]byte("<Code>" + xmlEscape(code) + "</Code>"))
 	_, _ = w.Write([]byte("<Message>" + xmlEscape(msg) + "</Message>"))
 	_, _ = w.Write([]byte("</Error>"))
 }
 
-func beginXMLResponse(w http.ResponseWriter, status int) *bufio.Writer {
+func beginXMLResponse(w http.ResponseWriter, status int) {
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(status)
-	return bufio.NewWriterSize(w, 32*1024)
 }
 
 type xmlWriter struct {
 	enc *xml.Encoder
+	out io.Writer
 	err error
 }
 
-func beginXMLWriterResponse(w http.ResponseWriter, status int) (*bufio.Writer, *xmlWriter) {
-	bw := beginXMLResponse(w, status)
-	return bw, &xmlWriter{enc: xml.NewEncoder(bw)}
+func beginXMLWriterResponse(w http.ResponseWriter, status int) *xmlWriter {
+	beginXMLResponse(w, status)
+	xw := &xmlWriter{enc: xml.NewEncoder(w), out: w}
+	_, err := io.WriteString(w, xmlDeclaration)
+	xw.setErr(err)
+	return xw
 }
 
-func writeXMLDeclaration(w io.Writer) {
-	_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?>`)
-}
-
-func flushXMLWriterResponse(bw *bufio.Writer, xw *xmlWriter) {
+func flushXMLWriterResponse(xw *xmlWriter) {
 	_ = xw.Flush()
-	_ = bw.Flush()
 }
 
 func (xw *xmlWriter) setErr(err error) {
@@ -762,6 +761,18 @@ func (xw *xmlWriter) Elem(name, value string) {
 		return
 	}
 	xw.setErr(xw.enc.EncodeElement(value, xml.StartElement{Name: xml.Name{Local: name}}))
+}
+
+func (xw *xmlWriter) RawString(value string) {
+	if xw.err != nil {
+		return
+	}
+	if err := xw.enc.Flush(); err != nil {
+		xw.setErr(err)
+		return
+	}
+	_, err := io.WriteString(xw.out, value)
+	xw.setErr(err)
 }
 
 func (xw *xmlWriter) ElemInt(name string, value int64) {
@@ -1916,10 +1927,9 @@ func (s *server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(bw, xw)
+	xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(xw)
 
-	writeXMLDeclaration(bw)
 	encodeS3RootStart(xw, "ListAllMyBucketsResult")
 	xw.Start("Buckets")
 	for _, bk := range out.Buckets {
@@ -2909,10 +2919,9 @@ func (s *server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(bw, xw)
+	xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(xw)
 
-	writeXMLDeclaration(bw)
 	encodeS3RootStart(xw, "DeleteResult")
 	for _, d := range out.Deleted {
 		xw.Start("Deleted")
@@ -3013,10 +3022,9 @@ func (s *server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(bw, xw)
+	xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(xw)
 
-	writeXMLDeclaration(bw)
 	encodeS3RootStart(xw, "ListVersionsResult")
 	if out.Name != nil {
 		xw.Elem("Name", *out.Name)
@@ -3164,10 +3172,9 @@ func (s *server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(bw, xw)
+	xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(xw)
 
-	writeXMLDeclaration(bw)
 	encodeS3RootStart(xw, "ListBucketResult")
 	if out.Name != nil {
 		xw.Elem("Name", *out.Name)
@@ -3270,10 +3277,9 @@ func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(bw, xw)
+	xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(xw)
 
-	writeXMLDeclaration(bw)
 	encodeS3RootStart(xw, "ListMultipartUploadsResult")
 	xw.Elem("Bucket", bucket)
 	if out.KeyMarker != nil {
@@ -3839,10 +3845,9 @@ func (s *server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Reques
 		w.Header().Set("x-amz-delete-marker", strconv.FormatBool(*out.DeleteMarker))
 	}
 
-	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(bw, xw)
+	xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(xw)
 
-	writeXMLDeclaration(bw)
 	encodeS3RootStart(xw, "GetObjectAttributesOutput")
 	if out.ETag != nil {
 		xw.Elem("ETag", *out.ETag)
@@ -4300,10 +4305,9 @@ func (s *server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(bw, xw)
+	xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(xw)
 
-	writeXMLDeclaration(bw)
 	encodeS3RootStart(xw, "CopyObjectResult")
 	if out.CopyObjectResult != nil {
 		if out.CopyObjectResult.LastModified != nil {
@@ -4447,10 +4451,9 @@ func (s *server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bu
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(bw, xw)
+	xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(xw)
 
-	writeXMLDeclaration(bw)
 	encodeS3RootStart(xw, "CopyPartResult")
 	if out.CopyPartResult != nil {
 		if out.CopyPartResult.LastModified != nil {
@@ -4654,10 +4657,9 @@ func (s *server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 		return
 	}
 
-	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(bw, xw)
+	xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(xw)
 
-	writeXMLDeclaration(bw)
 	encodeS3RootStart(xw, "InitiateMultipartUploadResult")
 	xw.Elem("Bucket", bucket)
 	xw.Elem("Key", key)
@@ -4784,10 +4786,9 @@ func (s *server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 		return
 	}
 
-	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(bw, xw)
+	xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(xw)
 
-	writeXMLDeclaration(bw)
 	encodeS3RootStart(xw, "ListPartsResult")
 	xw.Elem("Bucket", bucket)
 	xw.Elem("Key", key)
@@ -4866,19 +4867,15 @@ func (s *server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	bw, xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(bw, xw)
+	xw := beginXMLWriterResponse(w, http.StatusOK)
+	defer flushXMLWriterResponse(xw)
 
-	writeXMLDeclaration(bw)
 	encodeS3RootStart(xw, "CompleteMultipartUploadResult")
 	xw.Elem("Bucket", bucket)
 	xw.Elem("Key", key)
 	if out.ETag != nil {
 		xw.Start("ETag")
-		if xw.err == nil {
-			_, err := io.WriteString(bw, `"`+xmlEscape(strings.Trim(*out.ETag, `"`))+`"`)
-			xw.setErr(err)
-		}
+		xw.RawString(`"` + xmlEscape(strings.Trim(*out.ETag, `"`)) + `"`)
 		xw.End("ETag")
 	}
 	xw.End("CompleteMultipartUploadResult")
