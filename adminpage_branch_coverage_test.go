@@ -513,6 +513,9 @@ func TestHandleAdminDashboardAdditionalBranches(t *testing.T) {
 }
 
 func TestHandleAdminCreateBucketAdditionalBranches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Run("invalid cookie clears and redirects", func(t *testing.T) {
 		s := newServer(Config{}, nil)
 		handler := adminWebpageHandler(s)
@@ -611,6 +614,9 @@ func TestHandleAdminCreateBucketAdditionalBranches(t *testing.T) {
 }
 
 func TestHandleAdminBucketPageAdditionalBranches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Run("invalid cookie clears and redirects", func(t *testing.T) {
 		s := newServer(Config{}, nil)
 		handler := adminWebpageHandler(s)
@@ -835,6 +841,9 @@ func TestHandleAdminBucketDownloadAdditionalBranches(t *testing.T) {
 }
 
 func TestHandleAdminBucketDeleteAdditionalBranches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Run("invalid cookie clears and redirects", func(t *testing.T) {
 		s := newServer(Config{}, nil)
 		handler := adminWebpageHandler(s)
@@ -981,6 +990,9 @@ func TestHandleAdminLogoutAdditionalBranches(t *testing.T) {
 }
 
 func TestHandleAdminBucketUploadAdditionalBranches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Run("invalid cookie clears and redirects", func(t *testing.T) {
 		handler := adminWebpageHandler(newServer(Config{}, nil))
 		body, contentType := newMultipartBody(t, func(mw *multipart.Writer) error {

@@ -60,17 +60,29 @@ var xmlEscaper = strings.NewReplacer(
 // ==================== Credential hack ====================
 // accessKey = base64("userPrincipalName:password")
 // secretKey = constant "password"
-func decodeUserPassFromAccessKey(accessKey string) (upn, password string, err error) {
+func decodeUserPassFromAccessKey(accessKey string) (username, password string, err error) {
 	raw, err := base64.StdEncoding.DecodeString(accessKey)
 	if err != nil {
 		return "", "", fmt.Errorf("accessKey not base64: %w", err)
 	}
-	s := string(raw)
-	i := strings.IndexByte(s, ':')
-	if i <= 0 || i+1 >= len(s) {
-		return "", "", fmt.Errorf("accessKey must decode to 'user:pass'")
+
+	s := strings.TrimSpace(string(raw))
+	parts := strings.SplitN(s, ":", 3)
+	if len(parts) != 3 {
+		return "", "", fmt.Errorf("accessKey must decode to 'AD:username:password'")
 	}
-	return strings.TrimSpace(s[:i]), s[i+1:], nil
+
+	if strings.TrimSpace(parts[0]) != "AD" {
+		return "", "", fmt.Errorf("accessKey must start with 'AD:'")
+	}
+
+	username = strings.TrimSpace(parts[1])
+	password = parts[2] // keep password as-is (can contain spaces); may include ':' only if you encode differently
+	if username == "" || password == "" {
+		return "", "", fmt.Errorf("accessKey must decode to 'ad:username:password' with non-empty username and password")
+	}
+
+	return username, password, nil
 }
 
 // ==================== AD group lookup ====================

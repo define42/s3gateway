@@ -350,6 +350,9 @@ func TestHandleUploadPartCopyValidationMatrix(t *testing.T) {
 }
 
 func TestHandleUploadPartCopyRichSuccessAndUpstreamError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("partNumber") == "9" {
 			w.Header().Set("Content-Type", "application/xml")
@@ -632,6 +635,9 @@ func TestHandleDeleteObjectsValidationMatrix(t *testing.T) {
 }
 
 func TestHandleDeleteObjectsRichSuccessAndUpstreamError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-amz-request-charged", "requester")
 		w.Header().Set("Content-Type", "application/xml")
@@ -698,6 +704,9 @@ func TestHandleDeleteObjectsRichSuccessAndUpstreamError(t *testing.T) {
 }
 
 func TestHandleGetBucketVersioningBranches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	gwNoPerm, cleanupNoPerm := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("upstream should not be called when forbidden")
 	})
@@ -749,6 +758,9 @@ func TestHandleGetBucketVersioningBranches(t *testing.T) {
 }
 
 func TestHandleAbortMultipartBranches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	gwNoPerm, cleanupNoPerm := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("upstream should not be called when forbidden")
 	})
@@ -998,6 +1010,9 @@ func TestHandlePutObjectBranchMatrix(t *testing.T) {
 }
 
 func TestCreateCompleteAndListPartsBranchMatrix(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Run("create multipart validation and success branches", func(t *testing.T) {
 		gwNoUpstream, cleanupNoUpstream := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 			t.Fatalf("upstream should not be called for validation errors: %s %s", r.Method, r.URL.String())
@@ -1413,6 +1428,9 @@ func TestHandleListBucketsAllowsAnyPermission(t *testing.T) {
 }
 
 func TestHandleListObjectVersionsBranchMatrix(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	gwNoUpstream, cleanupNoUpstream := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("upstream should not be called for validation errors: %s %s", r.Method, r.URL.String())
 	})
@@ -1552,6 +1570,9 @@ func TestHandleListObjectVersionsBranchMatrix(t *testing.T) {
 }
 
 func TestHandleListMultipartUploadsAndDeleteObjectBranches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	t.Run("list multipart uploads branches", func(t *testing.T) {
 		gwNoUpstream, cleanupNoUpstream := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 			t.Fatalf("upstream should not be called for validation errors: %s %s", r.Method, r.URL.String())
@@ -1709,6 +1730,9 @@ func TestHandleListMultipartUploadsAndDeleteObjectBranches(t *testing.T) {
 }
 
 func TestBucketLifecycleHandlersBranches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	validLifecycle := `<?xml version="1.0" encoding="UTF-8"?><LifecycleConfiguration><Rule><ID>r1</ID><Status>Enabled</Status><Filter><Prefix>logs/</Prefix></Filter><Expiration><Days>30</Days></Expiration></Rule></LifecycleConfiguration>`
 
 	t.Run("put lifecycle forbidden", func(t *testing.T) {
@@ -1946,6 +1970,10 @@ func TestBucketLifecycleHandlersBranches(t *testing.T) {
 }
 
 func TestHandlePutBucketVersioningBranches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
 	validVersioning := `<?xml version="1.0" encoding="UTF-8"?><VersioningConfiguration><Status>Enabled</Status><MfaDelete>Enabled</MfaDelete></VersioningConfiguration>`
 
 	t.Run("forbidden", func(t *testing.T) {
@@ -2024,6 +2052,9 @@ func TestHandlePutBucketVersioningBranches(t *testing.T) {
 }
 
 func TestBucketTaggingHandlersBranches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	validTagging := `<?xml version="1.0" encoding="UTF-8"?><Tagging><TagSet><Tag><Key>k1</Key><Value>v1</Value></Tag></TagSet></Tagging>`
 
 	t.Run("put forbidden", func(t *testing.T) {
@@ -2242,6 +2273,9 @@ func TestBucketTaggingHandlersBranches(t *testing.T) {
 }
 
 func TestObjectTaggingHandlersBranches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	validTagging := `<?xml version="1.0" encoding="UTF-8"?><Tagging><TagSet><Tag><Key>k1</Key><Value>v1</Value></Tag></TagSet></Tagging>`
 
 	t.Run("put forbidden", func(t *testing.T) {

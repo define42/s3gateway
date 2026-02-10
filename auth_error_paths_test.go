@@ -22,9 +22,9 @@ func TestDecodeUserPassFromAccessKeyErrorPaths(t *testing.T) {
 		accessKey := base64.StdEncoding.EncodeToString([]byte("useronly"))
 		_, _, err := decodeUserPassFromAccessKey(accessKey)
 		if err == nil {
-			t.Fatalf("expected error for decoded access key without user:pass format")
+			t.Fatalf("expected error for decoded access key without AD:username:password format")
 		}
-		if !strings.Contains(err.Error(), "accessKey must decode to 'user:pass'") {
+		if !strings.Contains(err.Error(), "accessKey must decode to 'AD:username:password'") {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})

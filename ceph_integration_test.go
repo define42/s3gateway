@@ -153,6 +153,9 @@ func createCephBucketViaS3cmd(ctx context.Context, t *testing.T, c testcontainer
 }
 
 func TestCephS3_full_s3gatewaytest(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 
@@ -211,7 +214,7 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	gatewayURL := "http://" + ln.Addr().String()
 	waitForGatewayReady(t, gatewayURL)
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
+	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
 	gatewayClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 
 	createdBucket := fmt.Sprintf("team2-cephgw-created-%d", time.Now().UnixNano())

@@ -5,7 +5,7 @@
 An S3-compatible gateway that:
 
 - Authenticates clients with AWS SigV4.
-- Uses `AccessKey` as `base64("username:password")` (by design).
+- Uses `AccessKey` as `base64("AD:username:password")` (by design).
 - Validates credentials against LDAP.
 - Authorizes bucket access by LDAP group naming convention.
 - Proxies allowed requests to an upstream S3-compatible backend (for example MinIO or AWS S3).
@@ -13,7 +13,7 @@ An S3-compatible gateway that:
 ## Authentication Model (By Design)
 
 - Client signs requests with SigV4.
-- `AWS_ACCESS_KEY_ID` must be `base64("<username>:<password>")` (username only, no `@domain`).
+- `AWS_ACCESS_KEY_ID` must be `base64("AD:<username>:<password>")` (literal `AD` prefix; username only, no `@domain`).
 - `AWS_SECRET_ACCESS_KEY` must match `SIGV4_SECRET`.
 - Gateway verifies SigV4 signature and request time window (`SIGV4_MAX_SKEW`).
 - Gateway appends `@LDAP_DOMAIN` and binds to LDAP with `<username>@<LDAP_DOMAIN>`.
@@ -155,9 +155,9 @@ readinessProbe:
 
 ```bash
 # Designed credential mapping:
-# AccessKey = base64("user:ldap-password")
+# AccessKey = base64("AD:user:ldap-password")
 # Gateway LDAP bind identity = "user@${LDAP_DOMAIN}"
-export AWS_ACCESS_KEY_ID="$(printf 'user:ldap-password' | base64)"
+export AWS_ACCESS_KEY_ID="$(printf 'AD:user:ldap-password' | base64)"
 export AWS_SECRET_ACCESS_KEY="your-sigv4-secret"
 export AWS_REGION="us-east-1"
 
