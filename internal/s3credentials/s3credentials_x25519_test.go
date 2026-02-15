@@ -22,7 +22,7 @@ func TestGenerateKeys(t *testing.T) {
 	inLdapUsername := "ldapUser42"
 	inLdapPassword := "ldapPass42"
 
-	accessKey, secretKey, err := GenerateAccessSecretKey(inLdapUsername, inLdapPassword, hex.EncodeToString(receiverPub.Bytes()))
+	accessKey, secretKey, err := GenerateKeysX25519(inLdapUsername, inLdapPassword, hex.EncodeToString(receiverPub.Bytes()))
 	if err != nil {
 		t.Fatalf("failed to generate access and secret keys: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestGenerateAccessSecretKeyValidationErrors(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := GenerateAccessSecretKey(tc.username, tc.password, tc.publicHex)
+			_, _, err := GenerateKeysX25519(tc.username, tc.password, tc.publicHex)
 			if err == nil {
 				t.Fatalf("expected error %q, got nil", tc.wantErr)
 			}
@@ -276,7 +276,7 @@ func TestGetDecryptedTokenDecryptError(t *testing.T) {
 
 func TestGenerateAccessSecretKeyEncryptError(t *testing.T) {
 	lowOrderPublicKeyHex := hex.EncodeToString(make([]byte, x25519KeySize))
-	_, _, err := GenerateAccessSecretKey("ldapUser", "ldapPass", lowOrderPublicKeyHex)
+	_, _, err := GenerateKeysX25519("ldapUser", "ldapPass", lowOrderPublicKeyHex)
 	if err == nil {
 		t.Fatalf("expected low-order-point ECDH error")
 	}

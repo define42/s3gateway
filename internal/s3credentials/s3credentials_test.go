@@ -17,7 +17,7 @@ func TestS3credentials(t *testing.T) {
 	inLdapUsername := "ldapUser42"
 	inLdapPassword := "ldapPass42"
 
-	accessKey, _, err := GenerateAccessSecretKey(inLdapUsername, inLdapPassword, hex.EncodeToString(publicKey.Bytes()))
+	accessKey, _, err := GenerateKeysX25519(inLdapUsername, inLdapPassword, hex.EncodeToString(publicKey.Bytes()))
 	if err != nil {
 		t.Fatalf("failed to generate access and secret keys: %v", err)
 	}

@@ -1,7 +1,9 @@
 package s3credentials_test
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"strings"
 	"testing"
 
@@ -31,17 +33,23 @@ func TestDecodeUserPassFromAccessKeyErrorPaths(t *testing.T) {
 	})
 
 	t.Run("accessKey must decode to username and password", func(t *testing.T) {
-		accessKey := base64.StdEncoding.EncodeToString([]byte("username:password"))
-		username, password, err := s3credentials.S3credentials_base64encoded("AD" + accessKey)
+		accessKey, secretKey, err := s3credentials.GenerateKeysBase64Encoded("username", "password")
+
+		username, password, err := s3credentials.S3credentials_base64encoded(accessKey)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-
 		if username != "username" {
 			t.Fatalf("expected username 'username', got '%s'", username)
 		}
 		if password != "password" {
 			t.Fatalf("expected password 'password', got '%s'", password)
+		}
+
+		token := sha256.Sum256([]byte("username:password"))
+		want := hex.EncodeToString(token[:])
+		if secretKey != want {
+			t.Fatalf("expected secretKey '%s', got '%s'", want, secretKey)
 		}
 	})
 }

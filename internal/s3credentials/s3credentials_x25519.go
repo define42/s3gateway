@@ -85,7 +85,7 @@ func X25519PublicKeyFromHex(hexKey string) (*ecdh.PublicKey, error) {
 	return x25519Curve.NewPublicKey(keyBytes)
 }
 
-func GenerateAccessSecretKey(ldapUsername, ldapPassword, publicKeyHex string) (accessKey string, secretKey string, err error) {
+func GenerateKeysX25519(ldapUsername, ldapPassword, publicKeyHex string) (accessKey string, secretKey string, err error) {
 	publicKey, err := X25519PublicKeyFromHex(publicKeyHex)
 	if err != nil {
 		return "", "", err

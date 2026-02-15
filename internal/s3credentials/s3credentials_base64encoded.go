@@ -1,7 +1,9 @@
 package s3credentials
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -34,4 +36,15 @@ func S3credentials_base64encoded(accessKey string) (username, password string, e
 	}
 
 	return username, password, nil
+}
+
+func GenerateKeysBase64Encoded(ldapUsername, ldapPassword string) (accessKey string, secretKey string, err error) {
+	if strings.Contains(ldapUsername, ":") {
+		return "", "", errors.New("ldap username cannot contain ':' character")
+	}
+	token := ldapUsername + ":" + ldapPassword
+	accessKey = "AD" + base64.StdEncoding.EncodeToString([]byte(token))
+	secretKeyBytes := sha256.Sum256([]byte(token))
+	secretKey = fmt.Sprintf("%x", secretKeyBytes)
+	return accessKey, secretKey, nil
 }
