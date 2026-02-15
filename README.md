@@ -6,19 +6,19 @@ An S3-compatible gateway that:
 
 - Authenticates clients with AWS SigV4.
 - Supports legacy and encrypted credential formats for `AccessKey`:
-  - Legacy: `AD` + `base64("username:password")`
-  - Encrypted: `GenerateKeysX25519(username, password, s3gateway-publicKey)` output (`X1...`)
+  - Legacy: `AD` + `base64("LdapUsername:LdapPassword")`
+  - Encrypted: `GenerateKeysX25519(LdapUsername, LdapPassword, s3gateway-publicKey)` output (`X1...`)
 - Validates credentials against LDAP.
 - Authorizes bucket access by LDAP group naming convention.
 - Proxies allowed requests to an upstream S3-compatible backend (for example MinIO, Ceph S3 or AWS S3).
 
-## Authentication Model (By Design)
+## Authentication Model
 
 - Client signs requests with SigV4.
 - `AWS_ACCESS_KEY_ID` supports:
-  - `AD` + `base64("<username>:<password>")` (legacy mode; literal `AD` prefix; username only, no `@domain`)
-  - `GenerateKeysX25519(username, password, s3gateway-publicKey)` access key output (`X1...`, encrypted mode)
-- `AWS_SECRET_ACCESS_KEY` must be the `secretKey` derived from the same LDAP credentials as `AWS_ACCESS_KEY_ID`.
+  - `AD` + `base64("<LdapUsername>:<LdapPassword>")` (legacy mode; literal `AD` prefix; username only, no `@domain`)
+  - `GenerateKeysX25519(LdapUsername, LdapPassword, s3gateway-publicKey)` access key output (`X1...`, encrypted mode)
+- `secretKey` is be derived from the same LDAP credentials by  `base64(sha256(LdapUsername:LdapPassword))`.
 - Gateway verifies SigV4 signature and request time window (`SIGV4_MAX_SKEW`).
 - In encrypted mode, gateway decrypts `AWS_ACCESS_KEY_ID` using `S3GATEWAY_PRIVATE_X25519_KEY` and extracts `<username>:<password>`.
 - Gateway appends `@LDAP_DOMAIN` and binds to LDAP with `<username>@<LDAP_DOMAIN>`.
@@ -27,7 +27,33 @@ Important:
 
 - Legacy base64 mode is not encryption. Always use TLS in production.
 - `GenerateKeysX25519` encrypts LDAP `username:password` into `AccessKey` and also returns a token-derived `SecretKey` from the same LDAP credentials.
-- Do not log/redact `Authorization` and credential-related headers at every layer.
+
+## Credential Derivation Details
+
+For both credential modes, start from:
+
+- `token = "<ldapUsername>:<ldapPassword>"`
+
+`SecretKey` derivation (used as `AWS_SECRET_ACCESS_KEY`):
+
+- `secretKey = base64url(sha256(token))`
+- Encoding includes standard base64url padding (`=`), matching `EncodeSecretKey(...)` in this repo.
+
+Legacy `AccessKey` (`AD...`) derivation:
+
+- `accessKey = "AD" + base64(token)`
+
+Encrypted `AccessKey` (`X1...`) derivation:
+
+- `accessKey = "X1" + base64url_no_padding(payload)`
+- `payload = ephemeralPublicKey(32) || nonce(12) || ciphertext`
+- `ciphertext = ChaCha20-Poly1305(plaintext=token, key=X25519(ephemeralPrivateKey, gatewayPublicKeyHex), aad=nil)`
+
+Notes:
+
+- `X1...` access keys are non-deterministic (new ephemeral key + nonce each generation).
+- `secretKey` is deterministic for the same `username:password` token.
+- Gateway must have matching `S3GATEWAY_PRIVATE_X25519_KEY` for the public key used by the client.
 
 ## Authorization Model
 
@@ -179,6 +205,22 @@ Encrypted credential option:
 - Use returned `accessKey` (`X1...`) as `AWS_ACCESS_KEY_ID`.
 - `GenerateKeysX25519` also returns `secretKey` derived from the same LDAP credentials.
 - Set `AWS_SECRET_ACCESS_KEY` to that returned `secretKey` for request signing.
+
+## Example Client Demos
+
+Repository examples:
+
+- Python legacy/base64 flow: `example_s3_client/python/s3demo.py`
+- Python encrypted/X25519 flow: `example_s3_client/python/s3demo_x25519.py`
+- Java legacy/base64 flow: `example_s3_client/java/src/main/java/S3Demo.java`
+
+Python encrypted demo notes:
+
+- `s3demo_x25519.py` generates both `accessKey` (`X1...`) and `secretKey` from username/password using X25519 + ChaCha20-Poly1305.
+- It currently uses this gateway public key constant:
+  - `b0b5d6c181c25c6d8d49aa68ecc85a9f8a0ab0f776680eca733ded24dd95ea31`
+- Ensure the gateway private key is the matching pair (`S3GATEWAY_PRIVATE_X25519_KEY`), or auth will fail.
+- Python dependencies for this demo include `boto3` and `cryptography`.
 
 ## SDK Usage Example (Prefix + Delimiter)
 
