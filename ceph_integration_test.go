@@ -3,7 +3,6 @@ package main_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3gateway "github.com/define42/s3gateway"
+	"github.com/define42/s3gateway/internal/s3credentials"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -182,7 +182,7 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	t.Setenv("SIGV4_SECRET", "password")
 	t.Setenv("SIGV4_SERVICE", "s3")
 
-	httpSrv, cfg, err := s3gateway.BootS3Gateway()
+	httpSrv, _, err := s3gateway.BootS3Gateway()
 	if err != nil {
 		t.Fatalf("boot s3gateway with ceph upstream: %v", err)
 	}
@@ -214,8 +214,11 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	gatewayURL := "http://" + ln.Addr().String()
 	waitForGatewayReady(t, gatewayURL)
 
-	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	gatewayClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwAccessKey, rwSecretKey, err := s3credentials.GenerateKeysBase64Encoded("testuser", "dogood")
+	if err != nil {
+		t.Fatalf("generate gateway rw credentials: %v", err)
+	}
+	gatewayClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, rwSecretKey)
 
 	createdBucket := fmt.Sprintf("team2-cephgw-created-%d", time.Now().UnixNano())
 	if _, err := gatewayClient.CreateBucket(ctx, &s3.CreateBucketInput{

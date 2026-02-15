@@ -20,6 +20,7 @@ func reqWithRules(req *http.Request, rules []Rule) *http.Request {
 func reqWithRulesAndSigV4(req *http.Request, rules []Rule, auth *sigv4Auth) *http.Request {
 	ctx := context.WithValue(req.Context(), ctxRulesKey, rules)
 	ctx = context.WithValue(ctx, ctxSigV4AuthKey, auth)
+	ctx = context.WithValue(ctx, ctxSigV4SecretKey, "secret")
 	return req.WithContext(ctx)
 }
 

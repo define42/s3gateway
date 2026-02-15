@@ -388,7 +388,7 @@ func newUpstreamS3(ctx context.Context, cfg Config) (*s3.Client, error) {
 
 // ==================== SigV4 verify (minimal header-based) ====================
 //
-// We verify signature using constant secret (SIGV4_SECRET).
+// We verify signatures using the secret derived from access key credentials.
 // Real auth is then done by decoding accessKey -> upn:pass and binding to AD.
 type sigv4Auth struct {
 	AccessKey     string
@@ -1261,6 +1261,7 @@ var (
 	errContentLengthRequired       = errors.New("content length required")
 	errUnsupportedStreamingMode    = errors.New("unsupported streaming payload mode")
 	errMissingSigV4AuthContext     = errors.New("missing sigv4 auth context")
+	errMissingSigV4SecretContext   = errors.New("missing sigv4 secret context")
 	errMissingChunkSignature       = errors.New("missing aws-chunked chunk signature")
 	errInvalidChunkSignature       = errors.New("invalid aws-chunked chunk signature")
 	errInvalidChunkHeader          = errors.New("invalid aws-chunked chunk header")
@@ -1330,7 +1331,7 @@ func (v *awsChunkSignatureVerifier) verifyChunk(signatureHex string, chunk []byt
 	return nil
 }
 
-func chunkSignatureVerifierFromRequest(r *http.Request, secret string) (*awsChunkSignatureVerifier, error) {
+func chunkSignatureVerifierFromRequest(r *http.Request) (*awsChunkSignatureVerifier, error) {
 	if !isAWSChunkedPayload(r.Header) {
 		return nil, nil
 	}
@@ -1343,6 +1344,10 @@ func chunkSignatureVerifierFromRequest(r *http.Request, secret string) (*awsChun
 	auth := sigV4AuthFromCtx(r)
 	if auth == nil {
 		return nil, errMissingSigV4AuthContext
+	}
+	secret := sigV4SecretFromCtx(r)
+	if strings.TrimSpace(secret) == "" {
+		return nil, errMissingSigV4SecretContext
 	}
 	return newAWSChunkSignatureVerifier(auth, secret), nil
 }
@@ -1535,6 +1540,7 @@ type ctxKey string
 
 const ctxRulesKey ctxKey = "rules"
 const ctxSigV4AuthKey ctxKey = "sigv4-auth"
+const ctxSigV4SecretKey ctxKey = "sigv4-secret"
 const ctxUploaderKey ctxKey = "uploader-upn"
 
 type server struct {
@@ -1617,13 +1623,13 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 			return
 		}
 
-		upn, pass, _, err := s3credentials.S3credentials(auth.AccessKey, s.cfg.S3GatewayPrivateX25519Key)
+		upn, pass, secretKey, err := s3credentials.S3credentials(auth.AccessKey, s.cfg.S3GatewayPrivateX25519Key)
 		if err != nil {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
 
-		if err := verifySigV4(r, auth, s.cfg.SigV4Secret); err != nil {
+		if err := verifySigV4(r, auth, secretKey); err != nil {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
@@ -1637,6 +1643,7 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 		rules := rulesFromGroups(grps)
 		ctx := context.WithValue(r.Context(), ctxRulesKey, rules)
 		ctx = context.WithValue(ctx, ctxSigV4AuthKey, auth)
+		ctx = context.WithValue(ctx, ctxSigV4SecretKey, secretKey)
 		ctx = context.WithValue(ctx, ctxUploaderKey, upn)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -1658,6 +1665,15 @@ func sigV4AuthFromCtx(r *http.Request) *sigv4Auth {
 	}
 	auth, _ := v.(*sigv4Auth)
 	return auth
+}
+
+func sigV4SecretFromCtx(r *http.Request) string {
+	v := r.Context().Value(ctxSigV4SecretKey)
+	if v == nil {
+		return ""
+	}
+	secret, _ := v.(string)
+	return secret
 }
 
 func uploaderFromCtx(r *http.Request) string {
@@ -4216,7 +4232,7 @@ func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		return
 	}
 
-	verifier, err := chunkSignatureVerifierFromRequest(r, s.cfg.SigV4Secret)
+	verifier, err := chunkSignatureVerifierFromRequest(r)
 	if err != nil {
 		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "Unsupported or invalid streaming payload signature")
 		return
@@ -4958,7 +4974,7 @@ func (s *server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 		return
 	}
 
-	verifier, err := chunkSignatureVerifierFromRequest(r, s.cfg.SigV4Secret)
+	verifier, err := chunkSignatureVerifierFromRequest(r)
 	if err != nil {
 		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "Unsupported or invalid streaming payload signature")
 		return

@@ -27,7 +27,7 @@ type Config struct {
 	UpstreamSecretKey      string
 	UpstreamForcePathStyle bool
 
-	SigV4Secret  string        // constant, default "password"
+	SigV4Secret  string        // admin web-session secret seed, default "password"
 	SigV4Service string        // default "s3"
 	SigV4MaxSkew time.Duration // max absolute request age/skew based on x-amz-date
 

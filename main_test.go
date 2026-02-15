@@ -24,6 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"github.com/define42/s3gateway/internal/s3credentials"
 	minio "github.com/minio/minio-go/v7"
 	minioCredentials "github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/testcontainers/testcontainers-go"
@@ -54,7 +55,6 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Secret:            "password",
 		SigV4Service:           "s3",
 	}
 
@@ -97,9 +97,9 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	defer gwSrv.Close()
 
 	gatewayAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	gatewayClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, cfg.SigV4Secret)
+	gatewayClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, mustGatewaySecretForAccessKey(t, gatewayAccessKey))
 	readonlyAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	readonlyClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", readonlyAccessKey, cfg.SigV4Secret)
+	readonlyClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", readonlyAccessKey, mustGatewaySecretForAccessKey(t, readonlyAccessKey))
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-integration-%d", time.Now().UnixNano())
@@ -247,7 +247,6 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Secret:            "password",
 		SigV4Service:           "s3",
 	}
 
@@ -261,8 +260,8 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 	defer gwSrv.Close()
 
 	gatewayAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	gatewayAwsClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, cfg.SigV4Secret)
-	gatewayMinioClient := newMinioGatewayClient(t, gwSrv.URL, gatewayAccessKey, cfg.SigV4Secret)
+	gatewayAwsClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, mustGatewaySecretForAccessKey(t, gatewayAccessKey))
+	gatewayMinioClient := newMinioGatewayClient(t, gwSrv.URL, gatewayAccessKey, mustGatewaySecretForAccessKey(t, gatewayAccessKey))
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-minio-client-%d", time.Now().UnixNano())
@@ -339,7 +338,6 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Secret:            "password",
 		SigV4Service:           "s3",
 	}
 
@@ -353,9 +351,9 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
 	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(t, roAccessKey))
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	suffix := time.Now().UnixNano()
@@ -432,7 +430,6 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Secret:            "password",
 		SigV4Service:           "s3",
 	}
 
@@ -446,9 +443,9 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
 	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(t, roAccessKey))
 
 	bucket := fmt.Sprintf("team2-listobj-%d", time.Now().UnixNano())
 	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
@@ -526,7 +523,6 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Secret:            "password",
 		SigV4Service:           "s3",
 	}
 
@@ -540,9 +536,9 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
 	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(t, roAccessKey))
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-listmpu-%d", time.Now().UnixNano())
@@ -720,7 +716,6 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Secret:            "password",
 		SigV4Service:           "s3",
 	}
 
@@ -734,9 +729,9 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
 	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(t, roAccessKey))
 
 	bucket := fmt.Sprintf("team2-getattrs-%d", time.Now().UnixNano())
 	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
@@ -914,7 +909,6 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Secret:            "password",
 		SigV4Service:           "s3",
 	}
 
@@ -928,7 +922,7 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	gatewayClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	gatewayClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-multipart-%d", time.Now().UnixNano())
@@ -1146,7 +1140,6 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Secret:            "password",
 		SigV4Service:           "s3",
 	}
 
@@ -1160,9 +1153,9 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
 	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(t, roAccessKey))
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-lifecycle-%d", time.Now().UnixNano())
@@ -1802,7 +1795,6 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Secret:            "password",
 		SigV4Service:           "s3",
 	}
 
@@ -1816,9 +1808,9 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
 	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(t, roAccessKey))
 
 	bucket := fmt.Sprintf("team2-ldap-cache-%d", time.Now().UnixNano())
 	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
@@ -1883,7 +1875,6 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Secret:            "password",
 		SigV4Service:           "s3",
 	}
 
@@ -1898,9 +1889,9 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
+	rwClient := NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(tb, rwAccessKey))
 	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	roClient := NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(tb, roAccessKey))
 	upstreamClient := NewS3Client(tb, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	env := &integrationEnv{
@@ -2814,6 +2805,15 @@ func mapBoolKeys(in map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func mustGatewaySecretForAccessKey(tb testing.TB, accessKey string) string {
+	tb.Helper()
+	_, _, secretKey, err := s3credentials.S3credentials(accessKey, nil)
+	if err != nil {
+		tb.Fatalf("derive secret key for access key %q: %v", accessKey, err)
+	}
+	return secretKey
 }
 
 func signedAWSChunkedPayloadForTest(t *testing.T, secret string, auth *sigv4Auth, chunks [][]byte) string {

@@ -144,18 +144,18 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 		}
 	}
 
-	rwAccessKey, _, _ := s3credentials.GenerateKeysBase64Encoded("testuser", "dogood")
-	roAccessKey, _, _ := s3credentials.GenerateKeysX25519("readonly", "dogood", s3gatewayPublicKey)
+	rwAccessKey, rwSecretKey, _ := s3credentials.GenerateKeysBase64Encoded("testuser", "dogood")
+	roAccessKey, roSecretKey, _ := s3credentials.GenerateKeysX25519("readonly", "dogood", s3gatewayPublicKey)
 
-	rwClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", roAccessKey, cfg.SigV4Secret)
+	rwClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, rwSecretKey)
+	roClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", roAccessKey, roSecretKey)
 	upstreamClient := s3gateway.NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 	parsedGatewayURL, err := url.Parse(gatewayURL)
 	if err != nil {
 		t.Fatalf("parse gateway url %q: %v", gatewayURL, err)
 	}
 	minioGatewayClient, err := minio.New(parsedGatewayURL.Host, &minio.Options{
-		Creds:        minioCredentials.NewStaticV4(rwAccessKey, cfg.SigV4Secret, ""),
+		Creds:        minioCredentials.NewStaticV4(rwAccessKey, rwSecretKey, ""),
 		Secure:       strings.EqualFold(parsedGatewayURL.Scheme, "https"),
 		Region:       "us-east-1",
 		BucketLookup: minio.BucketLookupPath,

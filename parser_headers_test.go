@@ -370,6 +370,34 @@ func TestSigV4AuthFromCtx(t *testing.T) {
 	})
 }
 
+func TestSigV4SecretFromCtx(t *testing.T) {
+	t.Run("missing context value", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil)
+		if got := sigV4SecretFromCtx(req); got != "" {
+			t.Fatalf("sigV4SecretFromCtx() = %q, want empty string", got)
+		}
+	})
+
+	t.Run("wrong context value type", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
+			context.WithValue(context.Background(), ctxSigV4SecretKey, 123),
+		)
+		if got := sigV4SecretFromCtx(req); got != "" {
+			t.Fatalf("sigV4SecretFromCtx() = %q, want empty string for wrong context type", got)
+		}
+	})
+
+	t.Run("valid secret value", func(t *testing.T) {
+		const want = "derived-secret"
+		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
+			context.WithValue(context.Background(), ctxSigV4SecretKey, want),
+		)
+		if got := sigV4SecretFromCtx(req); got != want {
+			t.Fatalf("sigV4SecretFromCtx() = %q, want %q", got, want)
+		}
+	})
+}
+
 func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 	const mode = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
 
@@ -377,7 +405,7 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil)
 		req.Header.Set("x-amz-content-sha256", mode)
 
-		verifier, err := chunkSignatureVerifierFromRequest(req, "secret")
+		verifier, err := chunkSignatureVerifierFromRequest(req)
 		if !errors.Is(err, errMissingSigV4AuthContext) {
 			t.Fatalf("chunkSignatureVerifierFromRequest() error = %v, want %v", err, errMissingSigV4AuthContext)
 		}
@@ -386,7 +414,7 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 		}
 	})
 
-	t.Run("with sigv4 auth context", func(t *testing.T) {
+	t.Run("missing sigv4 secret context", func(t *testing.T) {
 		auth := &sigv4Auth{
 			AccessKey:    "access",
 			Date:         "20260207",
@@ -400,7 +428,30 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 		)
 		req.Header.Set("x-amz-content-sha256", mode)
 
-		verifier, err := chunkSignatureVerifierFromRequest(req, "secret")
+		verifier, err := chunkSignatureVerifierFromRequest(req)
+		if !errors.Is(err, errMissingSigV4SecretContext) {
+			t.Fatalf("chunkSignatureVerifierFromRequest() error = %v, want %v", err, errMissingSigV4SecretContext)
+		}
+		if verifier != nil {
+			t.Fatalf("chunkSignatureVerifierFromRequest() verifier = %+v, want nil on missing secret context", verifier)
+		}
+	})
+
+	t.Run("with sigv4 auth context", func(t *testing.T) {
+		auth := &sigv4Auth{
+			AccessKey:    "access",
+			Date:         "20260207",
+			Region:       "us-east-1",
+			Service:      "s3",
+			SignatureHex: strings.Repeat("b", 64),
+			AmzDate:      "20260207T010203Z",
+		}
+		ctx := context.WithValue(context.Background(), ctxSigV4AuthKey, auth)
+		ctx = context.WithValue(ctx, ctxSigV4SecretKey, "secret")
+		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(ctx)
+		req.Header.Set("x-amz-content-sha256", mode)
+
+		verifier, err := chunkSignatureVerifierFromRequest(req)
 		if err != nil {
 			t.Fatalf("chunkSignatureVerifierFromRequest() error = %v", err)
 		}
