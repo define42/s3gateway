@@ -15,7 +15,7 @@ import (
 
 var x25519Curve = ecdh.X25519()
 
-const versionV1 = "X1"
+const s3credentials_x25519_v1 = "X1"
 const x25519KeySize = 32
 
 func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
@@ -31,7 +31,7 @@ func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
 	data = data[2:]
 
 	switch version {
-	case versionV1:
+	case s3credentials_x25519_v1:
 		// fixed framing for v1
 		if len(data) < x25519KeySize+chacha20poly1305.NonceSize {
 			return nil, errors.New("ciphertext too short")
@@ -123,7 +123,7 @@ func encrypt(receiverPub *ecdh.PublicKey, plaintext []byte) (string, error) {
 
 	// version (1) + epub (32) + nonce (12) + ciphertext
 	payload := make([]byte, 0, 2+len(epub)+len(nonce)+len(ciphertext))
-	payload = append(payload, versionV1...)
+	payload = append(payload, s3credentials_x25519_v1...)
 	payload = append(payload, epub...)
 	payload = append(payload, nonce...)
 	payload = append(payload, ciphertext...)
