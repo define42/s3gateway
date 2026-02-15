@@ -1,12 +1,15 @@
 package main
 
 import (
+	"crypto/ecdh"
 	"errors"
 	"log"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/define42/s3gateway/internal/s3credentials"
 )
 
 type Config struct {
@@ -30,12 +33,13 @@ type Config struct {
 
 	RequiredUploadMetadataKeys []string // metadata keys required for upload requests (without x-amz-meta- prefix, lowercase)
 
-	ReadHeaderTimeout time.Duration
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
-	IdleTimeout       time.Duration
-	ShutdownTimeout   time.Duration
-	MaxHeaderBytes    int
+	ReadHeaderTimeout         time.Duration
+	ReadTimeout               time.Duration
+	WriteTimeout              time.Duration
+	IdleTimeout               time.Duration
+	ShutdownTimeout           time.Duration
+	MaxHeaderBytes            int
+	S3GatewayPrivateX25519Key *ecdh.PrivateKey
 }
 
 const (
@@ -123,6 +127,18 @@ func envRequired(key string) string {
 	return v
 }
 
+func envEcdhPrivateKey(key string) *ecdh.PrivateKey {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return nil
+	}
+	privatek, err := s3credentials.X25519PrivateKeyFromHex(v)
+	if err != nil {
+		log.Fatalf("invalid ECDH private key for %s: %v", key, err)
+	}
+	return privatek
+}
+
 func envDuration(key string, def time.Duration) time.Duration {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
@@ -200,12 +216,13 @@ func loadConfig() Config {
 
 		RequiredUploadMetadataKeys: envCSVMetadataKeys("REQUIRED_UPLOAD_METADATA_KEYS"),
 
-		ReadHeaderTimeout: envDuration("HTTP_READ_HEADER_TIMEOUT", defaultReadHeaderTimeout),
-		ReadTimeout:       envDuration("HTTP_READ_TIMEOUT", defaultReadTimeout),
-		WriteTimeout:      envDuration("HTTP_WRITE_TIMEOUT", defaultWriteTimeout),
-		IdleTimeout:       envDuration("HTTP_IDLE_TIMEOUT", defaultIdleTimeout),
-		ShutdownTimeout:   envDuration("HTTP_SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
-		MaxHeaderBytes:    envInt("HTTP_MAX_HEADER_BYTES", defaultMaxHeaderBytes),
+		ReadHeaderTimeout:         envDuration("HTTP_READ_HEADER_TIMEOUT", defaultReadHeaderTimeout),
+		ReadTimeout:               envDuration("HTTP_READ_TIMEOUT", defaultReadTimeout),
+		WriteTimeout:              envDuration("HTTP_WRITE_TIMEOUT", defaultWriteTimeout),
+		IdleTimeout:               envDuration("HTTP_IDLE_TIMEOUT", defaultIdleTimeout),
+		ShutdownTimeout:           envDuration("HTTP_SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
+		MaxHeaderBytes:            envInt("HTTP_MAX_HEADER_BYTES", defaultMaxHeaderBytes),
+		S3GatewayPrivateX25519Key: envEcdhPrivateKey("S3GATEWAY_PRIVATE_X25519_KEY"),
 	}
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)

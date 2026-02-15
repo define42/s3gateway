@@ -7,7 +7,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
 	"errors"
@@ -35,6 +34,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"github.com/define42/s3gateway/internal/s3credentials"
 	ldap "github.com/go-ldap/ldap/v3"
 	"golang.org/x/sync/singleflight"
 )
@@ -56,34 +56,6 @@ var xmlEscaper = strings.NewReplacer(
 	`"`, "&quot;",
 	`'`, "&apos;",
 )
-
-// ==================== Credential hack ====================
-// accessKey = base64("userPrincipalName:password")
-// secretKey = constant "password"
-func decodeUserPassFromAccessKey(accessKey string) (username, password string, err error) {
-	raw, err := base64.StdEncoding.DecodeString(accessKey)
-	if err != nil {
-		return "", "", fmt.Errorf("accessKey not base64: %w", err)
-	}
-
-	s := strings.TrimSpace(string(raw))
-	parts := strings.SplitN(s, ":", 3)
-	if len(parts) != 3 {
-		return "", "", fmt.Errorf("accessKey must decode to 'AD:username:password'")
-	}
-
-	if strings.TrimSpace(parts[0]) != "AD" {
-		return "", "", fmt.Errorf("accessKey must start with 'AD:'")
-	}
-
-	username = strings.TrimSpace(parts[1])
-	password = parts[2] // keep password as-is (can contain spaces); may include ':' only if you encode differently
-	if username == "" || password == "" {
-		return "", "", fmt.Errorf("accessKey must decode to 'ad:username:password' with non-empty username and password")
-	}
-
-	return username, password, nil
-}
 
 // ==================== AD group lookup ====================
 func ldapDial(ldapURL string) (*ldap.Conn, error) {
@@ -1644,13 +1616,14 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
-		if err := verifySigV4(r, auth, s.cfg.SigV4Secret); err != nil {
+
+		upn, pass, err := s3credentials.S3credentials(auth.AccessKey, s.cfg.S3GatewayPrivateX25519Key)
+		if err != nil {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
 
-		upn, pass, err := decodeUserPassFromAccessKey(auth.AccessKey)
-		if err != nil {
+		if err := verifySigV4(r, auth, s.cfg.SigV4Secret); err != nil {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}

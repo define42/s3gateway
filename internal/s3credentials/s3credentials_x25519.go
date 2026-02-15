@@ -1,4 +1,4 @@
-package keys
+package s3credentials
 
 import (
 	"crypto/ecdh"
@@ -19,48 +19,57 @@ const s3credentials_x25519_v1 = "X1"
 const x25519KeySize = 32
 
 func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
-	data, err := base64.RawURLEncoding.DecodeString(encoded)
+	payload := encoded
+	if strings.HasPrefix(payload, "X") && len(payload) >= len(s3credentials_x25519_v1) {
+		version := payload[:len(s3credentials_x25519_v1)]
+		if version != s3credentials_x25519_v1 {
+			return nil, errors.New("unsupported payload version")
+		}
+		payload = payload[len(s3credentials_x25519_v1):]
+	}
+
+	data, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil {
 		return nil, err
 	}
-	if len(data) < 2 {
+	if len(data) == 0 {
 		return nil, errors.New("payload too short")
 	}
 
-	version := string(data[0:2])
-	data = data[2:]
-
-	switch version {
-	case s3credentials_x25519_v1:
-		// fixed framing for v1
-		if len(data) < x25519KeySize+chacha20poly1305.NonceSize {
-			return nil, errors.New("ciphertext too short")
+	if len(data) >= len(s3credentials_x25519_v1) && data[0] == 'X' {
+		version := string(data[:len(s3credentials_x25519_v1)])
+		if version != s3credentials_x25519_v1 {
+			return nil, errors.New("unsupported payload version")
 		}
-
-		ephemeralPubBytes := data[:x25519KeySize]
-		nonce := data[x25519KeySize : x25519KeySize+chacha20poly1305.NonceSize]
-		ciphertext := data[x25519KeySize+chacha20poly1305.NonceSize:]
-
-		ephemeralPub, err := x25519Curve.NewPublicKey(ephemeralPubBytes)
-		if err != nil {
-			return nil, err
-		}
-
-		sharedSecret, err := receiverPriv.ECDH(ephemeralPub)
-		if err != nil {
-			return nil, err
-		}
-
-		aead, err := chacha20poly1305.New(sharedSecret)
-		if err != nil {
-			return nil, err
-		}
-
-		return aead.Open(nil, nonce, ciphertext, nil)
-
-	default:
-		return nil, errors.New("unsupported payload version")
+		data = data[len(s3credentials_x25519_v1):]
 	}
+
+	// fixed framing for v1
+	if len(data) < x25519KeySize+chacha20poly1305.NonceSize {
+		return nil, errors.New("ciphertext too short")
+	}
+
+	ephemeralPubBytes := data[:x25519KeySize]
+	nonce := data[x25519KeySize : x25519KeySize+chacha20poly1305.NonceSize]
+	ciphertext := data[x25519KeySize+chacha20poly1305.NonceSize:]
+
+	ephemeralPub, err := x25519Curve.NewPublicKey(ephemeralPubBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	sharedSecret, err := receiverPriv.ECDH(ephemeralPub)
+	if err != nil {
+		return nil, err
+	}
+
+	aead, err := chacha20poly1305.New(sharedSecret)
+	if err != nil {
+		return nil, err
+	}
+
+	return aead.Open(nil, nonce, ciphertext, nil)
+
 }
 
 func X25519PublicKeyFromHex(hexKey string) (*ecdh.PublicKey, error) {
@@ -122,17 +131,19 @@ func encrypt(receiverPub *ecdh.PublicKey, plaintext []byte) (string, error) {
 	epub := ephemeralPriv.PublicKey().Bytes()
 
 	// version (1) + epub (32) + nonce (12) + ciphertext
-	payload := make([]byte, 0, 2+len(epub)+len(nonce)+len(ciphertext))
-	payload = append(payload, s3credentials_x25519_v1...)
+	payload := make([]byte, 0, len(epub)+len(nonce)+len(ciphertext))
 	payload = append(payload, epub...)
 	payload = append(payload, nonce...)
 	payload = append(payload, ciphertext...)
 
-	return base64.RawURLEncoding.EncodeToString(payload), nil
+	return s3credentials_x25519_v1 + base64.RawURLEncoding.EncodeToString(payload), nil
 }
 
 func GetDecryptedToken(encoded string, privateKey *ecdh.PrivateKey) (ldapUsername, ldapPassword, secretKey string, err error) {
-	decrypted, err := decrypt(privateKey, encoded)
+	if !strings.HasPrefix(encoded, s3credentials_x25519_v1) {
+		return "", "", "", errors.New("invalid token version")
+	}
+	decrypted, err := decrypt(privateKey, encoded[2:])
 	if err != nil {
 		return "", "", "", err
 	}

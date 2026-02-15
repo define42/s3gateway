@@ -1,4 +1,4 @@
-package keys
+package s3credentials
 
 import (
 	"bytes"
@@ -62,27 +62,27 @@ func TestDecryptErrors(t *testing.T) {
 	}{
 		{
 			name:    "invalid base64",
-			encoded: "%%%",
+			encoded: "X1%%%",
 			wantErr: "illegal base64 data",
 		},
 		{
 			name:    "empty payload",
-			encoded: base64.RawURLEncoding.EncodeToString(nil),
+			encoded: s3credentials_x25519_v1 + base64.RawURLEncoding.EncodeToString(nil),
 			wantErr: "payload too short",
 		},
 		{
 			name:    "one-byte payload",
-			encoded: base64.RawURLEncoding.EncodeToString([]byte("X")),
-			wantErr: "payload too short",
+			encoded: s3credentials_x25519_v1 + base64.RawURLEncoding.EncodeToString([]byte("X")),
+			wantErr: "ciphertext too short",
 		},
 		{
 			name:    "unsupported version",
-			encoded: base64.RawURLEncoding.EncodeToString([]byte("ZZ")),
+			encoded: "X2" + base64.RawURLEncoding.EncodeToString([]byte("ZZ")),
 			wantErr: "unsupported payload version",
 		},
 		{
 			name:    "truncated v1 frame",
-			encoded: base64.RawURLEncoding.EncodeToString(shortPayload),
+			encoded: s3credentials_x25519_v1 + base64.RawURLEncoding.EncodeToString(shortPayload),
 			wantErr: "ciphertext too short",
 		},
 	}
@@ -265,7 +265,7 @@ func TestGetDecryptedTokenDecryptError(t *testing.T) {
 		t.Fatalf("failed to generate receiver key: %v", err)
 	}
 
-	_, _, _, err = GetDecryptedToken("%%%", receiverPriv)
+	_, _, _, err = GetDecryptedToken("X1%%%", receiverPriv)
 	if err == nil {
 		t.Fatalf("expected decrypt error")
 	}

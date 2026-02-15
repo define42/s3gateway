@@ -66,7 +66,7 @@ func TestS3ClientUpload100MBThroughGateway(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	accessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
+	accessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	client := NewS3Client(t, context.Background(), gwSrv.URL, "us-east-1", accessKey, "password")
 
 	tmpFile, err := os.CreateTemp(t.TempDir(), "gateway-upload-100mb-*")

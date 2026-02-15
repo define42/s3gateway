@@ -214,7 +214,7 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	gatewayURL := "http://" + ln.Addr().String()
 	waitForGatewayReady(t, gatewayURL)
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
+	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	gatewayClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 
 	createdBucket := fmt.Sprintf("team2-cephgw-created-%d", time.Now().UnixNano())

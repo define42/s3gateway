@@ -96,9 +96,9 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	gatewayAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
+	gatewayAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	gatewayClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, cfg.SigV4Secret)
-	readonlyAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:readonly:dogood"))
+	readonlyAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	readonlyClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", readonlyAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
@@ -260,7 +260,7 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	gatewayAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
+	gatewayAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	gatewayAwsClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, cfg.SigV4Secret)
 	gatewayMinioClient := newMinioGatewayClient(t, gwSrv.URL, gatewayAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
@@ -352,9 +352,9 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
+	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:readonly:dogood"))
+	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
@@ -445,9 +445,9 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
+	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:readonly:dogood"))
+	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 
 	bucket := fmt.Sprintf("team2-listobj-%d", time.Now().UnixNano())
@@ -539,9 +539,9 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
+	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:readonly:dogood"))
+	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
@@ -733,9 +733,9 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
+	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:readonly:dogood"))
+	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 
 	bucket := fmt.Sprintf("team2-getattrs-%d", time.Now().UnixNano())
@@ -927,7 +927,7 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
+	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	gatewayClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
@@ -1159,9 +1159,9 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
+	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:readonly:dogood"))
+	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
@@ -1815,9 +1815,9 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
+	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:readonly:dogood"))
+	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 
 	bucket := fmt.Sprintf("team2-ldap-cache-%d", time.Now().UnixNano())
@@ -1897,9 +1897,9 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 	gw := newServer(cfg, up)
 	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
+	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:readonly:dogood"))
+	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 	roClient := NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", roAccessKey, cfg.SigV4Secret)
 	upstreamClient := NewS3Client(tb, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 

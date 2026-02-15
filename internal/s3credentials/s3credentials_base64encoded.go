@@ -1,0 +1,37 @@
+package s3credentials
+
+import (
+	"encoding/base64"
+	"fmt"
+	"strings"
+)
+
+// ==================== Credential hack ====================
+// accessKey = "AD" + 'AD'base64("username:password")
+// secretKey = constant "password"
+func S3credentials_base64encoded(accessKey string) (username, password string, err error) {
+
+	if !strings.HasPrefix(accessKey, "AD") {
+		return "", "", fmt.Errorf("accessKey must start with 'AD' prefix")
+	}
+
+	raw, err := base64.StdEncoding.DecodeString(accessKey[2:])
+	if err != nil {
+		return "", "", fmt.Errorf("accessKey not base64: %w", err)
+	}
+
+	s := strings.TrimSpace(string(raw))
+
+	parts := strings.SplitN(s, ":", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("accessKey must decode to 'AD:username:password' format, got: %s", s)
+	}
+
+	username = strings.TrimSpace(parts[0])
+	password = parts[1] // keep password as-is (can contain spaces); may include ':' when encoded in the password segment
+	if username == "" || password == "" {
+		return "", "", fmt.Errorf("accessKey must decode to 'AD:username:password' with non-empty username and password")
+	}
+
+	return username, password, nil
+}

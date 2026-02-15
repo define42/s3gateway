@@ -138,8 +138,8 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 		}
 	}
 
-	rwAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:testuser:dogood"))
-	roAccessKey := base64.StdEncoding.EncodeToString([]byte("AD:readonly:dogood"))
+	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
+	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
 
 	rwClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	roClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", roAccessKey, cfg.SigV4Secret)
