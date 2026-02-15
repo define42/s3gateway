@@ -7,7 +7,7 @@ import (
 
 func S3credentials(accessKey string, s3gatewayPrivateKey *ecdh.PrivateKey) (username, password string, err error) {
 
-	if strings.HasPrefix(accessKey, s3credentials_x25519_v1) {
+	if s3gatewayPrivateKey != nil && strings.HasPrefix(accessKey, s3credentials_x25519_v1) {
 
 		username, password, _, err = GetDecryptedToken(accessKey, s3gatewayPrivateKey)
 		if err != nil {

@@ -172,3 +172,15 @@ func X25519PrivateKeyFromHex(hexKey string) (*ecdh.PrivateKey, error) {
 	curve := ecdh.X25519()
 	return curve.NewPrivateKey(keyBytes)
 }
+
+func GenerateX25519TestKeys() (privateKeyHex string, publicKeyHex string, err error) {
+	priv, err := x25519Curve.GenerateKey(rand.Reader)
+	if err != nil {
+		return "", "", err
+	}
+	pub := priv.PublicKey()
+
+	privateKeyHex = hex.EncodeToString(priv.Bytes())
+	publicKeyHex = hex.EncodeToString(pub.Bytes())
+	return privateKeyHex, publicKeyHex, nil
+}

@@ -3,7 +3,6 @@ package main_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +19,7 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	s3gateway "github.com/define42/s3gateway"
+	"github.com/define42/s3gateway/internal/s3credentials"
 	minio "github.com/minio/minio-go/v7"
 	minioCredentials "github.com/minio/minio-go/v7/pkg/credentials"
 )
@@ -53,6 +53,12 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	t.Setenv("HTTP_IDLE_TIMEOUT", "11s")
 	t.Setenv("HTTP_SHUTDOWN_TIMEOUT", "13s")
 	t.Setenv("HTTP_MAX_HEADER_BYTES", "65536")
+
+	s3gatewayPrivateKey, s3gatewayPublicKey, err := s3credentials.GenerateX25519TestKeys()
+	if err != nil {
+		t.Fatalf("failed to generate X25519 test keys: %v", err)
+	}
+	t.Setenv("S3GATEWAY_PRIVATE_X25519_KEY", s3gatewayPrivateKey)
 
 	httpSrv, cfg, err := s3gateway.BootS3Gateway()
 	if err != nil {
@@ -138,8 +144,8 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 		}
 	}
 
-	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
+	rwAccessKey, _, _ := s3credentials.GenerateKeysBase64Encoded("testuser", "dogood")
+	roAccessKey, _, _ := s3credentials.GenerateKeysX25519("readonly", "dogood", s3gatewayPublicKey)
 
 	rwClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, cfg.SigV4Secret)
 	roClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", roAccessKey, cfg.SigV4Secret)
