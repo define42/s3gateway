@@ -34,6 +34,9 @@ func TestDecodeUserPassFromAccessKeyErrorPaths(t *testing.T) {
 
 	t.Run("accessKey must decode to username and password", func(t *testing.T) {
 		accessKey, secretKey, err := s3credentials.GenerateKeysBase64Encoded("username", "password")
+		if err != nil {
+			t.Fatalf("unexpected error generating access key: %v", err)
+		}
 
 		username, password, err := s3credentials.S3credentials_base64encoded(accessKey)
 		if err != nil {
