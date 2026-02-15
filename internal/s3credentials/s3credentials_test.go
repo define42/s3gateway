@@ -22,7 +22,7 @@ func TestS3credentials(t *testing.T) {
 		t.Fatalf("failed to generate access and secret keys: %v", err)
 	}
 
-	username, password, err := S3credentials(accessKey, privateKey)
+	username, password, secretKey, err := S3credentials(accessKey, privateKey)
 	if err != nil {
 		t.Fatalf("failed to get credentials: %v", err)
 	}
@@ -32,5 +32,12 @@ func TestS3credentials(t *testing.T) {
 	}
 	if password != inLdapPassword {
 		t.Fatalf("expected password %s, got %s", inLdapPassword, password)
+	}
+	expectedSecretKey := EncodeSecretKey(inLdapUsername + ":" + inLdapPassword)
+	if secretKey != expectedSecretKey {
+		t.Fatalf("expected secretKey %s, got %s", expectedSecretKey, secretKey)
+	}
+	if secretKey != "5mWQjp9l0gPnYM3BkYvmheh3a9sjPK6Cu8kNrqhTk4w=" {
+		t.Fatalf("expected secretKey %s, got %s", "5mWQjp9l0gPnYM3BkYvmheh3a9sjPK6Cu8kNrqhTk4w=", secretKey)
 	}
 }

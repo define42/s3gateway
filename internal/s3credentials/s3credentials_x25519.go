@@ -3,7 +3,6 @@ package s3credentials
 import (
 	"crypto/ecdh"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -19,29 +18,13 @@ const s3credentials_x25519_v1 = "X1"
 const x25519KeySize = 32
 
 func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
-	payload := encoded
-	if strings.HasPrefix(payload, "X") && len(payload) >= len(s3credentials_x25519_v1) {
-		version := payload[:len(s3credentials_x25519_v1)]
-		if version != s3credentials_x25519_v1 {
-			return nil, errors.New("unsupported payload version")
-		}
-		payload = payload[len(s3credentials_x25519_v1):]
-	}
 
-	data, err := base64.RawURLEncoding.DecodeString(payload)
+	data, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, err
 	}
 	if len(data) == 0 {
 		return nil, errors.New("payload too short")
-	}
-
-	if len(data) >= len(s3credentials_x25519_v1) && data[0] == 'X' {
-		version := string(data[:len(s3credentials_x25519_v1)])
-		if version != s3credentials_x25519_v1 {
-			return nil, errors.New("unsupported payload version")
-		}
-		data = data[len(s3credentials_x25519_v1):]
 	}
 
 	// fixed framing for v1
@@ -99,8 +82,8 @@ func GenerateKeysX25519(ldapUsername, ldapPassword, publicKeyHex string) (access
 	if err != nil {
 		return "", "", err
 	}
-	hash := sha256.Sum256([]byte(token))
-	secretKey = base64.RawURLEncoding.EncodeToString(hash[:])
+
+	secretKey = EncodeSecretKey(token)
 
 	return accessKey, secretKey, nil
 }
@@ -153,8 +136,7 @@ func GetDecryptedToken(encoded string, privateKey *ecdh.PrivateKey) (ldapUsernam
 		return "", "", "", errors.New("invalid token format")
 	}
 
-	hash := sha256.Sum256(decrypted)
-	secretKey = base64.RawURLEncoding.EncodeToString(hash[:])
+	secretKey = EncodeSecretKey(string(decrypted))
 
 	return ldapUsername, ldapPassword, secretKey, nil
 }

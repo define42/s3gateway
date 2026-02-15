@@ -1617,7 +1617,7 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 			return
 		}
 
-		upn, pass, err := s3credentials.S3credentials(auth.AccessKey, s.cfg.S3GatewayPrivateX25519Key)
+		upn, pass, _, err := s3credentials.S3credentials(auth.AccessKey, s.cfg.S3GatewayPrivateX25519Key)
 		if err != nil {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return

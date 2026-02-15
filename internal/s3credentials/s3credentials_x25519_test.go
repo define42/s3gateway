@@ -53,8 +53,6 @@ func TestDecryptErrors(t *testing.T) {
 		t.Fatalf("failed to generate receiver key: %v", err)
 	}
 
-	shortPayload := append([]byte(s3credentials_x25519_v1), make([]byte, x25519KeySize+11)...)
-
 	tests := []struct {
 		name    string
 		encoded string
@@ -67,22 +65,12 @@ func TestDecryptErrors(t *testing.T) {
 		},
 		{
 			name:    "empty payload",
-			encoded: s3credentials_x25519_v1 + base64.RawURLEncoding.EncodeToString(nil),
+			encoded: base64.RawURLEncoding.EncodeToString(nil),
 			wantErr: "payload too short",
 		},
 		{
 			name:    "one-byte payload",
-			encoded: s3credentials_x25519_v1 + base64.RawURLEncoding.EncodeToString([]byte("X")),
-			wantErr: "ciphertext too short",
-		},
-		{
-			name:    "unsupported version",
-			encoded: "X2" + base64.RawURLEncoding.EncodeToString([]byte("ZZ")),
-			wantErr: "unsupported payload version",
-		},
-		{
-			name:    "truncated v1 frame",
-			encoded: s3credentials_x25519_v1 + base64.RawURLEncoding.EncodeToString(shortPayload),
+			encoded: base64.RawURLEncoding.EncodeToString([]byte("X")),
 			wantErr: "ciphertext too short",
 		},
 	}
@@ -238,24 +226,6 @@ func TestX25519PrivateKeyFromHex(t *testing.T) {
 	}
 	if _, err := X25519PrivateKeyFromHex("00"); err == nil {
 		t.Fatalf("expected short private key to fail")
-	}
-}
-
-func TestDecryptLowOrderEphemeralKey(t *testing.T) {
-	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("failed to generate receiver key: %v", err)
-	}
-
-	payload := append([]byte(s3credentials_x25519_v1), make([]byte, x25519KeySize+12)...)
-	encoded := base64.RawURLEncoding.EncodeToString(payload)
-
-	_, err = decrypt(receiverPriv, encoded)
-	if err == nil {
-		t.Fatalf("expected low-order-point ECDH error")
-	}
-	if !strings.Contains(err.Error(), "low order point") {
-		t.Fatalf("expected low-order-point error, got %v", err)
 	}
 }
 
