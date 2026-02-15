@@ -10,7 +10,7 @@ S3_ENDPOINT_URL = "http://localhost:8080"
 SIGV4_SECRET = "password"
 
 def get_s3_client(user_upn, user_password):
-    access_key = base64.b64encode(f"{user_upn}:{user_password}".encode("utf-8")).decode("utf-8")
+    access_key = "AD" + base64.b64encode(f"{user_upn}:{user_password}".encode("utf-8")).decode("utf-8")
     return boto3.client(
         "s3",
         aws_access_key_id=access_key,  # base64("user:ldap-password")

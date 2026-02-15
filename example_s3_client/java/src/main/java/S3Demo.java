@@ -23,7 +23,7 @@ public class S3Demo {
     private static final String SIGV4_SECRET = "password";
 
     private static S3Client getS3Client(String userUpn, String userPassword) {
-        String accessKey = Base64.getEncoder()
+        String accessKey = "AD" + Base64.getEncoder()
                 .encodeToString((userUpn + ":" + userPassword).getBytes(StandardCharsets.UTF_8));
 
         AwsBasicCredentials creds = AwsBasicCredentials.create(accessKey, SIGV4_SECRET);
