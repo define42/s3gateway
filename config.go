@@ -87,6 +87,13 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.MaxHeaderBytes == 0 {
 		cfg.MaxHeaderBytes = defaultMaxHeaderBytes
 	}
+	if cfg.S3GatewayPrivateX25519Key == nil {
+		piv, err := s3credentials.X25519PrivateKeyFromHex("a2b01b27fd7bd175570fb2b3eb6efc61704e36ab039c4d9750b41c0c31e93043")
+		if err != nil {
+			log.Fatalf("failed to parse generated private key: %v", err)
+		}
+		cfg.S3GatewayPrivateX25519Key = piv
+	}
 }
 
 func (cfg Config) Validate() error {

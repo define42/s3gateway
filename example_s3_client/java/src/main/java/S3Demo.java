@@ -10,6 +10,8 @@ import software.amazon.awssdk.services.s3.model.*;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
 import java.util.List;
 import java.util.Set;
@@ -20,13 +22,35 @@ public class S3Demo {
 
     private static final String S3_REGION = "eu-west-1";
     private static final String S3_ENDPOINT_URL = "http://localhost:8080";
-    private static final String SIGV4_SECRET = "password";
+
+    private static class GatewayKeys {
+        final String accessKey;
+        final String secretKey;
+
+        GatewayKeys(String accessKey, String secretKey) {
+            this.accessKey = accessKey;
+            this.secretKey = secretKey;
+        }
+    }
+
+    private static GatewayKeys generateGatewayKeys(String userUpn, String userPassword) {
+        String token = userUpn + ":" + userPassword;
+        String accessKey = "AD" + Base64.getEncoder()
+                .encodeToString(token.getBytes(StandardCharsets.UTF_8));
+
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256")
+                    .digest(token.getBytes(StandardCharsets.UTF_8));
+            String secretKey = Base64.getUrlEncoder().encodeToString(hash);
+            return new GatewayKeys(accessKey, secretKey);
+        } catch (NoSuchAlgorithmException e) {
+            throw new RuntimeException("SHA-256 not available", e);
+        }
+    }
 
     private static S3Client getS3Client(String userUpn, String userPassword) {
-        String accessKey = "AD" + Base64.getEncoder()
-                .encodeToString((userUpn + ":" + userPassword).getBytes(StandardCharsets.UTF_8));
-
-        AwsBasicCredentials creds = AwsBasicCredentials.create(accessKey, SIGV4_SECRET);
+        GatewayKeys keys = generateGatewayKeys(userUpn, userPassword);
+        AwsBasicCredentials creds = AwsBasicCredentials.create(keys.accessKey, keys.secretKey);
 
         // For many local S3 implementations (MinIO, etc.) path-style is required.
         S3Configuration s3Config = S3Configuration.builder()

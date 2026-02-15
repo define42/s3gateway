@@ -3,26 +3,57 @@
 import boto3
 import base64
 import hashlib
+import os
 import uuid
 from botocore.exceptions import NoCredentialsError, ClientError, EndpointConnectionError
+from cryptography.hazmat.primitives.asymmetric.x25519 import (
+    X25519PrivateKey,
+    X25519PublicKey,
+)
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 S3_REGION = "eu-west-1"
 S3_ENDPOINT_URL = "http://localhost:8080"
+S3GATEWAY_PUBLIC_X25519_KEY = "b0b5d6c181c25c6d8d49aa68ecc85a9f8a0ab0f776680eca733ded24dd95ea31"
 
 
-def generate_gateway_keys(user_upn, user_password):
+def generate_keys_x25519(user_upn, user_password, public_key_hex):
+    if ":" in user_upn:
+        raise ValueError("ldap username cannot contain ':' character")
+
+    public_key_bytes = bytes.fromhex(public_key_hex)
+    if len(public_key_bytes) != 32:
+        raise ValueError("X25519 public key must be 32 bytes")
+
+    receiver_pub = X25519PublicKey.from_public_bytes(public_key_bytes)
     token = f"{user_upn}:{user_password}"
-    access_key = "AD" + base64.b64encode(token.encode("utf-8")).decode("utf-8")
+    token_bytes = token.encode("utf-8")
+
+    ephemeral_priv = X25519PrivateKey.generate()
+    shared_secret = ephemeral_priv.exchange(receiver_pub)
+    aead = ChaCha20Poly1305(shared_secret)
+    nonce = os.urandom(12)
+    ciphertext = aead.encrypt(nonce, token_bytes, None)
+
+    ephemeral_pub_bytes = ephemeral_priv.public_key().public_bytes(
+        encoding=Encoding.Raw,
+        format=PublicFormat.Raw,
+    )
+    payload = ephemeral_pub_bytes + nonce + ciphertext
+    access_key = "X1" + base64.urlsafe_b64encode(payload).decode("utf-8").rstrip("=")
     secret_key = base64.urlsafe_b64encode(
-        hashlib.sha256(token.encode("utf-8")).digest()
+        hashlib.sha256(token_bytes).digest()
     ).decode("utf-8")
     return access_key, secret_key
 
 def get_s3_client(user_upn, user_password):
-    access_key, secret_key = generate_gateway_keys(user_upn, user_password)
+    access_key, secret_key = generate_keys_x25519(
+        user_upn, user_password, S3GATEWAY_PUBLIC_X25519_KEY
+    )
     return boto3.client(
         "s3",
-        aws_access_key_id=access_key,  # AD + base64("user:ldap-password")
+        aws_access_key_id=access_key,  # X1 + base64url(ephemeralPub || nonce || chacha20poly1305(token))
         aws_secret_access_key=secret_key,  # sha256("user:ldap-password"), base64url-encoded
         region_name=S3_REGION,
         endpoint_url=S3_ENDPOINT_URL,
