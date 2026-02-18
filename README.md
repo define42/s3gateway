@@ -135,6 +135,10 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 - `HTTP_IDLE_TIMEOUT` (default `120s`)
 - `HTTP_SHUTDOWN_TIMEOUT` (default `20s`)
 - `HTTP_MAX_HEADER_BYTES` (default `1048576`)
+- `ACME_DOMAINS` (default empty): comma-separated domain list. When set, gateway enables automatic HTTPS certificate management via ACME/certmagic.
+- `ACME_SERVER` (default `https://acme-v02.api.letsencrypt.org/directory`): ACME directory URL.
+- `ACME_DATA_DIR` (default `./certs`): directory used to store ACME account and certificate data.
+- `ACME_CA_DIR` (default empty): directory of PEM CA certificate file(s) trusted for TLS when connecting to the ACME server (useful for private ACME endpoints).
 
 ## Run
 
@@ -143,6 +147,33 @@ go run .
 ```
 
 The server supports graceful shutdown on `SIGINT`/`SIGTERM`.
+
+## ACME (Automatic HTTPS)
+
+S3gateway supports automatic TLS certificates through ACME using `certmagic`.
+
+Minimal setup:
+
+```bash
+export ACME_DOMAINS="s3gw.example.com"
+go run .
+```
+
+Optional overrides:
+
+```bash
+export ACME_SERVER="https://acme-v02.api.letsencrypt.org/directory"
+export ACME_DATA_DIR="./certs"
+# For private ACME servers:
+export ACME_CA_DIR="/etc/s3gateway/acme-ca"
+```
+
+Behavior:
+
+- `ACME_DOMAINS` accepts comma-separated values and trims spaces.
+- If `ACME_DOMAINS` is set, the gateway serves HTTPS using the ACME-managed listener.
+- If `ACME_DOMAINS` is empty, the gateway serves plain HTTP on `LISTEN_ADDR`.
+- For public ACME CAs, ensure each ACME domain resolves to the gateway host.
 
 ## Health Endpoints
 
