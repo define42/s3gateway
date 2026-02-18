@@ -299,16 +299,25 @@ type adminGorillaStore struct {
 	Options *sessions.Options
 }
 
-func newAdminGorillaStore(sigV4Secret string, ttl time.Duration, backend *adminSessionStore) *adminGorillaStore {
-	if strings.TrimSpace(sigV4Secret) == "" {
-		sigV4Secret = "password"
-	}
+func random32() [32]byte {
+	var b [32]byte
+	_, _ = rand.Read(b[:]) // crypto-secure
+	return b
+}
+
+func newAdminGorillaStore(cookieSecret string, ttl time.Duration, backend *adminSessionStore) *adminGorillaStore {
+
 	if ttl <= 0 {
 		ttl = defaultAdminSessionTTL
 	}
-
-	hashKey := sha256.Sum256([]byte("s3gateway-admin-hash:" + sigV4Secret))
-	blockKey := sha256.Sum256([]byte("s3gateway-admin-block:" + sigV4Secret))
+	var hashKey, blockKey [32]byte
+	if cookieSecret == "" {
+		hashKey = random32()
+		blockKey = random32()
+	} else {
+		hashKey = sha256.Sum256([]byte("s3gateway-admin-hash:" + cookieSecret))
+		blockKey = sha256.Sum256([]byte("s3gateway-admin-block:" + cookieSecret))
+	}
 	codecs := securecookie.CodecsFromPairs(hashKey[:], blockKey[:])
 
 	store := &adminGorillaStore{

@@ -179,7 +179,6 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	t.Setenv("S3_ACCESS_KEY", upstreamAccessKey)
 	t.Setenv("S3_SECRET_KEY", upstreamSecretKey)
 	t.Setenv("S3_FORCE_PATH_STYLE", "true")
-	t.Setenv("SIGV4_SECRET", "password")
 	t.Setenv("SIGV4_SERVICE", "s3")
 
 	httpSrv, _, err := s3gateway.BootS3Gateway()

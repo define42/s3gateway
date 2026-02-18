@@ -46,7 +46,6 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	t.Setenv("S3_ACCESS_KEY", "minioadmin")
 	t.Setenv("S3_SECRET_KEY", "minioadmin")
 	t.Setenv("S3_FORCE_PATH_STYLE", "true")
-	t.Setenv("SIGV4_SECRET", "password")
 	t.Setenv("SIGV4_SERVICE", "s3")
 	t.Setenv("SIGV4_MAX_SKEW", "20m")
 	t.Setenv("HTTP_READ_HEADER_TIMEOUT", "3s")

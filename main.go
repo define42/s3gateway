@@ -1562,7 +1562,7 @@ func newServer(cfg Config, up *s3.Client) *server {
 		gcache:           newGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
 		fetchGroups:      fetchGroupsUPN,
 		adminSessions:    adminSessions,
-		adminWebSessions: newAdminGorillaStore(cfg.SigV4Secret, defaultAdminSessionTTL, adminSessions),
+		adminWebSessions: newAdminGorillaStore(cfg.CookieSecret, defaultAdminSessionTTL, adminSessions),
 	}
 }
 
