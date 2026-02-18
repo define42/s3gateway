@@ -7,7 +7,9 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -34,6 +36,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"github.com/caddyserver/certmagic"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	ldap "github.com/go-ldap/ldap/v3"
 	"golang.org/x/sync/singleflight"
@@ -5235,15 +5238,75 @@ func BootS3Gateway() (*http.Server, Config, error) {
 }
 
 func main() {
-
 	httpSrv, cfg, err := BootS3Gateway()
 	if err != nil {
 		log.Fatalf("failed to boot s3 gateway: %v", err)
 	}
 
 	serverErr := make(chan error, 1)
+
+	// will hold the TLS listener if ACME is enabled
+	var tlsLn net.Listener
+
 	go func() {
-		serverErr <- httpSrv.ListenAndServe()
+		// Ensure we always signal back (prevents deadlocks)
+		defer func() {
+			// If nothing else was sent, send nil.
+			select {
+			case <-serverErr:
+				// something already sent
+			default:
+				serverErr <- nil
+			}
+		}()
+
+		if strings.TrimSpace(cfg.AcmeDomains) != "" {
+			log.Printf("starting ACME certificate manager for domains: %v", cfg.AcmeDomains)
+
+			raw := strings.Split(cfg.AcmeDomains, ",")
+			domains := make([]string, 0, len(raw))
+			for _, d := range raw {
+				d = strings.TrimSpace(d)
+				if d != "" {
+					domains = append(domains, d)
+				}
+			}
+			if len(domains) == 0 {
+				serverErr <- fmt.Errorf("no valid ACME domains provided")
+				return
+			}
+
+			certmagic.DefaultACME.Agreed = true
+			certmagic.Default.Storage = &certmagic.FileStorage{Path: cfg.AcmeDataDir}
+			certmagic.DefaultACME.TrustedRoots = ReadCertificates(cfg.AcmeCaDir)
+			certmagic.DefaultACME.CA = cfg.AcmeServer
+
+			ln, err := certmagic.Listen(domains)
+			if err != nil {
+				serverErr <- fmt.Errorf("ACME listen error: %w", err)
+				return
+			}
+			tlsLn = ln
+
+			log.Printf("starting HTTPS server (certmagic) on %s", ln.Addr())
+			err = httpSrv.Serve(ln)
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				serverErr <- fmt.Errorf("https server error: %w", err)
+				return
+			}
+
+			// normal shutdown
+			serverErr <- nil
+			return
+		}
+
+		log.Printf("starting HTTP server on %s", httpSrv.Addr)
+		err := httpSrv.ListenAndServe()
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- fmt.Errorf("http server error: %w", err)
+			return
+		}
+		serverErr <- nil
 	}()
 
 	shutdownSignalsCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -5251,7 +5314,7 @@ func main() {
 
 	select {
 	case err := <-serverErr:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err != nil {
 			log.Fatalf("server error: %v", err)
 		}
 		return
@@ -5261,15 +5324,90 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), effectiveShutdownTimeout(cfg))
 	defer cancel()
+
+	// Important: close the listener to unblock Serve(ln)
+	if tlsLn != nil {
+		_ = tlsLn.Close()
+	}
+
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown failed: %v", err)
-		if closeErr := httpSrv.Close(); closeErr != nil {
-			log.Printf("force close failed: %v", closeErr)
+		_ = httpSrv.Close()
+	}
+
+	// Wait for goroutine to finish
+	if err := <-serverErr; err != nil {
+		log.Fatalf("server shutdown error: %v", err)
+	}
+}
+
+func ReadCertificates(caFolder string) *x509.CertPool {
+	certpool, err := x509.SystemCertPool()
+	if err != nil {
+		panic(err)
+	}
+
+	files, err := os.ReadDir(caFolder)
+	if err != nil {
+		fmt.Println("No Root CA found in:", caFolder)
+	}
+	for _, file := range files {
+
+		certs, err := LoadCertBundleFromFile(caFolder + file.Name())
+		if err != nil {
+			fmt.Println("Failed to load Root CA file:", caFolder+file.Name())
+			panic(err)
+		}
+
+		fmt.Println("Adding CA Root certificate from:", file.Name())
+		for _, cert := range certs {
+			certpool.AddCert(cert)
 		}
 	}
 
-	if err := <-serverErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("server shutdown error: %v", err)
+	// Read system default Root CA
+	defaultCaFile := "/etc/ssl/certs/ca-certificates.crt"
+	certs, err := LoadCertBundleFromFile(defaultCaFile)
+	if err != nil {
+		fmt.Println("Failed to load default Root CA file:", defaultCaFile)
+		log.Fatal(err)
 	}
-	log.Printf("server stopped")
+
+	fmt.Println("Adding default CA Root certificate from:", defaultCaFile)
+	for _, cert := range certs {
+		certpool.AddCert(cert)
+	}
+	return certpool
+}
+
+func LoadCertBundleFromFile(filename string) ([]*x509.Certificate, error) {
+	b, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	return LoadCertBundleFromPEM(b)
+}
+
+func LoadCertBundleFromPEM(pemBytes []byte) ([]*x509.Certificate, error) {
+	certificates := []*x509.Certificate{}
+	var block *pem.Block
+	block, pemBytes = pem.Decode(pemBytes)
+	for ; block != nil; block, pemBytes = pem.Decode(pemBytes) {
+		if block.Type == "CERTIFICATE" {
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				return nil, err
+			}
+			certificates = append(certificates, cert)
+		} else {
+			return nil, fmt.Errorf("invalid pem block type: %s", block.Type)
+		}
+	}
+
+	if len(certificates) == 0 {
+		return nil, fmt.Errorf("no valid certificates found")
+	}
+
+	return certificates, nil
 }

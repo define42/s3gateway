@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/caddyserver/certmagic"
 	"github.com/define42/s3gateway/internal/s3credentials"
 )
 
@@ -39,6 +40,11 @@ type Config struct {
 	ShutdownTimeout           time.Duration
 	MaxHeaderBytes            int
 	S3GatewayPrivateX25519Key *ecdh.PrivateKey
+
+	AcmeCaDir   string
+	AcmeDomains string
+	AcmeServer  string
+	AcmeDataDir string
 }
 
 const (
@@ -222,6 +228,10 @@ func loadConfig() Config {
 		ShutdownTimeout:           envDuration("HTTP_SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
 		MaxHeaderBytes:            envInt("HTTP_MAX_HEADER_BYTES", defaultMaxHeaderBytes),
 		S3GatewayPrivateX25519Key: envEcdhPrivateKey("S3GATEWAY_PRIVATE_X25519_KEY"),
+		AcmeCaDir:                 env("ACME_CA_DIR", "/etc/ssl/certs"),
+		AcmeDomains:               env("ACME_DOMAINS", ""),
+		AcmeServer:                env("ACME_SERVER", certmagic.LetsEncryptProductionCA),
+		AcmeDataDir:               env("ACME_DATA_DIR", "./certs"),
 	}
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
