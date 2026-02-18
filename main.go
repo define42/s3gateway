@@ -7,9 +7,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
-	"crypto/x509"
 	"encoding/hex"
-	"encoding/pem"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -20,7 +18,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -38,6 +35,7 @@ import (
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/caddyserver/certmagic"
+	"github.com/define42/s3gateway/internal/certreader"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	ldap "github.com/go-ldap/ldap/v3"
 	"golang.org/x/sync/singleflight"
@@ -5283,7 +5281,7 @@ func main() {
 			certmagic.DefaultACME.Agreed = true
 			certmagic.Default.Storage = &certmagic.FileStorage{Path: cfg.AcmeDataDir}
 			if cfg.AcmeCaDir != "" {
-				privateCA, err := ReadCertificates(cfg.AcmeCaDir)
+				privateCA, err := certreader.ReadCertificates(cfg.AcmeCaDir)
 				if err != nil {
 					sendServerErr(fmt.Errorf("failed to read ACME CA certificates: %w", err))
 					return
@@ -5350,84 +5348,4 @@ func main() {
 	if err := <-serverErr; err != nil {
 		log.Fatalf("server shutdown error: %v", err)
 	}
-}
-
-func ReadCertificates(caFolder string) (*x509.CertPool, error) {
-	certpool, err := x509.SystemCertPool()
-	if err != nil {
-		return nil, err
-	}
-
-	files, err := os.ReadDir(caFolder)
-	if err != nil {
-		return nil, fmt.Errorf("read root CA directory %s: %w", caFolder, err)
-	}
-
-	loaded := 0
-	for _, file := range files {
-		caPath := filepath.Join(caFolder, file.Name())
-		info, err := file.Info()
-		if err != nil {
-			return nil, fmt.Errorf("read root CA entry %s info: %w", caPath, err)
-		}
-		if info.IsDir() {
-			return nil, fmt.Errorf("root CA entry %s is a directory", caPath)
-		}
-
-		certs, err := LoadCertBundleFromFile(caPath)
-		if err != nil {
-			return nil, fmt.Errorf("load root CA file %s: %w", caPath, err)
-		}
-
-		for _, cert := range certs {
-			certpool.AddCert(cert)
-		}
-		loaded++
-	}
-	log.Printf("loaded %d CA file(s) from %s", loaded, caFolder)
-
-	// Read system default Root CA
-	defaultCaFile := "/etc/ssl/certs/ca-certificates.crt"
-	certs, err := LoadCertBundleFromFile(defaultCaFile)
-	if err != nil {
-		return nil, fmt.Errorf("load default root CA file %s: %w", defaultCaFile, err)
-	}
-
-	log.Printf("adding default CA Root certificate from: %s", defaultCaFile)
-	for _, cert := range certs {
-		certpool.AddCert(cert)
-	}
-	return certpool, nil
-}
-
-func LoadCertBundleFromFile(filename string) ([]*x509.Certificate, error) {
-	b, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-
-	return LoadCertBundleFromPEM(b)
-}
-
-func LoadCertBundleFromPEM(pemBytes []byte) ([]*x509.Certificate, error) {
-	certificates := []*x509.Certificate{}
-	var block *pem.Block
-	block, pemBytes = pem.Decode(pemBytes)
-	for ; block != nil; block, pemBytes = pem.Decode(pemBytes) {
-		if block.Type == "CERTIFICATE" {
-			cert, err := x509.ParseCertificate(block.Bytes)
-			if err != nil {
-				return nil, err
-			}
-			certificates = append(certificates, cert)
-		} else {
-			return nil, fmt.Errorf("invalid pem block type: %s", block.Type)
-		}
-	}
-
-	if len(certificates) == 0 {
-		return nil, fmt.Errorf("no valid certificates found")
-	}
-
-	return certificates, nil
 }
