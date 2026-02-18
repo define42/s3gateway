@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -5249,15 +5250,18 @@ func main() {
 	var tlsLn net.Listener
 
 	go func() {
+		sent := false
+		sendServerErr := func(err error) {
+			if sent {
+				return
+			}
+			serverErr <- err
+			sent = true
+		}
+
 		// Ensure we always signal back (prevents deadlocks)
 		defer func() {
-			// If nothing else was sent, send nil.
-			select {
-			case <-serverErr:
-				// something already sent
-			default:
-				serverErr <- nil
-			}
+			sendServerErr(nil)
 		}()
 
 		if strings.TrimSpace(cfg.AcmeDomains) != "" {
@@ -5272,18 +5276,25 @@ func main() {
 				}
 			}
 			if len(domains) == 0 {
-				serverErr <- fmt.Errorf("no valid ACME domains provided")
+				sendServerErr(fmt.Errorf("no valid ACME domains provided"))
 				return
 			}
 
 			certmagic.DefaultACME.Agreed = true
 			certmagic.Default.Storage = &certmagic.FileStorage{Path: cfg.AcmeDataDir}
-			certmagic.DefaultACME.TrustedRoots = ReadCertificates(cfg.AcmeCaDir)
+			if cfg.AcmeCaDir != "" {
+				privateCA, err := ReadCertificates(cfg.AcmeCaDir)
+				if err != nil {
+					sendServerErr(fmt.Errorf("failed to read ACME CA certificates: %w", err))
+					return
+				}
+				certmagic.DefaultACME.TrustedRoots = privateCA
+			}
 			certmagic.DefaultACME.CA = cfg.AcmeServer
 
 			ln, err := certmagic.Listen(domains)
 			if err != nil {
-				serverErr <- fmt.Errorf("ACME listen error: %w", err)
+				sendServerErr(fmt.Errorf("ACME listen error: %w", err))
 				return
 			}
 			tlsLn = ln
@@ -5291,22 +5302,22 @@ func main() {
 			log.Printf("starting HTTPS server (certmagic) on %s", ln.Addr())
 			err = httpSrv.Serve(ln)
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
-				serverErr <- fmt.Errorf("https server error: %w", err)
+				sendServerErr(fmt.Errorf("https server error: %w", err))
 				return
 			}
 
 			// normal shutdown
-			serverErr <- nil
+			sendServerErr(nil)
 			return
 		}
 
 		log.Printf("starting HTTP server on %s", httpSrv.Addr)
 		err := httpSrv.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverErr <- fmt.Errorf("http server error: %w", err)
+			sendServerErr(fmt.Errorf("http server error: %w", err))
 			return
 		}
-		serverErr <- nil
+		sendServerErr(nil)
 	}()
 
 	shutdownSignalsCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -5341,43 +5352,52 @@ func main() {
 	}
 }
 
-func ReadCertificates(caFolder string) *x509.CertPool {
+func ReadCertificates(caFolder string) (*x509.CertPool, error) {
 	certpool, err := x509.SystemCertPool()
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	files, err := os.ReadDir(caFolder)
 	if err != nil {
-		fmt.Println("No Root CA found in:", caFolder)
+		return nil, fmt.Errorf("read root CA directory %s: %w", caFolder, err)
 	}
-	for _, file := range files {
 
-		certs, err := LoadCertBundleFromFile(caFolder + file.Name())
+	loaded := 0
+	for _, file := range files {
+		caPath := filepath.Join(caFolder, file.Name())
+		info, err := file.Info()
 		if err != nil {
-			fmt.Println("Failed to load Root CA file:", caFolder+file.Name())
-			panic(err)
+			return nil, fmt.Errorf("read root CA entry %s info: %w", caPath, err)
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("root CA entry %s is a directory", caPath)
 		}
 
-		fmt.Println("Adding CA Root certificate from:", file.Name())
+		certs, err := LoadCertBundleFromFile(caPath)
+		if err != nil {
+			return nil, fmt.Errorf("load root CA file %s: %w", caPath, err)
+		}
+
 		for _, cert := range certs {
 			certpool.AddCert(cert)
 		}
+		loaded++
 	}
+	log.Printf("loaded %d CA file(s) from %s", loaded, caFolder)
 
 	// Read system default Root CA
 	defaultCaFile := "/etc/ssl/certs/ca-certificates.crt"
 	certs, err := LoadCertBundleFromFile(defaultCaFile)
 	if err != nil {
-		fmt.Println("Failed to load default Root CA file:", defaultCaFile)
-		log.Fatal(err)
+		return nil, fmt.Errorf("load default root CA file %s: %w", defaultCaFile, err)
 	}
 
-	fmt.Println("Adding default CA Root certificate from:", defaultCaFile)
+	log.Printf("adding default CA Root certificate from: %s", defaultCaFile)
 	for _, cert := range certs {
 		certpool.AddCert(cert)
 	}
-	return certpool
+	return certpool, nil
 }
 
 func LoadCertBundleFromFile(filename string) ([]*x509.Certificate, error) {
