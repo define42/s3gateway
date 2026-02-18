@@ -1221,7 +1221,7 @@ func TestCreateCompleteAndListPartsBranchMatrix(t *testing.T) {
 }
 
 func TestServeHTTPAndAuthBranches(t *testing.T) {
-	gw := newServer(Config{SigV4Service: "s3", SigV4MaxSkew: 15 * time.Minute}, nil)
+	gw := newServer(Config{SigV4MaxSkew: 15 * time.Minute}, nil)
 
 	t.Run("servehttp route not implemented and invalid part number branches", func(t *testing.T) {
 		cases := []struct {
@@ -1307,7 +1307,6 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 
 		rrBadCreds := httptest.NewRecorder()
 		gwFetch := newServer(Config{
-			SigV4Service: "s3",
 			SigV4MaxSkew: 0,
 			LDAPURL:      "ldap://127.0.0.1:1",
 			BaseDN:       "dc=example,dc=com",

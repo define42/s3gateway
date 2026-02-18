@@ -1614,7 +1614,7 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 		}
 
 		auth, err := parseSigV4Authorization(r)
-		if err != nil || auth.Service != s.cfg.SigV4Service {
+		if err != nil || auth.Service != "s3" {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}

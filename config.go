@@ -28,7 +28,6 @@ type Config struct {
 	UpstreamForcePathStyle bool
 
 	CookieSecret string        // admin web-session secret seed, default "password"
-	SigV4Service string        // default "s3"
 	SigV4MaxSkew time.Duration // max absolute request age/skew based on x-amz-date
 
 	RequiredUploadMetadataKeys []string // metadata keys required for upload requests (without x-amz-meta- prefix, lowercase)
@@ -65,9 +64,6 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.UpstreamRegion == "" {
 		cfg.UpstreamRegion = "us-east-1"
-	}
-	if cfg.SigV4Service == "" {
-		cfg.SigV4Service = "s3"
 	}
 	if cfg.SigV4MaxSkew == 0 {
 		cfg.SigV4MaxSkew = defaultSigV4MaxSkew
@@ -215,7 +211,6 @@ func loadConfig() Config {
 		UpstreamForcePathStyle: strings.EqualFold(env("S3_FORCE_PATH_STYLE", "true"), "true"),
 
 		CookieSecret: env("COOKIE_SECRET", ""),
-		SigV4Service: env("SIGV4_SERVICE", "s3"),
 		SigV4MaxSkew: envDuration("SIGV4_MAX_SKEW", defaultSigV4MaxSkew),
 
 		RequiredUploadMetadataKeys: envCSVMetadataKeys("REQUIRED_UPLOAD_METADATA_KEYS"),

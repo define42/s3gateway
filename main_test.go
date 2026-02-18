@@ -55,7 +55,6 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Service:           "s3",
 	}
 
 	// Sanity-check LDAP bind + group mapping used by gateway authz.
@@ -247,7 +246,6 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Service:           "s3",
 	}
 
 	up, err := newUpstreamS3(ctx, cfg)
@@ -338,7 +336,6 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Service:           "s3",
 	}
 
 	up, err := newUpstreamS3(ctx, cfg)
@@ -430,7 +427,6 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Service:           "s3",
 	}
 
 	up, err := newUpstreamS3(ctx, cfg)
@@ -523,7 +519,6 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Service:           "s3",
 	}
 
 	up, err := newUpstreamS3(ctx, cfg)
@@ -716,7 +711,6 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Service:           "s3",
 	}
 
 	up, err := newUpstreamS3(ctx, cfg)
@@ -909,7 +903,6 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Service:           "s3",
 	}
 
 	up, err := newUpstreamS3(ctx, cfg)
@@ -1140,7 +1133,6 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Service:           "s3",
 	}
 
 	up, err := newUpstreamS3(ctx, cfg)
@@ -1795,7 +1787,6 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Service:           "s3",
 	}
 
 	up, err := newUpstreamS3(ctx, cfg)
@@ -1875,7 +1866,6 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 		UpstreamAccessKey:      "minioadmin",
 		UpstreamSecretKey:      "minioadmin",
 		UpstreamForcePathStyle: true,
-		SigV4Service:           "s3",
 	}
 
 	up, err := newUpstreamS3(ctx, cfg)
