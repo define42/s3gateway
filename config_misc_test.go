@@ -135,3 +135,11 @@ func TestEnvCSVMetadataKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyDefaultsDoesNotInjectPrivateX25519Key(t *testing.T) {
+	cfg := Config{}
+	cfg.ApplyDefaults()
+	if cfg.S3GatewayPrivateX25519Key != nil {
+		t.Fatalf("expected no default private key to be injected")
+	}
+}
