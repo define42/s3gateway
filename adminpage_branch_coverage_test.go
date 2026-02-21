@@ -304,7 +304,7 @@ func TestAdminHandlersMethodNotAllowedCoverage(t *testing.T) {
 		{method: http.MethodPost, target: "/admin/bucket/download", allow: "GET, HEAD"},
 		{method: http.MethodGet, target: "/admin/bucket/upload", allow: "POST"},
 		{method: http.MethodGet, target: "/admin/bucket/delete", allow: "POST"},
-		{method: http.MethodPut, target: "/logout", allow: "GET, HEAD, POST"},
+		{method: http.MethodPut, target: "/logout", allow: "POST"},
 	}
 
 	for _, tc := range cases {
@@ -964,7 +964,7 @@ func TestHandleAdminBucketDeleteAdditionalBranches(t *testing.T) {
 func TestHandleAdminLogoutAdditionalBranches(t *testing.T) {
 	t.Run("nil server still redirects", func(t *testing.T) {
 		rr := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logout", nil)
+		req := httptest.NewRequest(http.MethodPost, "/logout", nil)
 		handleAdminLogout(nil, rr, req)
 		if rr.Code != http.StatusSeeOther {
 			t.Fatalf("status mismatch: got=%d want=%d", rr.Code, http.StatusSeeOther)
@@ -974,17 +974,79 @@ func TestHandleAdminLogoutAdditionalBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("head method redirects", func(t *testing.T) {
+	t.Run("head method rejected", func(t *testing.T) {
 		s := newServer(Config{}, nil)
 		handler := adminWebpageHandler(s)
 		req := httptest.NewRequest(http.MethodHead, "/logout", nil)
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, req)
-		if rr.Code != http.StatusSeeOther {
-			t.Fatalf("status mismatch: got=%d want=%d", rr.Code, http.StatusSeeOther)
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("status mismatch: got=%d want=%d", rr.Code, http.StatusMethodNotAllowed)
 		}
-		if rr.Header().Get("Location") != "/login" {
-			t.Fatalf("location mismatch: got=%q want=%q", rr.Header().Get("Location"), "/login")
+		if got := rr.Header().Get("Allow"); got != "POST" {
+			t.Fatalf("allow mismatch: got=%q want=%q", got, "POST")
+		}
+	})
+}
+
+func TestAdminMutatingRoutesRejectBrowserRequestsWithoutTrustedOrigin(t *testing.T) {
+	handler, cookie, cleanup := newLoggedInAdminHandlerWithStub(t, map[string]struct{}{"team2-rwcdb": {}}, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+	})
+	defer cleanup()
+
+	t.Run("create bucket", func(t *testing.T) {
+		form := url.Values{"space": {"team2"}, "suffix": {"new"}}
+		req := httptest.NewRequest(http.MethodPost, "/admin/create-bucket", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Accept", "text/html")
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		loc := parseRedirectLocation(t, rr)
+		if loc.Query().Get("err") != "Invalid form origin." {
+			t.Fatalf("error mismatch: got=%q", loc.Query().Get("err"))
+		}
+	})
+
+	t.Run("upload", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/admin/bucket/upload", strings.NewReader("ignored"))
+		req.Header.Set("Accept", "text/html")
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		loc := parseRedirectLocation(t, rr)
+		if loc.Query().Get("err") != "Invalid form origin." {
+			t.Fatalf("error mismatch: got=%q", loc.Query().Get("err"))
+		}
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		form := url.Values{"name": {"team2-logs"}, "key": {"a.txt"}}
+		req := httptest.NewRequest(http.MethodPost, "/admin/bucket/delete", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Accept", "text/html")
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		loc := parseRedirectLocation(t, rr)
+		if loc.Query().Get("err") != "Invalid form origin." {
+			t.Fatalf("error mismatch: got=%q", loc.Query().Get("err"))
+		}
+	})
+
+	t.Run("logout", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+		req.Header.Set("Accept", "text/html")
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d want=%d", rr.Code, http.StatusForbidden)
 		}
 	})
 }
@@ -1376,6 +1438,7 @@ func TestHandleAdminBucketUploadAdditionalBranches(t *testing.T) {
 	t.Run("empty file falls back to put object", func(t *testing.T) {
 		const uploadID = "upload-empty-put"
 		var putLength string
+		var abortSeen bool
 		handler, cookie, cleanup := newLoggedInAdminHandlerWithStub(t, map[string]struct{}{"team2-w": {}}, func(w http.ResponseWriter, r *http.Request) {
 			switch {
 			case r.Method == http.MethodPost && r.URL.Path == "/team2-logs/empty.txt" && r.URL.Query().Has("uploads"):
@@ -1387,6 +1450,9 @@ func TestHandleAdminBucketUploadAdditionalBranches(t *testing.T) {
 				putLength = r.Header.Get("Content-Length")
 				w.Header().Set("ETag", `"etag-empty"`)
 				w.WriteHeader(http.StatusOK)
+			case r.Method == http.MethodDelete && r.URL.Path == "/team2-logs/empty.txt" && r.URL.Query().Get("uploadId") == uploadID:
+				abortSeen = true
+				w.WriteHeader(http.StatusNoContent)
 			default:
 				t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 			}
@@ -1417,6 +1483,9 @@ func TestHandleAdminBucketUploadAdditionalBranches(t *testing.T) {
 		}
 		if putLength != "0" {
 			t.Fatalf("expected put object fallback with content-length 0, got=%q", putLength)
+		}
+		if !abortSeen {
+			t.Fatalf("expected multipart abort after empty put fallback success")
 		}
 	})
 

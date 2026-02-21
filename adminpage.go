@@ -72,6 +72,54 @@ func isAdminRoute(path string) bool {
 	}
 }
 
+func requestOrigin(r *http.Request) string {
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		host = strings.TrimSpace(r.URL.Host)
+	}
+	if host == "" {
+		return ""
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return strings.ToLower(scheme + "://" + host)
+}
+
+func isSameOrigin(rawURL, expectedOrigin string) bool {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" || expectedOrigin == "" {
+		return false
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed == nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	return strings.EqualFold(parsed.Scheme+"://"+parsed.Host, expectedOrigin)
+}
+
+func hasTrustedAdminOrigin(r *http.Request) bool {
+	// Non-browser requests cannot reach admin routes in production because withAuth
+	// dispatches admin handlers only for browser traffic.
+	if !isBrowser(r) {
+		return true
+	}
+	expectedOrigin := requestOrigin(r)
+	if expectedOrigin == "" {
+		return false
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin != "" {
+		return isSameOrigin(origin, expectedOrigin)
+	}
+	referer := strings.TrimSpace(r.Header.Get("Referer"))
+	if referer != "" {
+		return isSameOrigin(referer, expectedOrigin)
+	}
+	return false
+}
+
 type adminPermissionView struct {
 	Letter string
 	Name   string
@@ -1088,6 +1136,10 @@ func handleAdminCreateBucket(s *server, w http.ResponseWriter, r *http.Request) 
 		http.Redirect(w, r, adminDashboardURL("", "Admin backend is not configured.", "", ""), http.StatusSeeOther)
 		return
 	}
+	if !hasTrustedAdminOrigin(r) {
+		http.Redirect(w, r, adminDashboardURL("", "Invalid form origin.", "", ""), http.StatusSeeOther)
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		http.Redirect(w, r, adminDashboardURL("", "Invalid form payload.", "", ""), http.StatusSeeOther)
 		return
@@ -1329,6 +1381,10 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
+	if !hasTrustedAdminOrigin(r) {
+		http.Redirect(w, r, adminDashboardURL("", "Invalid form origin.", "", ""), http.StatusSeeOther)
+		return
+	}
 
 	const maxUploadFieldBytes = int64(1 << 20) // 1 MiB
 
@@ -1550,7 +1606,6 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 					redirectToBucket("", "Could not upload object.")
 					return
 				}
-				completed = true
 				redirectToBucket("Uploaded object: "+finalKey, "")
 				return
 			}
@@ -1607,6 +1662,10 @@ func handleAdminBucketDelete(s *server, w http.ResponseWriter, r *http.Request) 
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
+	if !hasTrustedAdminOrigin(r) {
+		http.Redirect(w, r, adminDashboardURL("", "Invalid form origin.", "", ""), http.StatusSeeOther)
+		return
+	}
 
 	if err := r.ParseForm(); err != nil {
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
@@ -1643,10 +1702,14 @@ func handleAdminBucketDelete(s *server, w http.ResponseWriter, r *http.Request) 
 
 func handleAdminLogout(s *server, w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodGet, http.MethodHead, http.MethodPost:
+	case http.MethodPost:
 	default:
-		w.Header().Set("Allow", "GET, HEAD, POST")
+		w.Header().Set("Allow", "POST")
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	if !hasTrustedAdminOrigin(r) {
+		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		return
 	}
 
