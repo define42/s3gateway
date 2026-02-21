@@ -335,7 +335,7 @@ func (s *adminSessionStore) evictOneOldestLocked() {
 
 func newAdminSessionID() (string, error) {
 	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
+	if err := readAdminSessionRandom(raw); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(raw), nil
@@ -347,9 +347,18 @@ type adminGorillaStore struct {
 	Options *sessions.Options
 }
 
+var adminSessionRandomReader io.Reader = rand.Reader
+
+func readAdminSessionRandom(dst []byte) error {
+	_, err := io.ReadFull(adminSessionRandomReader, dst)
+	return err
+}
+
 func random32() [32]byte {
 	var b [32]byte
-	_, _ = rand.Read(b[:]) // crypto-secure
+	if err := readAdminSessionRandom(b[:]); err != nil {
+		panic("admin session key generation failed: " + err.Error())
+	}
 	return b
 }
 

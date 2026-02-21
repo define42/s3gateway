@@ -27,6 +27,12 @@ func (errReadCloser) Close() error {
 	return nil
 }
 
+type errReader struct{}
+
+func (errReader) Read(_ []byte) (int, error) {
+	return 0, errors.New("entropy failure")
+}
+
 func newLoggedInAdminHandlerWithStub(t *testing.T, groups map[string]struct{}, h http.HandlerFunc) (http.Handler, *http.Cookie, func()) {
 	t.Helper()
 	gw, cleanup := newGatewayWithStubUpstream(t, h)
@@ -177,6 +183,33 @@ func TestAdminSessionStoreCoverage(t *testing.T) {
 	if _, ok := limited.data[secondID]; !ok {
 		t.Fatalf("new session missing after eviction")
 	}
+}
+
+func TestNewAdminSessionIDAndRandom32EntropyFailure(t *testing.T) {
+	prev := adminSessionRandomReader
+	adminSessionRandomReader = errReader{}
+	t.Cleanup(func() {
+		adminSessionRandomReader = prev
+	})
+
+	if _, err := newAdminSessionID(); err == nil {
+		t.Fatalf("expected newAdminSessionID entropy error")
+	}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatalf("expected panic for random32 entropy failure")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("unexpected panic type: %T", r)
+		}
+		if !strings.Contains(msg, "admin session key generation failed") {
+			t.Fatalf("unexpected panic message: %q", msg)
+		}
+	}()
+	_ = random32()
 }
 
 func TestParseSessionGroupsAndSessionValuesCoverage(t *testing.T) {
