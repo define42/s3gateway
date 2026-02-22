@@ -17,6 +17,11 @@ import (
 
 func makeTestCertPEM(t *testing.T, commonName string) []byte {
 	t.Helper()
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: makeTestCertDER(t, commonName)})
+}
+
+func makeTestCertDER(t *testing.T, commonName string) []byte {
+	t.Helper()
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -36,7 +41,7 @@ func makeTestCertPEM(t *testing.T, commonName string) []byte {
 	if err != nil {
 		t.Fatalf("create certificate: %v", err)
 	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	return der
 }
 
 func TestLoadCertBundleFromPEM(t *testing.T) {
@@ -87,6 +92,32 @@ func TestLoadCertBundleFromPEM(t *testing.T) {
 	})
 }
 
+func TestLoadCertBundleFromDER(t *testing.T) {
+	t.Run("valid DER certificate", func(t *testing.T) {
+		der := makeTestCertDER(t, "der-cert")
+		certs, err := LoadCertBundleFromDER(der)
+		if err != nil {
+			t.Fatalf("LoadCertificateFromDER returned error: %v", err)
+		}
+		if len(certs) != 1 {
+			t.Fatalf("expected 1 certificate, got %d", len(certs))
+		}
+		if certs[0].Subject.CommonName != "der-cert" {
+			t.Fatalf("expected common name der-cert, got %q", certs[0].Subject.CommonName)
+		}
+	})
+
+	t.Run("invalid DER data", func(t *testing.T) {
+		_, err := LoadCertBundleFromDER([]byte("not-a-der-cert"))
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "parse DER certificate") {
+			t.Fatalf("expected parse DER certificate error, got %v", err)
+		}
+	})
+}
+
 func TestLoadCertBundleFromFile(t *testing.T) {
 	t.Run("file not found", func(t *testing.T) {
 		_, err := LoadCertBundleFromFile(filepath.Join(t.TempDir(), "missing.pem"))
@@ -107,6 +138,23 @@ func TestLoadCertBundleFromFile(t *testing.T) {
 		}
 		if len(certs) != 1 {
 			t.Fatalf("expected 1 certificate, got %d", len(certs))
+		}
+	})
+	t.Run("valid DER file", func(t *testing.T) {
+		dir := t.TempDir()
+		certPath := filepath.Join(dir, "cert.der")
+		if err := os.WriteFile(certPath, makeTestCertDER(t, "der-file-cert"), 0o600); err != nil {
+			t.Fatalf("write cert file: %v", err)
+		}
+		certs, err := LoadCertBundleFromFile(certPath)
+		if err != nil {
+			t.Fatalf("LoadCertBundleFromFile returned error: %v", err)
+		}
+		if len(certs) != 1 {
+			t.Fatalf("expected 1 certificate, got %d", len(certs))
+		}
+		if certs[0].Subject.CommonName != "der-file-cert" {
+			t.Fatalf("expected common name der-file-cert, got %q", certs[0].Subject.CommonName)
 		}
 	})
 }
