@@ -67,6 +67,13 @@ func TestConfigValidateMatrix(t *testing.T) {
 			},
 			wantMsg: "HTTP_MAX_HEADER_BYTES",
 		},
+		{
+			name: "cookie secret too short",
+			mutate: func(c *Config) {
+				c.CookieSecret = "tooshort"
+			},
+			wantMsg: "COOKIE_SECRET",
+		},
 	}
 
 	for _, tc := range tests {
@@ -141,5 +148,46 @@ func TestApplyDefaultsDoesNotInjectPrivateX25519Key(t *testing.T) {
 	cfg.ApplyDefaults()
 	if cfg.S3GatewayPrivateX25519Key != nil {
 		t.Fatalf("expected no default private key to be injected")
+	}
+}
+
+func TestCookieSecretValidation(t *testing.T) {
+	base := Config{
+		GroupCacheMaxEntries: 1,
+		SigV4MaxSkew:         time.Second,
+		ReadHeaderTimeout:    time.Second,
+		IdleTimeout:          time.Second,
+		ShutdownTimeout:      time.Second,
+		MaxHeaderBytes:       1,
+	}
+
+	// empty string is allowed (ephemeral random keys)
+	cfg := base
+	cfg.CookieSecret = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("empty CookieSecret should pass validation, got: %v", err)
+	}
+
+	// exactly 16 characters is allowed
+	cfg = base
+	cfg.CookieSecret = "1234567890abcdef"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("16-char CookieSecret should pass validation, got: %v", err)
+	}
+
+	// more than 16 characters is allowed
+	cfg = base
+	cfg.CookieSecret = "a-very-long-secret-key-for-production"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("long CookieSecret should pass validation, got: %v", err)
+	}
+
+	// fewer than 16 characters (non-empty) must be rejected
+	cfg = base
+	cfg.CookieSecret = "short"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("short CookieSecret should fail validation")
+	} else if !strings.Contains(err.Error(), "COOKIE_SECRET") {
+		t.Fatalf("expected COOKIE_SECRET in error, got: %v", err)
 	}
 }
