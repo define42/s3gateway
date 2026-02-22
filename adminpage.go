@@ -12,7 +12,7 @@ import (
 	"errors"
 	"html/template"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -370,7 +370,7 @@ func newAdminGorillaStore(cookieSecret string, ttl time.Duration, backend *admin
 	}
 	var hashKey, blockKey [32]byte
 	if cookieSecret == "" {
-		log.Println("WARNING: COOKIE_SECRET is not set; admin sessions will use ephemeral random keys and will be invalidated on restart")
+		slog.Warn("COOKIE_SECRET is not set; admin sessions will use ephemeral random keys and will be invalidated on restart")
 		hashKey = random32()
 		blockKey = random32()
 	} else {

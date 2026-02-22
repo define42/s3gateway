@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -1640,8 +1640,9 @@ func TestHandleAdminBucketUploadAdditionalBranches(t *testing.T) {
 
 func TestNewAdminGorillaStoreEmptyCookieSecretLogsWarning(t *testing.T) {
 	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(io.Discard) })
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(orig) })
 
 	_ = newAdminGorillaStore("", time.Hour, nil)
 
@@ -1656,8 +1657,9 @@ func TestNewAdminGorillaStoreEmptyCookieSecretLogsWarning(t *testing.T) {
 
 func TestNewAdminGorillaStoreSetCookieSecretNoWarning(t *testing.T) {
 	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(io.Discard) })
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(orig) })
 
 	_ = newAdminGorillaStore("a-strong-secret-value", time.Hour, nil)
 

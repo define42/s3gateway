@@ -3,7 +3,7 @@ package main
 import (
 	"crypto/ecdh"
 	"errors"
-	"log"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -124,7 +124,8 @@ func env(key, def string) string {
 func envRequired(key string) string {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
-		log.Fatalf("missing required env var %s", key)
+		slog.Error("missing required env var", "key", key)
+		os.Exit(1)
 	}
 	return v
 }
@@ -136,7 +137,8 @@ func envEcdhPrivateKey(key string) *ecdh.PrivateKey {
 	}
 	privatek, err := s3credentials.X25519PrivateKeyFromHex(v)
 	if err != nil {
-		log.Fatalf("invalid ECDH private key for %s: %v", key, err)
+		slog.Error("invalid ECDH private key", "key", key, "error", err)
+		os.Exit(1)
 	}
 	return privatek
 }
@@ -148,7 +150,8 @@ func envDuration(key string, def time.Duration) time.Duration {
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
-		log.Fatalf("invalid duration for %s: %v", key, err)
+		slog.Error("invalid duration", "key", key, "error", err)
+		os.Exit(1)
 	}
 	return d
 }
@@ -160,7 +163,8 @@ func envInt(key string, def int) int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		log.Fatalf("invalid int for %s: %v", key, err)
+		slog.Error("invalid int", "key", key, "error", err)
+		os.Exit(1)
 	}
 	return n
 }
@@ -230,7 +234,8 @@ func loadConfig() Config {
 		AcmeDataDir:               env("ACME_DATA_DIR", "./certs"),
 	}
 	if err := cfg.Validate(); err != nil {
-		log.Fatal(err)
+		slog.Error("config validation failed", "error", err)
+		os.Exit(1)
 	}
 	cfg.ApplyDefaults()
 	return cfg
