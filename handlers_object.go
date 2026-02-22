@@ -1255,7 +1255,7 @@ func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 	in.ChecksumSHA256 = checksum.ChecksumSHA256
 
 	out, err := s.up.PutObject(r.Context(), in,
-		// Allow streaming io.Reader without Seek by using Unsigned Payload middleware. :contentReference[oaicite:10]{index=10}
+		// Allow streaming io.Reader without Seek by using Unsigned Payload middleware.
 		s3.WithAPIOptions(v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware),
 	)
 	if err != nil {
@@ -1805,5 +1805,4 @@ func parseExpiresHeader(h http.Header) (*time.Time, error) {
 	return &utc, nil
 }
 
-// ---------- Multipart ----------
 

@@ -249,7 +249,7 @@ func (s *server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 	}
 
 	out, err := s.up.UploadPart(r.Context(), in,
-		// Allow streaming io.Reader without Seek. :contentReference[oaicite:11]{index=11}
+		// Allow streaming io.Reader without Seek.
 		s3.WithAPIOptions(v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware),
 	)
 	if err != nil {
@@ -329,7 +329,7 @@ func (s *server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 	xw.End("ListPartsResult")
 }
 
-// CompleteMultipartUpload requires PartNumber + ETag for each part. :contentReference[oaicite:12]{index=12}
+// CompleteMultipartUpload requires PartNumber + ETag for each part.
 func (s *server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
 	rules := rulesFromCtx(r)
 	if !canWrite(rules, bucket) {
