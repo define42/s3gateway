@@ -62,7 +62,7 @@ func ReadCertificates(caFolder string) (*x509.CertPool, error) {
 }
 
 func LoadCertBundleFromFile(filename string) ([]*x509.Certificate, error) {
-	b, err := os.ReadFile(filename)
+	b, err := os.ReadFile(filename) // #nosec G304 -- filename is from os.ReadDir output or a trusted constant
 	if err != nil {
 		return nil, err
 	}
