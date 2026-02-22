@@ -12,7 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -5236,9 +5236,12 @@ func BootS3Gateway() (*http.Server, Config, error) {
 }
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	httpSrv, cfg, err := BootS3Gateway()
 	if err != nil {
-		log.Fatalf("failed to boot s3 gateway: %v", err)
+		slog.Error("failed to boot s3 gateway", "error", err)
+		os.Exit(1)
 	}
 
 	serverErr := make(chan error, 1)
@@ -5262,7 +5265,7 @@ func main() {
 		}()
 
 		if strings.TrimSpace(cfg.AcmeDomains) != "" {
-			log.Printf("starting ACME certificate manager for domains: %v", cfg.AcmeDomains)
+			slog.Info("starting ACME certificate manager", "domains", cfg.AcmeDomains)
 
 			raw := strings.Split(cfg.AcmeDomains, ",")
 			domains := make([]string, 0, len(raw))
@@ -5296,7 +5299,7 @@ func main() {
 			}
 			tlsLn = ln
 
-			log.Printf("starting HTTPS server (certmagic) on %s", ln.Addr())
+			slog.Info("starting HTTPS server", "addr", ln.Addr().String())
 			err = httpSrv.Serve(ln)
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				sendServerErr(fmt.Errorf("https server error: %w", err))
@@ -5308,7 +5311,7 @@ func main() {
 			return
 		}
 
-		log.Printf("starting HTTP server on %s", httpSrv.Addr)
+		slog.Info("starting HTTP server", "addr", httpSrv.Addr)
 		err := httpSrv.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			sendServerErr(fmt.Errorf("http server error: %w", err))
@@ -5323,11 +5326,12 @@ func main() {
 	select {
 	case err := <-serverErr:
 		if err != nil {
-			log.Fatalf("server error: %v", err)
+			slog.Error("server error", "error", err)
+			os.Exit(1)
 		}
 		return
 	case <-shutdownSignalsCtx.Done():
-		log.Printf("shutdown signal received")
+		slog.Info("shutdown signal received")
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), effectiveShutdownTimeout(cfg))
@@ -5339,12 +5343,13 @@ func main() {
 	}
 
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("graceful shutdown failed: %v", err)
+		slog.Warn("graceful shutdown failed", "error", err)
 		_ = httpSrv.Close()
 	}
 
 	// Wait for goroutine to finish
 	if err := <-serverErr; err != nil {
-		log.Fatalf("server shutdown error: %v", err)
+		slog.Error("server shutdown error", "error", err)
+		os.Exit(1)
 	}
 }
