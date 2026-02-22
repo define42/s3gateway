@@ -28,7 +28,7 @@ type Config struct {
 	UpstreamSecretKey      string
 	UpstreamForcePathStyle bool
 
-	CookieSecret string        // admin web-session secret seed, default "password"
+	CookieSecret string        // admin web-session secret seed; when empty, ephemeral random keys are used (sessions lost on restart)
 	SigV4MaxSkew time.Duration // max absolute request age/skew based on x-amz-date
 
 	RequiredUploadMetadataKeys []string // metadata keys required for upload requests (without x-amz-meta- prefix, lowercase)
@@ -106,6 +106,9 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.MaxHeaderBytes <= 0 {
 		return errors.New("HTTP_MAX_HEADER_BYTES must be > 0")
+	}
+	if cfg.CookieSecret != "" && len(cfg.CookieSecret) < 16 {
+		return errors.New("COOKIE_SECRET must be at least 16 characters when set")
 	}
 	return nil
 }

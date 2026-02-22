@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -1635,4 +1636,32 @@ func TestHandleAdminBucketUploadAdditionalBranches(t *testing.T) {
 			t.Fatalf("error mismatch: got=%q", loc.Query().Get("err"))
 		}
 	})
+}
+
+func TestNewAdminGorillaStoreEmptyCookieSecretLogsWarning(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(io.Discard) })
+
+	_ = newAdminGorillaStore("", time.Hour, nil)
+
+	logged := buf.String()
+	if !strings.Contains(logged, "COOKIE_SECRET") {
+		t.Fatalf("expected COOKIE_SECRET warning in log, got: %q", logged)
+	}
+	if !strings.Contains(logged, "ephemeral") {
+		t.Fatalf("expected 'ephemeral' in log warning, got: %q", logged)
+	}
+}
+
+func TestNewAdminGorillaStoreSetCookieSecretNoWarning(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(io.Discard) })
+
+	_ = newAdminGorillaStore("a-strong-secret-value", time.Hour, nil)
+
+	if buf.Len() != 0 {
+		t.Fatalf("expected no log output when COOKIE_SECRET is set, got: %q", buf.String())
+	}
 }
