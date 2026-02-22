@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,6 +31,39 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+var (
+	dockerCheckOnce sync.Once
+	dockerCheckErr  error
+)
+
+func requireDocker(tb testing.TB) {
+	tb.Helper()
+
+	dockerCheckOnce.Do(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				dockerCheckErr = fmt.Errorf("%v", r)
+			}
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		client, err := testcontainers.NewDockerClientWithOpts(ctx)
+		if err != nil {
+			dockerCheckErr = err
+			return
+		}
+		if _, err := client.Ping(ctx); err != nil {
+			dockerCheckErr = err
+		}
+	})
+
+	if dockerCheckErr != nil {
+		tb.Skipf("skipping integration test because Docker is unavailable: %v", dockerCheckErr)
+	}
+}
 
 func TestLdapS3upstreamWithClient(t *testing.T) {
 	if testing.Short() {
@@ -2672,6 +2706,7 @@ func TestLdapS3upstreamListObjectsV2FullSemantics(t *testing.T) {
 
 func StartGlauthWithConfig(ctx context.Context, tb testing.TB, cfg string, scheme string) (string, func()) {
 	tb.Helper()
+	requireDocker(tb)
 
 	cert := pathRelative(tb, "testldap", "cert.pem")
 	key := pathRelative(tb, "testldap", "key.pem")
@@ -2918,6 +2953,7 @@ func pathRelative(tb testing.TB, elems ...string) string {
 
 func StartMinio(ctx context.Context, tb testing.TB, accessKey string, secretKey string) (string, func()) {
 	tb.Helper()
+	requireDocker(tb)
 
 	req := testcontainers.ContainerRequest{
 		Image:        "minio/minio:latest",

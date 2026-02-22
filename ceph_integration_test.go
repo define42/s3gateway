@@ -156,6 +156,9 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
+	if err := dockerAvailable(); err != nil {
+		t.Skipf("skipping integration test because Docker is unavailable: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 
@@ -281,4 +284,20 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 		t.Fatalf("gateway object body mismatch: got=%q want=%q", string(gwBody), string(payload))
 	}
 
+}
+
+func dockerAvailable() (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%v", r)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	client, err := testcontainers.NewDockerClientWithOpts(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = client.Ping(ctx)
+	return err
 }
