@@ -1,4 +1,4 @@
-package main
+package auth
 
 import "strings"
 
@@ -29,10 +29,10 @@ type Rule struct {
 	Perm         Perm
 }
 
-func rulesFromGroups(groups map[string]struct{}) []Rule {
+func RulesFromGroups(groups map[string]struct{}) []Rule {
 	byPrefix := map[string]Perm{}
 	for g := range groups {
-		prefix, perm, ok := parseGroup(g)
+		prefix, perm, ok := ParseGroup(g)
 		if !ok {
 			continue
 		}
@@ -46,7 +46,7 @@ func rulesFromGroups(groups map[string]struct{}) []Rule {
 	return out
 }
 
-func parseGroup(g string) (prefix string, perm Perm, ok bool) {
+func ParseGroup(g string) (prefix string, perm Perm, ok bool) {
 	g = strings.ToLower(strings.TrimSpace(g))
 	i := strings.LastIndex(g, "-")
 	if i <= 0 || i >= len(g)-1 {
@@ -81,7 +81,7 @@ func parseGroup(g string) (prefix string, perm Perm, ok bool) {
 	return p, out, true
 }
 
-func bucketPerm(rules []Rule, bucket string) Perm {
+func BucketPerm(rules []Rule, bucket string) Perm {
 	b := strings.ToLower(bucket)
 	best := PermNone
 	for _, r := range rules {
@@ -92,15 +92,14 @@ func bucketPerm(rules []Rule, bucket string) Perm {
 	return best
 }
 
-func canRead(rules []Rule, bucket string) bool  { return bucketPerm(rules, bucket)&PermRead != 0 }
-func canWrite(rules []Rule, bucket string) bool { return bucketPerm(rules, bucket)&PermWrite != 0 }
-func canCreateBucket(rules []Rule, bucket string) bool {
-	return bucketPerm(rules, bucket)&PermCreateBucket != 0
+func CanRead(rules []Rule, bucket string) bool  { return BucketPerm(rules, bucket)&PermRead != 0 }
+func CanWrite(rules []Rule, bucket string) bool { return BucketPerm(rules, bucket)&PermWrite != 0 }
+func CanCreateBucket(rules []Rule, bucket string) bool {
+	return BucketPerm(rules, bucket)&PermCreateBucket != 0
 }
-func canDeleteObject(rules []Rule, bucket string) bool {
-	return bucketPerm(rules, bucket)&PermDeleteObject != 0
+func CanDeleteObject(rules []Rule, bucket string) bool {
+	return BucketPerm(rules, bucket)&PermDeleteObject != 0
 }
-func canDeleteBucket(rules []Rule, bucket string) bool {
-	return bucketPerm(rules, bucket)&PermDeleteBucket != 0
+func CanDeleteBucket(rules []Rule, bucket string) bool {
+	return BucketPerm(rules, bucket)&PermDeleteBucket != 0
 }
-
