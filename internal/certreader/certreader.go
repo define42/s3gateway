@@ -3,6 +3,7 @@ package certreader
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -47,12 +48,15 @@ func ReadCertificates(caFolder string) (*x509.CertPool, error) {
 	defaultCaFile := "/etc/ssl/certs/ca-certificates.crt"
 	certs, err := LoadCertBundleFromFile(defaultCaFile)
 	if err != nil {
-		return nil, fmt.Errorf("load default root CA file %s: %w", defaultCaFile, err)
-	}
-
-	log.Printf("adding default CA Root certificate from: %s", defaultCaFile)
-	for _, cert := range certs {
-		certpool.AddCert(cert)
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("load default root CA file %s: %w", defaultCaFile, err)
+		}
+		log.Printf("default CA file %s not found, skipping", defaultCaFile)
+	} else {
+		log.Printf("adding default CA Root certificate from: %s", defaultCaFile)
+		for _, cert := range certs {
+			certpool.AddCert(cert)
+		}
 	}
 	return certpool, nil
 }

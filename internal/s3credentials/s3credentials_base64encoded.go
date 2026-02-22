@@ -25,13 +25,13 @@ func S3credentials_base64encoded(accessKey string) (username, password, secretKe
 
 	parts := strings.SplitN(s, ":", 2)
 	if len(parts) != 2 {
-		return "", "", "", fmt.Errorf("accessKey must decode to 'AD:username:password' format, got: %s", s)
+		return "", "", "", fmt.Errorf("accessKey must decode to 'username:password' format")
 	}
 
 	username = strings.TrimSpace(parts[0])
 	password = parts[1] // keep password as-is (can contain spaces); may include ':' when encoded in the password segment
 	if username == "" || password == "" {
-		return "", "", "", fmt.Errorf("accessKey must decode to 'AD:username:password' with non-empty username and password")
+		return "", "", "", fmt.Errorf("accessKey must decode to 'username:password' with non-empty username and password")
 	}
 
 	return username, password, EncodeSecretKey(s), nil

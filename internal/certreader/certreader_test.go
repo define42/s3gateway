@@ -151,11 +151,6 @@ func TestReadCertificates(t *testing.T) {
 	})
 
 	t.Run("loads valid certificate directory", func(t *testing.T) {
-		const defaultCA = "/etc/ssl/certs/ca-certificates.crt"
-		if _, err := os.Stat(defaultCA); err != nil {
-			t.Skipf("default CA file %s is unavailable: %v", defaultCA, err)
-		}
-
 		dir := t.TempDir()
 		certPEM := makeTestCertPEM(t, "local-ca")
 		certPath := filepath.Join(dir, "local-ca.pem")

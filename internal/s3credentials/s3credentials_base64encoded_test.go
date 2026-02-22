@@ -23,9 +23,9 @@ func TestDecodeUserPassFromAccessKeyErrorPaths(t *testing.T) {
 		accessKey := base64.StdEncoding.EncodeToString([]byte("useronly"))
 		_, _, _, err := s3credentials.S3credentials_base64encoded("AD" + accessKey)
 		if err == nil {
-			t.Fatalf("expected error for decoded access key without AD:username:password format")
+			t.Fatalf("expected error for decoded access key without username:password format")
 		}
-		if !strings.Contains(err.Error(), "accessKey must decode to 'AD:username:password'") {
+		if !strings.Contains(err.Error(), "accessKey must decode to 'username:password'") {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
