@@ -67,7 +67,20 @@ func LoadCertBundleFromFile(filename string) ([]*x509.Certificate, error) {
 		return nil, err
 	}
 
-	return LoadCertBundleFromPEM(b)
+	// Detect format by peeking at the first PEM block; the full original bytes are passed to LoadCertBundleFromPEM.
+	if block, _ := pem.Decode(b); block != nil {
+		return LoadCertBundleFromPEM(b)
+	}
+
+	return LoadCertBundleFromDER(b)
+}
+
+func LoadCertBundleFromDER(derBytes []byte) ([]*x509.Certificate, error) {
+	certs, err := x509.ParseCertificates(derBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse DER certificate: %w", err)
+	}
+	return certs, nil
 }
 
 func LoadCertBundleFromPEM(pemBytes []byte) ([]*x509.Certificate, error) {
