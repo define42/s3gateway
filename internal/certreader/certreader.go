@@ -76,11 +76,11 @@ func LoadCertBundleFromFile(filename string) ([]*x509.Certificate, error) {
 }
 
 func LoadCertBundleFromDER(derBytes []byte) ([]*x509.Certificate, error) {
-	cert, err := x509.ParseCertificate(derBytes)
+	certs, err := x509.ParseCertificates(derBytes)
 	if err != nil {
 		return nil, fmt.Errorf("parse DER certificate: %w", err)
 	}
-	return []*x509.Certificate{cert}, nil
+	return certs, nil
 }
 
 func LoadCertBundleFromPEM(pemBytes []byte) ([]*x509.Certificate, error) {

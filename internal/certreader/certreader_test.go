@@ -107,6 +107,23 @@ func TestLoadCertBundleFromDER(t *testing.T) {
 		}
 	})
 
+	t.Run("DER bundle (multiple certificates)", func(t *testing.T) {
+		bundle := append(makeTestCertDER(t, "der-first"), makeTestCertDER(t, "der-second")...)
+		certs, err := LoadCertBundleFromDER(bundle)
+		if err != nil {
+			t.Fatalf("LoadCertBundleFromDER returned error: %v", err)
+		}
+		if len(certs) != 2 {
+			t.Fatalf("expected 2 certificates, got %d", len(certs))
+		}
+		if certs[0].Subject.CommonName != "der-first" {
+			t.Fatalf("expected first common name der-first, got %q", certs[0].Subject.CommonName)
+		}
+		if certs[1].Subject.CommonName != "der-second" {
+			t.Fatalf("expected second common name der-second, got %q", certs[1].Subject.CommonName)
+		}
+	})
+
 	t.Run("invalid DER data", func(t *testing.T) {
 		_, err := LoadCertBundleFromDER([]byte("not-a-der-cert"))
 		if err == nil {
