@@ -1,18 +1,18 @@
 package gateway
 
 import (
-"encoding/xml"
-"errors"
-"fmt"
-"io"
-"net/http"
-"reflect"
-"strings"
-"time"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"reflect"
+	"strings"
+	"time"
 
-"github.com/aws/aws-sdk-go-v2/aws"
-"github.com/aws/aws-sdk-go-v2/service/s3"
-"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 type lifecycleConfigReqXML struct {
@@ -703,4 +703,3 @@ func (s *server) handleDeleteBucketLifecycleConfiguration(w http.ResponseWriter,
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-

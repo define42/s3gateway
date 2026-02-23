@@ -1,15 +1,15 @@
 package gateway
 
 import (
-"encoding/xml"
-"fmt"
-"io"
-"net/http"
-"strings"
+	"encoding/xml"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
 
-"github.com/aws/aws-sdk-go-v2/aws"
-"github.com/aws/aws-sdk-go-v2/service/s3"
-"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 func (s *server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
@@ -178,7 +178,6 @@ func writeTaggingXMLResponse(w http.ResponseWriter, status int, tagSet []types.T
 	xw.End("TagSet")
 	xw.End("Tagging")
 }
-
 
 func (s *server) handleHeadBucket(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
@@ -375,4 +374,3 @@ func (s *server) handleDeleteBucketTagging(w http.ResponseWriter, r *http.Reques
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-

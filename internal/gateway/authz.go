@@ -103,4 +103,3 @@ func canDeleteObject(rules []Rule, bucket string) bool {
 func canDeleteBucket(rules []Rule, bucket string) bool {
 	return bucketPerm(rules, bucket)&PermDeleteBucket != 0
 }
-

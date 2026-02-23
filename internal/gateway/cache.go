@@ -126,4 +126,3 @@ func (c *groupCache) set(upn, password string, groups map[string]struct{}) {
 		lastSeen:       now,
 	}
 }
-

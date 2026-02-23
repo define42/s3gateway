@@ -1,19 +1,19 @@
 package gateway
 
 import (
-"encoding/xml"
-"errors"
-"fmt"
-"io"
-"net/http"
-"strconv"
-"strings"
-"time"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
-"github.com/aws/aws-sdk-go-v2/aws"
-v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-"github.com/aws/aws-sdk-go-v2/service/s3"
-"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 const maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
@@ -29,7 +29,6 @@ type deleteObjectReqItemXML struct {
 	VersionID *string `xml:"VersionId,omitempty"`
 	ETag      *string `xml:"ETag,omitempty"`
 }
-
 
 func (s *server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := rulesFromCtx(r)
@@ -545,7 +544,6 @@ func (s *server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 	}
 	xw.End("ListBucketResult")
 }
-
 
 func (s *server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := rulesFromCtx(r)
@@ -1804,5 +1802,3 @@ func parseExpiresHeader(h http.Header) (*time.Time, error) {
 	utc := t.UTC()
 	return &utc, nil
 }
-
-

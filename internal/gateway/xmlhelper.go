@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	s3XMLNamespace      = "http://s3.amazonaws.com/doc/2006-03-01/"
-	s3TimeMillisFormat  = "2006-01-02T15:04:05.000Z"
-	xmlDeclaration      = `<?xml version="1.0" encoding="UTF-8"?>`
+	s3XMLNamespace     = "http://s3.amazonaws.com/doc/2006-03-01/"
+	s3TimeMillisFormat = "2006-01-02T15:04:05.000Z"
+	xmlDeclaration     = `<?xml version="1.0" encoding="UTF-8"?>`
 )
 
 var xmlEscaper = strings.NewReplacer(
@@ -612,4 +612,3 @@ func parseChecksumMode(v string) (types.ChecksumMode, error) {
 		return "", fmt.Errorf("unsupported checksum mode %q", raw)
 	}
 }
-

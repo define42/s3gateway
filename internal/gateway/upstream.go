@@ -51,4 +51,3 @@ func newUpstreamS3(ctx context.Context, cfg Config) (*s3.Client, error) {
 		o.UsePathStyle = cfg.UpstreamForcePathStyle
 	}), nil
 }
-

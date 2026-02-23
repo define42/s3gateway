@@ -1,17 +1,17 @@
 package gateway
 
 import (
-"encoding/xml"
-"errors"
-"net/http"
-"sort"
-"strconv"
-"strings"
+	"encoding/xml"
+	"errors"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
 
-"github.com/aws/aws-sdk-go-v2/aws"
-v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-"github.com/aws/aws-sdk-go-v2/service/s3"
-"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Request, bucket string) {
@@ -107,7 +107,6 @@ func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 	}
 	xw.End("ListMultipartUploadsResult")
 }
-
 
 type completeMultipartUpload struct {
 	XMLName xml.Name `xml:"CompleteMultipartUpload"`
@@ -415,4 +414,3 @@ func (s *server) handleAbortMultipart(w http.ResponseWriter, r *http.Request, bu
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-

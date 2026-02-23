@@ -582,4 +582,3 @@ func decodeBodyForS3Write(r *http.Request, verifier *awsChunkSignatureVerifier) 
 	}
 	return r.Body, r.ContentLength, nil
 }
-

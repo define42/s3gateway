@@ -79,4 +79,3 @@ func cnFromDN(dn string) string {
 	}
 	return ""
 }
-
