@@ -1,0 +1,82 @@
+package gateway
+
+import (
+	"fmt"
+	"net"
+	"net/url"
+	"strings"
+	"time"
+
+	ldap "github.com/go-ldap/ldap/v3"
+)
+
+const defaultLDAPDialTimeout = 5 * time.Second
+
+// ==================== AD group lookup ====================
+func ldapDial(ldapURL string) (*ldap.Conn, error) {
+	return ldapDialWithTimeout(ldapURL, defaultLDAPDialTimeout)
+}
+
+func ldapDialWithTimeout(ldapURL string, timeout time.Duration) (*ldap.Conn, error) {
+	_, err := url.Parse(ldapURL)
+	if err != nil {
+		return nil, err
+	}
+	return ldap.DialURL(ldapURL, ldap.DialWithDialer(&net.Dialer{Timeout: timeout}))
+}
+
+func fetchGroupsUPN(cfg Config, upn, password string) (map[string]struct{}, error) {
+	conn, err := ldapDial(cfg.LDAPURL)
+	if err != nil {
+		return nil, fmt.Errorf("ldap dial: %w", err)
+	}
+	defer conn.Close()
+
+	upnWithDomain := upn + "@" + ldap.EscapeFilter(cfg.LDAPDomain)
+
+	if err := conn.Bind(upnWithDomain, password); err != nil {
+		return nil, fmt.Errorf("ldap bind failed: %w", err)
+	}
+
+	filter := fmt.Sprintf("(userPrincipalName=%s)", ldap.EscapeFilter(upnWithDomain))
+	req := ldap.NewSearchRequest(
+		cfg.BaseDN,
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases,
+		1, 5, false,
+		filter,
+		[]string{"memberOf"},
+		nil,
+	)
+
+	res, err := conn.Search(req)
+	if err != nil {
+		return nil, fmt.Errorf("ldap search: %w", err)
+	}
+	if len(res.Entries) != 1 {
+		return nil, fmt.Errorf("expected 1 entry for %q, got %d", upn, len(res.Entries))
+	}
+
+	groups := make(map[string]struct{})
+	for _, dn := range res.Entries[0].GetAttributeValues("memberOf") {
+		if cn := cnFromDN(dn); cn != "" {
+			groups[strings.ToLower(cn)] = struct{}{}
+		}
+	}
+	return groups, nil
+}
+
+func cnFromDN(dn string) string {
+	parsed, err := ldap.ParseDN(dn)
+	if err != nil || parsed == nil {
+		return ""
+	}
+	for _, rdn := range parsed.RDNs {
+		for _, a := range rdn.Attributes {
+			if strings.EqualFold(a.Type, "CN") {
+				return strings.TrimSpace(a.Value)
+			}
+		}
+	}
+	return ""
+}
+

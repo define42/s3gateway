@@ -11,51 +11,16 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/caddyserver/certmagic"
 	"github.com/define42/s3gateway/internal/certreader"
+	"github.com/define42/s3gateway/internal/gateway"
 )
-
-func effectiveShutdownTimeout(cfg Config) time.Duration {
-	cfg.ApplyDefaults()
-	return cfg.ShutdownTimeout
-}
-
-func newHTTPServer(cfg Config, handler http.Handler) *http.Server {
-	cfg.ApplyDefaults()
-
-	return &http.Server{
-		Addr:              cfg.ListenAddr,
-		Handler:           handler,
-		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
-		ReadTimeout:       cfg.ReadTimeout,
-		WriteTimeout:      cfg.WriteTimeout,
-		IdleTimeout:       cfg.IdleTimeout,
-		MaxHeaderBytes:    cfg.MaxHeaderBytes,
-	}
-}
-
-func BootS3Gateway() (*http.Server, Config, error) {
-	cfg := loadConfig()
-
-	up, err := newUpstreamS3(context.Background(), cfg)
-	if err != nil {
-		return nil, cfg, fmt.Errorf("init upstream s3: %w", err)
-	}
-
-	s := newServer(cfg, up)
-
-	adminWebpageHandler := adminWebpageHandler(s)
-
-	httpSrv := newHTTPServer(cfg, s.withAuth(s, adminWebpageHandler))
-	return httpSrv, cfg, nil
-}
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
-	httpSrv, cfg, err := BootS3Gateway()
+	httpSrv, cfg, err := gateway.BootS3Gateway()
 	if err != nil {
 		slog.Error("failed to boot s3 gateway", "error", err)
 		os.Exit(1)
@@ -151,7 +116,7 @@ func main() {
 		slog.Info("shutdown signal received")
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), effectiveShutdownTimeout(cfg))
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), gateway.EffectiveShutdownTimeout(cfg))
 	defer cancel()
 
 	// Important: close the listener to unblock Serve(ln)

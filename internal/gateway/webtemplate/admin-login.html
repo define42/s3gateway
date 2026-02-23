@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>S3 Gateway Login</title>
+  <style>
+    :root {
+      --bg-0: #05070d;
+      --bg-1: #0d1323;
+      --bg-2: #101a33;
+      --panel: rgba(16, 24, 46, 0.78);
+      --panel-border: rgba(112, 153, 255, 0.24);
+      --text: #e7ecf8;
+      --muted: #9eb2ce;
+      --accent: #3ab8ff;
+      --accent-2: #6df5c8;
+      --accent-soft: rgba(58, 184, 255, 0.18);
+      --error: #ff8ea5;
+      --input-bg: rgba(6, 12, 26, 0.75);
+      --input-border: rgba(134, 171, 255, 0.26);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Sora", "IBM Plex Sans", "Avenir Next", "Trebuchet MS", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 500px at 12% -10%, rgba(58, 184, 255, 0.28), transparent 70%),
+        radial-gradient(900px 420px at 88% 0%, rgba(109, 245, 200, 0.17), transparent 68%),
+        linear-gradient(165deg, var(--bg-0) 0%, var(--bg-1) 46%, var(--bg-2) 100%);
+      position: relative;
+      overflow-x: hidden;
+    }
+    body::before, body::after {
+      content: "";
+      position: fixed;
+      z-index: -1;
+      border-radius: 999px;
+      filter: blur(56px);
+      opacity: 0.7;
+      pointer-events: none;
+    }
+    body::before {
+      width: 280px;
+      height: 280px;
+      background: rgba(58, 184, 255, 0.34);
+      top: 10%;
+      right: 6%;
+      animation: float-orb 9s ease-in-out infinite;
+    }
+    body::after {
+      width: 220px;
+      height: 220px;
+      background: rgba(109, 245, 200, 0.22);
+      bottom: 10%;
+      left: 5%;
+      animation: float-orb 10s ease-in-out infinite reverse;
+    }
+    main {
+      max-width: 560px;
+      margin: 0 auto;
+      padding: 7vh 1rem 2.5rem;
+      display: flex;
+      justify-content: center;
+    }
+    .panel {
+      width: 100%;
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      padding: 1.5rem;
+      box-shadow:
+        0 24px 80px rgba(2, 8, 22, 0.65),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      backdrop-filter: blur(12px);
+      animation: panel-in 220ms ease-out;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(1.6rem, 2.8vw, 2rem);
+      letter-spacing: 0.01em;
+    }
+    p { margin: 0.45rem 0; }
+    .kicker {
+      margin: 0 0 0.7rem;
+      color: var(--accent-2);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-weight: 700;
+    }
+    .muted { color: var(--muted); }
+    .error {
+      margin-top: 0.75rem;
+      color: var(--error);
+      font-weight: 600;
+    }
+    form {
+      display: grid;
+      gap: 0.9rem;
+      margin-top: 1rem;
+    }
+    label {
+      display: grid;
+      gap: 0.4rem;
+      font-weight: 600;
+      font-size: 0.95rem;
+    }
+    input {
+      width: 100%;
+      border: 1px solid var(--input-border);
+      border-radius: 10px;
+      padding: 0.72rem 0.78rem;
+      font-size: 1rem;
+      color: var(--text);
+      background: var(--input-bg);
+      transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+    }
+    input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+      transform: translateY(-1px);
+    }
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 0.7rem 1.2rem;
+      font-size: 0.98rem;
+      font-weight: 600;
+      color: #04101f;
+      background: linear-gradient(110deg, var(--accent) 0%, var(--accent-2) 100%);
+      cursor: pointer;
+      width: fit-content;
+      transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
+      box-shadow: 0 8px 28px rgba(58, 184, 255, 0.28);
+    }
+    button:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.03);
+      box-shadow: 0 12px 30px rgba(58, 184, 255, 0.32);
+    }
+    button:active {
+      transform: translateY(0);
+    }
+    @media (max-width: 560px) {
+      main {
+        padding-top: 6vh;
+      }
+      .panel {
+        padding: 1.15rem;
+        border-radius: 14px;
+      }
+    }
+    @keyframes panel-in {
+      from {
+        opacity: 0;
+        transform: translateY(9px) scale(0.99);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    @keyframes float-orb {
+      0%, 100% { transform: translateY(0px) translateX(0px); }
+      50% { transform: translateY(-10px) translateX(4px); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="panel">
+      <p class="kicker">Operations Console</p>
+      <h1>S3 Gateway Admin</h1>
+      <p class="muted">Sign in with LDAP credentials.</p>
+      <form method="post" action="/login">
+        <label>
+          LDAP Username
+          <input type="text" name="username" autocomplete="username" value="{{.Username}}" required>
+        </label>
+        <label>
+          LDAP Password
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <button type="submit">Sign in</button>
+      </form>
+      {{if .Error}}
+      <p class="error">{{.Error}}</p>
+      {{end}}
+    </section>
+  </main>
+</body>
+</html>
