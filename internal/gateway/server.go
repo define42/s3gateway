@@ -440,38 +440,37 @@ func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-
 func EffectiveShutdownTimeout(cfg Config) time.Duration {
-cfg.ApplyDefaults()
-return cfg.ShutdownTimeout
+	cfg.ApplyDefaults()
+	return cfg.ShutdownTimeout
 }
 
 func newHTTPServer(cfg Config, handler http.Handler) *http.Server {
-cfg.ApplyDefaults()
+	cfg.ApplyDefaults()
 
-return &http.Server{
-Addr:              cfg.ListenAddr,
-Handler:           handler,
-ReadHeaderTimeout: cfg.ReadHeaderTimeout,
-ReadTimeout:       cfg.ReadTimeout,
-WriteTimeout:      cfg.WriteTimeout,
-IdleTimeout:       cfg.IdleTimeout,
-MaxHeaderBytes:    cfg.MaxHeaderBytes,
-}
+	return &http.Server{
+		Addr:              cfg.ListenAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+		MaxHeaderBytes:    cfg.MaxHeaderBytes,
+	}
 }
 
 func BootS3Gateway() (*http.Server, Config, error) {
-cfg := loadConfig()
+	cfg := loadConfig()
 
-up, err := newUpstreamS3(context.Background(), cfg)
-if err != nil {
-return nil, cfg, fmt.Errorf("init upstream s3: %w", err)
-}
+	up, err := newUpstreamS3(context.Background(), cfg)
+	if err != nil {
+		return nil, cfg, fmt.Errorf("init upstream s3: %w", err)
+	}
 
-s := newServer(cfg, up)
+	s := newServer(cfg, up)
 
-adminWebpageHandler := adminWebpageHandler(s)
+	adminWebpageHandler := adminWebpageHandler(s)
 
-httpSrv := newHTTPServer(cfg, s.withAuth(s, adminWebpageHandler))
-return httpSrv, cfg, nil
+	httpSrv := newHTTPServer(cfg, s.withAuth(s, adminWebpageHandler))
+	return httpSrv, cfg, nil
 }
