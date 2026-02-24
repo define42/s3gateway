@@ -25,6 +25,7 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	gatewayconfig "github.com/define42/s3gateway/internal/config"
+	gatewaycache "github.com/define42/s3gateway/internal/cache"
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	minio "github.com/minio/minio-go/v7"
@@ -1531,14 +1532,14 @@ func TestValidateSigV4RequestTime(t *testing.T) {
 }
 
 func TestGroupCacheCredentialAwareAndBounded(t *testing.T) {
-	c := newGroupCacheWithMaxEntries(2*time.Second, 2)
+	c := gatewaycache.NewGroupCacheWithMaxEntries(2*time.Second, 2)
 
 	g1 := map[string]struct{}{"team1-rw": {}}
-	c.set("u1@example.com", "pass1", g1)
-	if _, ok := c.get("u1@example.com", "wrong-pass"); ok {
+	c.Set("u1@example.com", "pass1", g1)
+	if _, ok := c.Get("u1@example.com", "wrong-pass"); ok {
 		t.Fatalf("cache hit with wrong password should not be allowed")
 	}
-	got, ok := c.get("u1@example.com", "pass1")
+	got, ok := c.Get("u1@example.com", "pass1")
 	if !ok {
 		t.Fatalf("expected cache hit for correct credentials")
 	}
@@ -1546,7 +1547,7 @@ func TestGroupCacheCredentialAwareAndBounded(t *testing.T) {
 		t.Fatalf("expected cached group in returned map")
 	}
 	got["tamper"] = struct{}{}
-	gotAgain, ok := c.get("u1@example.com", "pass1")
+	gotAgain, ok := c.Get("u1@example.com", "pass1")
 	if !ok {
 		t.Fatalf("expected cache hit for correct credentials after tamper attempt")
 	}
@@ -1555,34 +1556,34 @@ func TestGroupCacheCredentialAwareAndBounded(t *testing.T) {
 	}
 
 	time.Sleep(10 * time.Millisecond)
-	c.set("u2@example.com", "pass2", map[string]struct{}{"team2-r": {}})
+	c.Set("u2@example.com", "pass2", map[string]struct{}{"team2-r": {}})
 	time.Sleep(10 * time.Millisecond)
-	c.set("u3@example.com", "pass3", map[string]struct{}{"team3-rw": {}})
+	c.Set("u3@example.com", "pass3", map[string]struct{}{"team3-rw": {}})
 
-	if len(c.data) > 2 {
-		t.Fatalf("cache exceeded max size: len=%d max=2", len(c.data))
+	if c.Len() > 2 {
+		t.Fatalf("cache exceeded max size: len=%d max=2", c.Len())
 	}
-	if _, ok := c.get("u1@example.com", "pass1"); ok {
+	if _, ok := c.Get("u1@example.com", "pass1"); ok {
 		t.Fatalf("expected oldest entry to be evicted when cache is full")
 	}
-	if _, ok := c.get("u2@example.com", "pass2"); !ok {
+	if _, ok := c.Get("u2@example.com", "pass2"); !ok {
 		t.Fatalf("expected second entry to remain in cache")
 	}
-	if _, ok := c.get("u3@example.com", "pass3"); !ok {
+	if _, ok := c.Get("u3@example.com", "pass3"); !ok {
 		t.Fatalf("expected newest entry to remain in cache")
 	}
 }
 
 func TestGroupCacheExpiredEntryIsRemovedOnLookup(t *testing.T) {
-	c := newGroupCacheWithMaxEntries(20*time.Millisecond, 10)
-	c.set("u1@example.com", "pass1", map[string]struct{}{"team1-rw": {}})
+	c := gatewaycache.NewGroupCacheWithMaxEntries(20*time.Millisecond, 10)
+	c.Set("u1@example.com", "pass1", map[string]struct{}{"team1-rw": {}})
 	time.Sleep(30 * time.Millisecond)
 
-	if _, ok := c.get("u1@example.com", "pass1"); ok {
+	if _, ok := c.Get("u1@example.com", "pass1"); ok {
 		t.Fatalf("expected expired cache entry to miss")
 	}
-	if len(c.data) != 0 {
-		t.Fatalf("expected expired entry to be removed from cache, len=%d", len(c.data))
+	if c.Len() != 0 {
+		t.Fatalf("expected expired entry to be removed from cache, len=%d", c.Len())
 	}
 }
 

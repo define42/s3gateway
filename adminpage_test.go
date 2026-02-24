@@ -207,7 +207,7 @@ func TestAdminLoginPostRequiresCredentials(t *testing.T) {
 
 func TestAdminLoginPostSuccessSetsCookieAndRedirects(t *testing.T) {
 	s := newServer(config.Config{}, nil)
-	s.gcache.set("alice", "secret", map[string]struct{}{
+	s.gcache.Set("alice", "secret", map[string]struct{}{
 		"team2-rw": {},
 	})
 	handler := adminWebpageHandler(s)
@@ -274,7 +274,7 @@ func TestAdminDashboardWithSessionRendersGroupsAndBuckets(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.set("alice", "secret", map[string]struct{}{
+	gw.gcache.Set("alice", "secret", map[string]struct{}{
 		"team2-rw":   {},
 		"team3-w":    {},
 		"misc-group": {},
@@ -351,7 +351,7 @@ func TestAdminDashboardShowsCreateBucketForm(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.set("alice", "secret", map[string]struct{}{
+	gw.gcache.Set("alice", "secret", map[string]struct{}{
 		"team2-c": {},
 		"team3-c": {},
 	})
@@ -393,7 +393,7 @@ func TestAdminCreateBucketSuccess(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.set("alice", "secret", map[string]struct{}{
+	gw.gcache.Set("alice", "secret", map[string]struct{}{
 		"team2-c": {},
 	})
 	handler := adminWebpageHandler(gw)
@@ -433,7 +433,7 @@ func TestAdminCreateBucketRequiresPermission(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.set("alice", "secret", map[string]struct{}{
+	gw.gcache.Set("alice", "secret", map[string]struct{}{
 		"team2-rw": {},
 	})
 	handler := adminWebpageHandler(gw)
@@ -467,7 +467,7 @@ func TestAdminCreateBucketRejectsInvalidSpace(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.set("alice", "secret", map[string]struct{}{
+	gw.gcache.Set("alice", "secret", map[string]struct{}{
 		"team2-c": {},
 	})
 	handler := adminWebpageHandler(gw)
@@ -542,7 +542,7 @@ func TestAdminBucketPagePagination(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.set("alice", "secret", map[string]struct{}{
+	gw.gcache.Set("alice", "secret", map[string]struct{}{
 		"team2-r": {},
 	})
 	handler := adminWebpageHandler(gw)
@@ -639,7 +639,7 @@ func TestAdminBucketDownload(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.set("alice", "secret", map[string]struct{}{
+	gw.gcache.Set("alice", "secret", map[string]struct{}{
 		"team2-r": {},
 	})
 	handler := adminWebpageHandler(gw)
@@ -700,7 +700,7 @@ func TestAdminBucketUploadAndDelete(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.set("alice", "secret", map[string]struct{}{
+	gw.gcache.Set("alice", "secret", map[string]struct{}{
 		"team2-wd": {},
 	})
 	handler := adminWebpageHandler(gw)
@@ -781,7 +781,7 @@ func TestAdminBucketUploadAndDeleteRequirePermissions(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.set("alice", "secret", map[string]struct{}{
+	gw.gcache.Set("alice", "secret", map[string]struct{}{
 		"team2-r": {},
 	})
 	handler := adminWebpageHandler(gw)
@@ -874,7 +874,7 @@ func TestAdminBucketUpload100MB(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.set("alice", "secret", map[string]struct{}{
+	gw.gcache.Set("alice", "secret", map[string]struct{}{
 		"team2-w": {},
 	})
 	handler := adminWebpageHandler(gw)
@@ -981,7 +981,7 @@ func TestAdminBucketUploadSmallFileWithoutWritableTempDir(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.set("alice", "secret", map[string]struct{}{
+	gw.gcache.Set("alice", "secret", map[string]struct{}{
 		"team2-w": {},
 	})
 	handler := adminWebpageHandler(gw)
@@ -1031,7 +1031,7 @@ func TestAdminBucketUploadSmallFileWithoutWritableTempDir(t *testing.T) {
 
 func TestAdminLogoutClearsCookieAndRedirects(t *testing.T) {
 	s := newServer(config.Config{}, nil)
-	s.gcache.set("alice", "secret", map[string]struct{}{
+	s.gcache.Set("alice", "secret", map[string]struct{}{
 		"team2-rw": {},
 	})
 
