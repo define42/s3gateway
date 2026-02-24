@@ -1,4 +1,4 @@
-package main
+package ldap
 
 import (
 	"fmt"
@@ -15,10 +15,10 @@ const defaultLDAPDialTimeout = 5 * time.Second
 
 // ==================== AD group lookup ====================
 func ldapDial(ldapURL string) (*ldap.Conn, error) {
-	return ldapDialWithTimeout(ldapURL, defaultLDAPDialTimeout)
+	return DialWithTimeout(ldapURL, defaultLDAPDialTimeout)
 }
 
-func ldapDialWithTimeout(ldapURL string, timeout time.Duration) (*ldap.Conn, error) {
+func DialWithTimeout(ldapURL string, timeout time.Duration) (*ldap.Conn, error) {
 	_, err := url.Parse(ldapURL)
 	if err != nil {
 		return nil, err
@@ -26,7 +26,7 @@ func ldapDialWithTimeout(ldapURL string, timeout time.Duration) (*ldap.Conn, err
 	return ldap.DialURL(ldapURL, ldap.DialWithDialer(&net.Dialer{Timeout: timeout}))
 }
 
-func fetchGroupsUPN(cfg config.Config, upn, password string) (map[string]struct{}, error) {
+func FetchGroupsUPN(cfg config.Config, upn, password string) (map[string]struct{}, error) {
 	conn, err := ldapDial(cfg.LDAPURL)
 	if err != nil {
 		return nil, fmt.Errorf("ldap dial: %w", err)
@@ -80,4 +80,3 @@ func cnFromDN(dn string) string {
 	}
 	return ""
 }
-

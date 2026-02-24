@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/define42/s3gateway/internal/config"
+	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	"golang.org/x/sync/singleflight"
 )
@@ -42,7 +43,7 @@ func newServer(cfg config.Config, up *s3.Client) *server {
 		cfg:              cfg,
 		up:               up,
 		gcache:           newGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
-		fetchGroups:      fetchGroupsUPN,
+		fetchGroups:      ldapinternal.FetchGroupsUPN,
 		adminSessions:    adminSessions,
 		adminWebSessions: newAdminGorillaStore(cfg.CookieSecret, defaultAdminSessionTTL, adminSessions),
 	}
@@ -61,7 +62,7 @@ func (s *server) groupsForCredentials(upn, pass string) (map[string]struct{}, er
 	sfKey := singleflightCredentialKey(upn, pass)
 	fetchGroups := s.fetchGroups
 	if fetchGroups == nil {
-		fetchGroups = fetchGroupsUPN
+		fetchGroups = ldapinternal.FetchGroupsUPN
 	}
 	v, err, _ := s.groupLookupSF.Do(sfKey, func() (any, error) {
 		if cached, ok := s.gcache.get(upn, pass); ok {
@@ -392,7 +393,7 @@ func (s *server) checkLDAPReady(ctx context.Context) error {
 			timeout = remaining
 		}
 	}
-	conn, err := ldapDialWithTimeout(s.cfg.LDAPURL, timeout)
+	conn, err := ldapinternal.DialWithTimeout(s.cfg.LDAPURL, timeout)
 	if err != nil {
 		return err
 	}
