@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/define42/s3gateway/internal/groupcache"
 	"github.com/define42/s3gateway/internal/config"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
@@ -239,7 +240,7 @@ func (s *adminSessionStore) save(sessionID, username string, groups map[string]s
 		if _, ok := s.data[existingID]; ok {
 			s.data[existingID] = adminSession{
 				Username: username,
-				Groups:   cloneGroups(groups),
+				Groups:   groupcache.CloneGroups(groups),
 				Expires:  now.Add(s.ttl),
 				LastSeen: now,
 			}
@@ -261,7 +262,7 @@ func (s *adminSessionStore) save(sessionID, username string, groups map[string]s
 		}
 		s.data[newID] = adminSession{
 			Username: username,
-			Groups:   cloneGroups(groups),
+			Groups:   groupcache.CloneGroups(groups),
 			Expires:  now.Add(s.ttl),
 			LastSeen: now,
 		}
@@ -296,7 +297,7 @@ func (s *adminSessionStore) get(sessionID string) (adminSession, bool) {
 
 	return adminSession{
 		Username: e.Username,
-		Groups:   cloneGroups(e.Groups),
+		Groups:   groupcache.CloneGroups(e.Groups),
 		Expires:  e.Expires,
 		LastSeen: e.LastSeen,
 	}, true

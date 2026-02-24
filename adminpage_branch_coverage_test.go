@@ -38,7 +38,7 @@ func (errReader) Read(_ []byte) (int, error) {
 func newLoggedInAdminHandlerWithStub(t *testing.T, groups map[string]struct{}, h http.HandlerFunc) (http.Handler, *http.Cookie, func()) {
 	t.Helper()
 	gw, cleanup := newGatewayWithStubUpstream(t, h)
-	gw.gcache.set("alice", "secret", groups)
+	gw.gcache.Set("alice", "secret", groups)
 	handler := adminWebpageHandler(gw)
 	cookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 	return handler, cookie, cleanup
@@ -425,7 +425,7 @@ func TestHandleAdminLoginAdditionalBranches(t *testing.T) {
 
 	t.Run("already logged in redirects to admin", func(t *testing.T) {
 		s := newServer(config.Config{}, nil)
-		s.gcache.set("alice", "secret", map[string]struct{}{"team2-r": {}})
+		s.gcache.Set("alice", "secret", map[string]struct{}{"team2-r": {}})
 		handler := adminWebpageHandler(s)
 		cookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
@@ -443,7 +443,7 @@ func TestHandleAdminLoginAdditionalBranches(t *testing.T) {
 
 	t.Run("invalid existing cookie still allows login", func(t *testing.T) {
 		s := newServer(config.Config{}, nil)
-		s.gcache.set("alice", "secret", map[string]struct{}{"team2-r": {}})
+		s.gcache.Set("alice", "secret", map[string]struct{}{"team2-r": {}})
 		handler := adminWebpageHandler(s)
 
 		form := url.Values{"username": {"alice"}, "password": {"secret"}}
@@ -462,7 +462,7 @@ func TestHandleAdminLoginAdditionalBranches(t *testing.T) {
 
 	t.Run("session save failure", func(t *testing.T) {
 		s := newServer(config.Config{}, nil)
-		s.gcache.set("alice", "secret", map[string]struct{}{"team2-r": {}})
+		s.gcache.Set("alice", "secret", map[string]struct{}{"team2-r": {}})
 		s.adminWebSessions.backend = nil
 		handler := adminWebpageHandler(s)
 
@@ -508,7 +508,7 @@ func TestHandleAdminDashboardAdditionalBranches(t *testing.T) {
 
 	t.Run("list buckets error writes bad gateway", func(t *testing.T) {
 		s := newServer(config.Config{}, nil)
-		s.gcache.set("alice", "secret", map[string]struct{}{"team2-r": {}})
+		s.gcache.Set("alice", "secret", map[string]struct{}{"team2-r": {}})
 		handler := adminWebpageHandler(s)
 		cookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
@@ -570,7 +570,7 @@ func TestHandleAdminCreateBucketAdditionalBranches(t *testing.T) {
 
 	t.Run("nil upstream redirects to backend error", func(t *testing.T) {
 		s := newServer(config.Config{}, nil)
-		s.gcache.set("alice", "secret", map[string]struct{}{"team2-c": {}})
+		s.gcache.Set("alice", "secret", map[string]struct{}{"team2-c": {}})
 		handler := adminWebpageHandler(s)
 		cookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
@@ -784,7 +784,7 @@ func TestHandleAdminBucketDownloadAdditionalBranches(t *testing.T) {
 
 	t.Run("nil upstream redirects with error", func(t *testing.T) {
 		s := newServer(config.Config{}, nil)
-		s.gcache.set("alice", "secret", map[string]struct{}{"team2-r": {}})
+		s.gcache.Set("alice", "secret", map[string]struct{}{"team2-r": {}})
 		handler := adminWebpageHandler(s)
 		cookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
@@ -898,7 +898,7 @@ func TestHandleAdminBucketDeleteAdditionalBranches(t *testing.T) {
 
 	t.Run("nil upstream redirects to admin", func(t *testing.T) {
 		s := newServer(config.Config{}, nil)
-		s.gcache.set("alice", "secret", map[string]struct{}{"team2-d": {}})
+		s.gcache.Set("alice", "secret", map[string]struct{}{"team2-d": {}})
 		handler := adminWebpageHandler(s)
 		cookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
@@ -1121,7 +1121,7 @@ func TestHandleAdminBucketUploadAdditionalBranches(t *testing.T) {
 
 	t.Run("nil upstream redirects to admin", func(t *testing.T) {
 		s := newServer(config.Config{}, nil)
-		s.gcache.set("alice", "secret", map[string]struct{}{"team2-w": {}})
+		s.gcache.Set("alice", "secret", map[string]struct{}{"team2-w": {}})
 		handler := adminWebpageHandler(s)
 		cookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 

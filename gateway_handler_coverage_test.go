@@ -60,7 +60,7 @@ func TestS3ClientUpload100MBThroughGateway(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.set("testuser", "dogood", map[string]struct{}{
+	gw.gcache.Set("testuser", "dogood", map[string]struct{}{
 		"team2-rw": {},
 	})
 

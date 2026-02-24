@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/define42/s3gateway/internal/groupcache"
 	"github.com/define42/s3gateway/internal/config"
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
@@ -29,7 +30,7 @@ const ctxUploaderKey ctxKey = "uploader-upn"
 type server struct {
 	cfg              config.Config
 	up               *s3.Client
-	gcache           *groupCache
+	gcache           *groupcache.GroupCache
 	groupLookupSF    singleflight.Group
 	fetchGroups      func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
 	adminSessions    *adminSessionStore
@@ -42,7 +43,7 @@ func newServer(cfg config.Config, up *s3.Client) *server {
 	return &server{
 		cfg:              cfg,
 		up:               up,
-		gcache:           newGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
+		gcache:           groupcache.NewGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
 		fetchGroups:      ldapinternal.FetchGroupsUPN,
 		adminSessions:    adminSessions,
 		adminWebSessions: newAdminGorillaStore(cfg.CookieSecret, defaultAdminSessionTTL, adminSessions),
@@ -54,25 +55,25 @@ func (s *server) groupsForCredentials(upn, pass string) (map[string]struct{}, er
 		return nil, errors.New("missing credentials")
 	}
 
-	grps, ok := s.gcache.get(upn, pass)
+	grps, ok := s.gcache.Get(upn, pass)
 	if ok {
 		return grps, nil
 	}
 
-	sfKey := singleflightCredentialKey(upn, pass)
+	sfKey := groupcache.SingleflightCredentialKey(upn, pass)
 	fetchGroups := s.fetchGroups
 	if fetchGroups == nil {
 		fetchGroups = ldapinternal.FetchGroupsUPN
 	}
 	v, err, _ := s.groupLookupSF.Do(sfKey, func() (any, error) {
-		if cached, ok := s.gcache.get(upn, pass); ok {
+		if cached, ok := s.gcache.Get(upn, pass); ok {
 			return cached, nil
 		}
 		fetched, err := fetchGroups(s.cfg, upn, pass)
 		if err != nil {
 			return nil, err
 		}
-		s.gcache.set(upn, pass, fetched)
+		s.gcache.Set(upn, pass, fetched)
 		return fetched, nil
 	})
 	if err != nil {
@@ -82,7 +83,7 @@ func (s *server) groupsForCredentials(upn, pass string) (map[string]struct{}, er
 	if !ok {
 		return nil, errors.New("internal auth error")
 	}
-	return cloneGroups(shared), nil
+	return groupcache.CloneGroups(shared), nil
 }
 
 func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Handler {
