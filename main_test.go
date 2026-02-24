@@ -25,6 +25,7 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	gatewayconfig "github.com/define42/s3gateway/internal/config"
+	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	minio "github.com/minio/minio-go/v7"
 	minioCredentials "github.com/minio/minio-go/v7/pkg/credentials"
@@ -59,7 +60,7 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	}
 
 	// Sanity-check LDAP bind + group mapping used by gateway authz.
-	grps, err := fetchGroupsUPN(cfg, "testuser", "dogood")
+	grps, err := ldapinternal.FetchGroupsUPN(cfg, "testuser", "dogood")
 	if err != nil {
 		t.Fatalf("ldap auth/group lookup failed: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	if !canDeleteBucket(rulesFromGroups(grps), "team2-integration-check") {
 		t.Fatalf("expected team2-rwcdb delete-bucket permission, got groups: %v", mapKeys(grps))
 	}
-	roGrps, err := fetchGroupsUPN(cfg, "readonly", "dogood")
+	roGrps, err := ldapinternal.FetchGroupsUPN(cfg, "readonly", "dogood")
 	if err != nil {
 		t.Fatalf("ldap auth/group lookup failed for readonly user: %v", err)
 	}

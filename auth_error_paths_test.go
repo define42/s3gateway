@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/define42/s3gateway/internal/config"
+	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 )
 
 func TestFetchGroupsUPNLDAPBindFailed(t *testing.T) {
@@ -30,7 +31,7 @@ func TestFetchGroupsUPNLDAPBindFailed(t *testing.T) {
 		BaseDN:     "dc=example,dc=com",
 		LDAPDomain: "example.com",
 	}
-	_, err = fetchGroupsUPN(cfg, "user", "wrongpass")
+	_, err = ldapinternal.FetchGroupsUPN(cfg, "user", "wrongpass")
 	if err == nil {
 		t.Fatalf("expected ldap bind failure error")
 	}
