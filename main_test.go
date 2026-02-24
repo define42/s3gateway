@@ -25,7 +25,7 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	gatewayconfig "github.com/define42/s3gateway/internal/config"
-	gatewaycache "github.com/define42/s3gateway/internal/cache"
+	gatewaycache "github.com/define42/s3gateway/internal/groupcache"
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	minio "github.com/minio/minio-go/v7"

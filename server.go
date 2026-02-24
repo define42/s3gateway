@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/define42/s3gateway/internal/cache"
+	"github.com/define42/s3gateway/internal/groupcache"
 	"github.com/define42/s3gateway/internal/config"
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
@@ -30,7 +30,7 @@ const ctxUploaderKey ctxKey = "uploader-upn"
 type server struct {
 	cfg              config.Config
 	up               *s3.Client
-	gcache           *cache.GroupCache
+	gcache           *groupcache.GroupCache
 	groupLookupSF    singleflight.Group
 	fetchGroups      func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
 	adminSessions    *adminSessionStore
@@ -43,7 +43,7 @@ func newServer(cfg config.Config, up *s3.Client) *server {
 	return &server{
 		cfg:              cfg,
 		up:               up,
-		gcache:           cache.NewGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
+		gcache:           groupcache.NewGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
 		fetchGroups:      ldapinternal.FetchGroupsUPN,
 		adminSessions:    adminSessions,
 		adminWebSessions: newAdminGorillaStore(cfg.CookieSecret, defaultAdminSessionTTL, adminSessions),
@@ -60,7 +60,7 @@ func (s *server) groupsForCredentials(upn, pass string) (map[string]struct{}, er
 		return grps, nil
 	}
 
-	sfKey := cache.SingleflightCredentialKey(upn, pass)
+	sfKey := groupcache.SingleflightCredentialKey(upn, pass)
 	fetchGroups := s.fetchGroups
 	if fetchGroups == nil {
 		fetchGroups = ldapinternal.FetchGroupsUPN
@@ -83,7 +83,7 @@ func (s *server) groupsForCredentials(upn, pass string) (map[string]struct{}, er
 	if !ok {
 		return nil, errors.New("internal auth error")
 	}
-	return cache.CloneGroups(shared), nil
+	return groupcache.CloneGroups(shared), nil
 }
 
 func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Handler {

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/define42/s3gateway/internal/cache"
+	"github.com/define42/s3gateway/internal/groupcache"
 	"github.com/define42/s3gateway/internal/config"
 )
 
@@ -25,7 +25,7 @@ func TestEnvAndCanonicalURIHelpers(t *testing.T) {
 }
 
 func TestNewGroupCacheWithDefaultMaxEntries(t *testing.T) {
-	c := cache.NewGroupCacheWithMaxEntries(time.Second, 0)
+	c := groupcache.NewGroupCacheWithMaxEntries(time.Second, 0)
 	if c.MaxEntries() != config.DefaultGroupCacheMaxEntries {
 		t.Fatalf("default max entries mismatch: got=%d want=%d", c.MaxEntries(), config.DefaultGroupCacheMaxEntries)
 	}

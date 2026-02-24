@@ -1,4 +1,4 @@
-package cache
+package groupcache
 
 import (
 	"crypto/sha256"
