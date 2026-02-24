@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/define42/s3gateway/internal/config"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	"golang.org/x/sync/singleflight"
 )
@@ -25,16 +26,16 @@ const ctxSigV4SecretKey ctxKey = "sigv4-secret"
 const ctxUploaderKey ctxKey = "uploader-upn"
 
 type server struct {
-	cfg              Config
+	cfg              config.Config
 	up               *s3.Client
 	gcache           *groupCache
 	groupLookupSF    singleflight.Group
-	fetchGroups      func(cfg Config, upn, pass string) (map[string]struct{}, error)
+	fetchGroups      func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
 	adminSessions    *adminSessionStore
 	adminWebSessions *adminGorillaStore
 }
 
-func newServer(cfg Config, up *s3.Client) *server {
+func newServer(cfg config.Config, up *s3.Client) *server {
 	cfg.ApplyDefaults()
 	adminSessions := newAdminSessionStore(defaultAdminSessionTTL, cfg.GroupCacheMaxEntries)
 	return &server{

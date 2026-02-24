@@ -14,6 +14,7 @@ import (
 v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 "github.com/aws/aws-sdk-go-v2/service/s3"
 "github.com/aws/aws-sdk-go-v2/service/s3/types"
+"github.com/define42/s3gateway/internal/config"
 )
 
 const maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
@@ -1751,7 +1752,7 @@ func extractAmzMeta(h http.Header) map[string]string {
 	for k, vs := range h {
 		kl := strings.ToLower(k)
 		if strings.HasPrefix(kl, "x-amz-meta-") && len(vs) > 0 {
-			mk := normalizeRequiredMetadataKey(strings.TrimPrefix(kl, "x-amz-meta-"))
+			mk := config.NormalizeRequiredMetadataKey(strings.TrimPrefix(kl, "x-amz-meta-"))
 			if mk == "" {
 				continue
 			}

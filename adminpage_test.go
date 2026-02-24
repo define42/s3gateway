@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/define42/s3gateway/internal/config"
 )
 
 func adminLoginSessionCookie(t *testing.T, handler http.Handler, username, password string) *http.Cookie {
@@ -168,7 +170,7 @@ func TestAdminRootRedirectsToLogin(t *testing.T) {
 }
 
 func TestAdminLoginGetRendersLoginPage(t *testing.T) {
-	handler := adminWebpageHandler(newServer(Config{}, nil))
+	handler := adminWebpageHandler(newServer(config.Config{}, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/login", nil)
 	rr := httptest.NewRecorder()
@@ -187,7 +189,7 @@ func TestAdminLoginGetRendersLoginPage(t *testing.T) {
 }
 
 func TestAdminLoginPostRequiresCredentials(t *testing.T) {
-	handler := adminWebpageHandler(newServer(Config{}, nil))
+	handler := adminWebpageHandler(newServer(config.Config{}, nil))
 
 	form := url.Values{}
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
@@ -204,7 +206,7 @@ func TestAdminLoginPostRequiresCredentials(t *testing.T) {
 }
 
 func TestAdminLoginPostSuccessSetsCookieAndRedirects(t *testing.T) {
-	s := newServer(Config{}, nil)
+	s := newServer(config.Config{}, nil)
 	s.gcache.set("alice", "secret", map[string]struct{}{
 		"team2-rw": {},
 	})
@@ -239,7 +241,7 @@ func TestAdminLoginPostSuccessSetsCookieAndRedirects(t *testing.T) {
 }
 
 func TestAdminDashboardRequiresSession(t *testing.T) {
-	handler := adminWebpageHandler(newServer(Config{}, nil))
+	handler := adminWebpageHandler(newServer(config.Config{}, nil))
 
 	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
 	rr := httptest.NewRecorder()
@@ -1028,7 +1030,7 @@ func TestAdminBucketUploadSmallFileWithoutWritableTempDir(t *testing.T) {
 }
 
 func TestAdminLogoutClearsCookieAndRedirects(t *testing.T) {
-	s := newServer(Config{}, nil)
+	s := newServer(config.Config{}, nil)
 	s.gcache.set("alice", "secret", map[string]struct{}{
 		"team2-rw": {},
 	})

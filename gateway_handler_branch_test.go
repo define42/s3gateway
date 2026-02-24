@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/define42/s3gateway/internal/config"
 )
 
 func reqWithRules(req *http.Request, rules []Rule) *http.Request {
@@ -1221,7 +1223,7 @@ func TestCreateCompleteAndListPartsBranchMatrix(t *testing.T) {
 }
 
 func TestServeHTTPAndAuthBranches(t *testing.T) {
-	gw := newServer(Config{SigV4MaxSkew: 15 * time.Minute}, nil)
+	gw := newServer(config.Config{SigV4MaxSkew: 15 * time.Minute}, nil)
 
 	t.Run("servehttp route not implemented and invalid part number branches", func(t *testing.T) {
 		cases := []struct {
@@ -1306,7 +1308,7 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 		}
 
 		rrBadCreds := httptest.NewRecorder()
-		gwFetch := newServer(Config{
+		gwFetch := newServer(config.Config{
 			SigV4MaxSkew: 0,
 			LDAPURL:      "ldap://127.0.0.1:1",
 			BaseDN:       "dc=example,dc=com",
@@ -1376,7 +1378,7 @@ func TestReadyzDependencyChecks(t *testing.T) {
 	})
 
 	t.Run("fails when s3 client is unavailable", func(t *testing.T) {
-		gw := newServer(Config{LDAPURL: startLDAPListener(t)}, nil)
+		gw := newServer(config.Config{LDAPURL: startLDAPListener(t)}, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 		rr := httptest.NewRecorder()

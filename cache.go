@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"sync"
 	"time"
+
+	"github.com/define42/s3gateway/internal/config"
 )
 
 // ==================== Cache ====================
@@ -24,7 +26,7 @@ type groupCache struct {
 
 func newGroupCacheWithMaxEntries(ttl time.Duration, maxEntries int) *groupCache {
 	if maxEntries <= 0 {
-		maxEntries = defaultGroupCacheMaxEntries
+		maxEntries = config.DefaultGroupCacheMaxEntries
 	}
 	return &groupCache{
 		data:       map[string]groupCacheEntry{},

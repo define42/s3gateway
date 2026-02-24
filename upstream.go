@@ -7,16 +7,17 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/define42/s3gateway/internal/config"
 )
 
 // ==================== Upstream S3 client (service creds) ====================
 //
 // Key point: for PutObject/UploadPart with unseekable bodies, use
 // v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware and provide ContentLength. :contentReference[oaicite:6]{index=6}
-func newUpstreamS3(ctx context.Context, cfg Config) (*s3.Client, error) {
+func newUpstreamS3(ctx context.Context, cfg config.Config) (*s3.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = http.ProxyFromEnvironment
 	transport.DialContext = (&net.Dialer{
@@ -33,15 +34,15 @@ func newUpstreamS3(ctx context.Context, cfg Config) (*s3.Client, error) {
 
 	upHTTP := &http.Client{Transport: transport}
 
-	awsCfg, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion(cfg.UpstreamRegion),
-		config.WithBaseEndpoint(cfg.UpstreamEndpoint),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.UpstreamAccessKey, cfg.UpstreamSecretKey, "")),
-		config.WithHTTPClient(upHTTP),
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion(cfg.UpstreamRegion),
+		awsconfig.WithBaseEndpoint(cfg.UpstreamEndpoint),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.UpstreamAccessKey, cfg.UpstreamSecretKey, "")),
+		awsconfig.WithHTTPClient(upHTTP),
 		// Gateway forwards request bodies as non-seekable streams; avoid optional precomputed request checksums.
-		config.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+		awsconfig.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
 		// Upstream responses may not include optional checksum headers.
-		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
+		awsconfig.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 	)
 	if err != nil {
 		return nil, err

@@ -24,6 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	gatewayconfig "github.com/define42/s3gateway/internal/config"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	minio "github.com/minio/minio-go/v7"
 	minioCredentials "github.com/minio/minio-go/v7/pkg/credentials"
@@ -45,7 +46,7 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
-	cfg := Config{
+	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
@@ -236,7 +237,7 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
-	cfg := Config{
+	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
@@ -326,7 +327,7 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
-	cfg := Config{
+	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
@@ -417,7 +418,7 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
-	cfg := Config{
+	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
@@ -509,7 +510,7 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
-	cfg := Config{
+	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
@@ -701,7 +702,7 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
-	cfg := Config{
+	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
@@ -893,7 +894,7 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
-	cfg := Config{
+	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
@@ -1123,7 +1124,7 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
-	cfg := Config{
+	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
@@ -1585,18 +1586,18 @@ func TestGroupCacheExpiredEntryIsRemovedOnLookup(t *testing.T) {
 }
 
 func TestNewHTTPServerAppliesDefaultsAndOverrides(t *testing.T) {
-	srv := newHTTPServer(Config{ListenAddr: ":8080"}, http.NewServeMux())
-	if srv.ReadHeaderTimeout != defaultReadHeaderTimeout {
-		t.Fatalf("default read header timeout mismatch: got=%s want=%s", srv.ReadHeaderTimeout, defaultReadHeaderTimeout)
+	srv := newHTTPServer(gatewayconfig.Config{ListenAddr: ":8080"}, http.NewServeMux())
+	if srv.ReadHeaderTimeout != gatewayconfig.DefaultReadHeaderTimeout {
+		t.Fatalf("default read header timeout mismatch: got=%s want=%s", srv.ReadHeaderTimeout, gatewayconfig.DefaultReadHeaderTimeout)
 	}
-	if srv.IdleTimeout != defaultIdleTimeout {
-		t.Fatalf("default idle timeout mismatch: got=%s want=%s", srv.IdleTimeout, defaultIdleTimeout)
+	if srv.IdleTimeout != gatewayconfig.DefaultIdleTimeout {
+		t.Fatalf("default idle timeout mismatch: got=%s want=%s", srv.IdleTimeout, gatewayconfig.DefaultIdleTimeout)
 	}
-	if srv.MaxHeaderBytes != defaultMaxHeaderBytes {
-		t.Fatalf("default max header bytes mismatch: got=%d want=%d", srv.MaxHeaderBytes, defaultMaxHeaderBytes)
+	if srv.MaxHeaderBytes != gatewayconfig.DefaultMaxHeaderBytes {
+		t.Fatalf("default max header bytes mismatch: got=%d want=%d", srv.MaxHeaderBytes, gatewayconfig.DefaultMaxHeaderBytes)
 	}
 
-	overrideCfg := Config{
+	overrideCfg := gatewayconfig.Config{
 		ListenAddr:        ":9090",
 		ReadHeaderTimeout: 3 * time.Second,
 		ReadTimeout:       11 * time.Second,
@@ -1638,7 +1639,7 @@ func TestGatewayPreservesUpstreamErrorStatusAndHeaders(t *testing.T) {
 	defer upstreamSrv.Close()
 
 	upstreamClient := NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := newServer(Config{}, upstreamClient)
+	gw := newServer(gatewayconfig.Config{}, upstreamClient)
 	gwSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := context.WithValue(r.Context(), ctxRulesKey, []Rule{{BucketPrefix: "team2-", Perm: PermReadWrite}})
 		gw.ServeHTTP(w, r.WithContext(ctx))
@@ -1681,7 +1682,7 @@ func TestGatewayHandlesUpstreamLatencySpike(t *testing.T) {
 	defer upstreamSrv.Close()
 
 	upstreamClient := NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := newServer(Config{}, upstreamClient)
+	gw := newServer(gatewayconfig.Config{}, upstreamClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	timeoutCtx, cancel := context.WithTimeout(req.Context(), 150*time.Millisecond)
@@ -1729,7 +1730,7 @@ func TestHandleGetObjectAttributesIncludesChecksum(t *testing.T) {
 	defer upstreamSrv.Close()
 
 	upstreamClient := NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := newServer(Config{}, upstreamClient)
+	gw := newServer(gatewayconfig.Config{}, upstreamClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/team2-checksum/object.txt?attributes", nil)
 	req.Header.Set("x-amz-object-attributes", "Checksum")
@@ -1777,7 +1778,7 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 	minioURL, stopMinio := StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
-	cfg := Config{
+	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
@@ -1841,7 +1842,7 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 
 type integrationEnv struct {
 	ctx            context.Context
-	cfg            Config
+	cfg            gatewayconfig.Config
 	rwClient       *s3.Client
 	roClient       *s3.Client
 	upstreamClient *s3.Client
@@ -1856,7 +1857,7 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 	ldapURL, stopLDAP := StartGlauthWithConfig(ctx, tb, ldapCfgPath, "ldap")
 	minioURL, stopMinio := StartMinio(ctx, tb, "minioadmin", "minioadmin")
 
-	cfg := Config{
+	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
 		LDAPDomain:             "example.com",

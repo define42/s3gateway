@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/define42/s3gateway/internal/config"
 	"github.com/gorilla/sessions"
 )
 
@@ -90,8 +91,8 @@ func TestAdminSessionStoreCoverage(t *testing.T) {
 	if store.ttl != defaultAdminSessionTTL {
 		t.Fatalf("ttl default mismatch: got=%s want=%s", store.ttl, defaultAdminSessionTTL)
 	}
-	if store.maxEntries != defaultGroupCacheMaxEntries {
-		t.Fatalf("max entries default mismatch: got=%d want=%d", store.maxEntries, defaultGroupCacheMaxEntries)
+	if store.maxEntries != config.DefaultGroupCacheMaxEntries {
+		t.Fatalf("max entries default mismatch: got=%d want=%d", store.maxEntries, config.DefaultGroupCacheMaxEntries)
 	}
 
 	if _, err := store.save("", "", map[string]struct{}{"team2-r": {}}); err == nil {
@@ -322,7 +323,7 @@ func TestAdminGorillaStoreSaveCoverage(t *testing.T) {
 }
 
 func TestAdminHandlersMethodNotAllowedCoverage(t *testing.T) {
-	s := newServer(Config{}, nil)
+	s := newServer(config.Config{}, nil)
 	handler := adminWebpageHandler(s)
 
 	cases := []struct {
@@ -355,7 +356,7 @@ func TestAdminHandlersMethodNotAllowedCoverage(t *testing.T) {
 }
 
 func TestAdminWebpageHandlerNotFoundCoverage(t *testing.T) {
-	handler := adminWebpageHandler(newServer(Config{}, nil))
+	handler := adminWebpageHandler(newServer(config.Config{}, nil))
 	req := httptest.NewRequest(http.MethodGet, "/does-not-exist", nil)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
@@ -366,7 +367,7 @@ func TestAdminWebpageHandlerNotFoundCoverage(t *testing.T) {
 
 func TestHandleAdminLoginAdditionalBranches(t *testing.T) {
 	t.Run("head request writes no body", func(t *testing.T) {
-		handler := adminWebpageHandler(newServer(Config{}, nil))
+		handler := adminWebpageHandler(newServer(config.Config{}, nil))
 		req := httptest.NewRequest(http.MethodHead, "/login", nil)
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, req)
@@ -379,7 +380,7 @@ func TestHandleAdminLoginAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("parse form failure", func(t *testing.T) {
-		handler := adminWebpageHandler(newServer(Config{}, nil))
+		handler := adminWebpageHandler(newServer(config.Config{}, nil))
 		req := httptest.NewRequest(http.MethodPost, "/login", nil)
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Body = errReadCloser{}
@@ -408,7 +409,7 @@ func TestHandleAdminLoginAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("ldap login failure path", func(t *testing.T) {
-		handler := adminWebpageHandler(newServer(Config{}, nil))
+		handler := adminWebpageHandler(newServer(config.Config{}, nil))
 		form := url.Values{"username": {"alice"}, "password": {"wrong"}}
 		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -423,7 +424,7 @@ func TestHandleAdminLoginAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("already logged in redirects to admin", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		s.gcache.set("alice", "secret", map[string]struct{}{"team2-r": {}})
 		handler := adminWebpageHandler(s)
 		cookie := adminLoginSessionCookie(t, handler, "alice", "secret")
@@ -441,7 +442,7 @@ func TestHandleAdminLoginAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("invalid existing cookie still allows login", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		s.gcache.set("alice", "secret", map[string]struct{}{"team2-r": {}})
 		handler := adminWebpageHandler(s)
 
@@ -460,7 +461,7 @@ func TestHandleAdminLoginAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("session save failure", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		s.gcache.set("alice", "secret", map[string]struct{}{"team2-r": {}})
 		s.adminWebSessions.backend = nil
 		handler := adminWebpageHandler(s)
@@ -481,7 +482,7 @@ func TestHandleAdminLoginAdditionalBranches(t *testing.T) {
 
 func TestHandleAdminDashboardAdditionalBranches(t *testing.T) {
 	t.Run("invalid cookie clears and redirects to login", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		handler := adminWebpageHandler(s)
 		req := httptest.NewRequest(http.MethodGet, "/admin", nil)
 		req.AddCookie(&http.Cookie{Name: adminSessionCookieName, Value: "invalid"})
@@ -506,7 +507,7 @@ func TestHandleAdminDashboardAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("list buckets error writes bad gateway", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		s.gcache.set("alice", "secret", map[string]struct{}{"team2-r": {}})
 		handler := adminWebpageHandler(s)
 		cookie := adminLoginSessionCookie(t, handler, "alice", "secret")
@@ -551,7 +552,7 @@ func TestHandleAdminCreateBucketAdditionalBranches(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 	t.Run("invalid cookie clears and redirects", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		handler := adminWebpageHandler(s)
 		form := url.Values{"space": {"team2"}, "suffix": {"demo"}}
 		req := httptest.NewRequest(http.MethodPost, "/admin/create-bucket", strings.NewReader(form.Encode()))
@@ -568,7 +569,7 @@ func TestHandleAdminCreateBucketAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("nil upstream redirects to backend error", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		s.gcache.set("alice", "secret", map[string]struct{}{"team2-c": {}})
 		handler := adminWebpageHandler(s)
 		cookie := adminLoginSessionCookie(t, handler, "alice", "secret")
@@ -652,7 +653,7 @@ func TestHandleAdminBucketPageAdditionalBranches(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 	t.Run("invalid cookie clears and redirects", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		handler := adminWebpageHandler(s)
 		req := httptest.NewRequest(http.MethodGet, "/admin/bucket?name=team2-logs", nil)
 		req.AddCookie(&http.Cookie{Name: adminSessionCookieName, Value: "invalid"})
@@ -767,7 +768,7 @@ func TestHandleAdminBucketPageAdditionalBranches(t *testing.T) {
 
 func TestHandleAdminBucketDownloadAdditionalBranches(t *testing.T) {
 	t.Run("invalid cookie clears and redirects", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		handler := adminWebpageHandler(s)
 		req := httptest.NewRequest(http.MethodGet, "/admin/bucket/download?name=team2-logs&key=a.txt", nil)
 		req.AddCookie(&http.Cookie{Name: adminSessionCookieName, Value: "invalid"})
@@ -782,7 +783,7 @@ func TestHandleAdminBucketDownloadAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("nil upstream redirects with error", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		s.gcache.set("alice", "secret", map[string]struct{}{"team2-r": {}})
 		handler := adminWebpageHandler(s)
 		cookie := adminLoginSessionCookie(t, handler, "alice", "secret")
@@ -879,7 +880,7 @@ func TestHandleAdminBucketDeleteAdditionalBranches(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 	t.Run("invalid cookie clears and redirects", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		handler := adminWebpageHandler(s)
 		form := url.Values{"name": {"team2-logs"}, "key": {"a.txt"}}
 		req := httptest.NewRequest(http.MethodPost, "/admin/bucket/delete", strings.NewReader(form.Encode()))
@@ -896,7 +897,7 @@ func TestHandleAdminBucketDeleteAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("nil upstream redirects to admin", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		s.gcache.set("alice", "secret", map[string]struct{}{"team2-d": {}})
 		handler := adminWebpageHandler(s)
 		cookie := adminLoginSessionCookie(t, handler, "alice", "secret")
@@ -1009,7 +1010,7 @@ func TestHandleAdminLogoutAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("head method rejected", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		handler := adminWebpageHandler(s)
 		req := httptest.NewRequest(http.MethodHead, "/logout", nil)
 		rr := httptest.NewRecorder()
@@ -1090,7 +1091,7 @@ func TestHandleAdminBucketUploadAdditionalBranches(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 	t.Run("invalid cookie clears and redirects", func(t *testing.T) {
-		handler := adminWebpageHandler(newServer(Config{}, nil))
+		handler := adminWebpageHandler(newServer(config.Config{}, nil))
 		body, contentType := newMultipartBody(t, func(mw *multipart.Writer) error {
 			if err := mw.WriteField("name", "team2-logs"); err != nil {
 				return err
@@ -1119,7 +1120,7 @@ func TestHandleAdminBucketUploadAdditionalBranches(t *testing.T) {
 	})
 
 	t.Run("nil upstream redirects to admin", func(t *testing.T) {
-		s := newServer(Config{}, nil)
+		s := newServer(config.Config{}, nil)
 		s.gcache.set("alice", "secret", map[string]struct{}{"team2-w": {}})
 		handler := adminWebpageHandler(s)
 		cookie := adminLoginSessionCookie(t, handler, "alice", "secret")
