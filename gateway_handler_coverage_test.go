@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/define42/s3gateway/internal/config"
 	"github.com/define42/s3gateway/internal/s3credentials"
 )
 
@@ -24,7 +25,7 @@ func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*server, func
 	upstreamSrv := httptest.NewServer(h)
 	ctx := context.Background()
 	upstreamClient := NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := newServer(Config{}, upstreamClient)
+	gw := newServer(config.Config{}, upstreamClient)
 
 	return gw, func() {
 		upstreamSrv.Close()
@@ -547,7 +548,7 @@ func TestCoverageHelpersLifecycleAndShutdown(t *testing.T) {
 		t.Fatalf("lifecycleRuleLegacyPrefix(zero) = %v, want nil", got)
 	}
 
-	if got := effectiveShutdownTimeout(Config{}); got <= 0 {
+	if got := effectiveShutdownTimeout(config.Config{}); got <= 0 {
 		t.Fatalf("effectiveShutdownTimeout() should apply defaults, got=%s", got)
 	}
 }

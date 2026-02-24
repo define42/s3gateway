@@ -6,10 +6,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/define42/s3gateway/internal/config"
 )
 
 func TestGroupsForCredentialsSingleflightDeduplicatesConcurrentMisses(t *testing.T) {
-	s := newServer(Config{
+	s := newServer(config.Config{
 		GroupTTL:             time.Minute,
 		GroupCacheMaxEntries: 64,
 	}, nil)
@@ -18,7 +20,7 @@ func TestGroupsForCredentialsSingleflightDeduplicatesConcurrentMisses(t *testing
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
 
-	s.fetchGroups = func(cfg Config, upn, pass string) (map[string]struct{}, error) {
+	s.fetchGroups = func(cfg config.Config, upn, pass string) (map[string]struct{}, error) {
 		if calls.Add(1) == 1 {
 			started <- struct{}{}
 		}

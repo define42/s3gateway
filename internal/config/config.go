@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"crypto/ecdh"
@@ -48,14 +48,15 @@ type Config struct {
 }
 
 const (
-	defaultSigV4MaxSkew         = 15 * time.Minute
-	defaultGroupCacheMaxEntries = 10000
-	defaultReadHeaderTimeout    = 10 * time.Second
-	defaultReadTimeout          = 0 * time.Second
-	defaultWriteTimeout         = 0 * time.Second
-	defaultIdleTimeout          = 120 * time.Second
-	defaultShutdownTimeout      = 20 * time.Second
-	defaultMaxHeaderBytes       = 1 << 20 // 1 MiB
+	defaultSigV4MaxSkew      = 15 * time.Minute
+	defaultReadTimeout        = 0 * time.Second
+	defaultWriteTimeout       = 0 * time.Second
+	defaultShutdownTimeout    = 20 * time.Second
+
+	DefaultGroupCacheMaxEntries = 10000
+	DefaultReadHeaderTimeout    = 10 * time.Second
+	DefaultIdleTimeout          = 120 * time.Second
+	DefaultMaxHeaderBytes       = 1 << 20 // 1 MiB
 )
 
 func (cfg *Config) ApplyDefaults() {
@@ -66,7 +67,7 @@ func (cfg *Config) ApplyDefaults() {
 		cfg.GroupTTL = 2 * time.Minute
 	}
 	if cfg.GroupCacheMaxEntries == 0 {
-		cfg.GroupCacheMaxEntries = defaultGroupCacheMaxEntries
+		cfg.GroupCacheMaxEntries = DefaultGroupCacheMaxEntries
 	}
 	if cfg.UpstreamRegion == "" {
 		cfg.UpstreamRegion = "us-east-1"
@@ -75,16 +76,16 @@ func (cfg *Config) ApplyDefaults() {
 		cfg.SigV4MaxSkew = defaultSigV4MaxSkew
 	}
 	if cfg.ReadHeaderTimeout == 0 {
-		cfg.ReadHeaderTimeout = defaultReadHeaderTimeout
+		cfg.ReadHeaderTimeout = DefaultReadHeaderTimeout
 	}
 	if cfg.IdleTimeout == 0 {
-		cfg.IdleTimeout = defaultIdleTimeout
+		cfg.IdleTimeout = DefaultIdleTimeout
 	}
 	if cfg.ShutdownTimeout == 0 {
 		cfg.ShutdownTimeout = defaultShutdownTimeout
 	}
 	if cfg.MaxHeaderBytes == 0 {
-		cfg.MaxHeaderBytes = defaultMaxHeaderBytes
+		cfg.MaxHeaderBytes = DefaultMaxHeaderBytes
 	}
 }
 
@@ -169,7 +170,9 @@ func envInt(key string, def int) int {
 	return n
 }
 
-func normalizeRequiredMetadataKey(raw string) string {
+// NormalizeRequiredMetadataKey lowercases and strips the x-amz-meta- prefix
+// from a metadata key, trimming surrounding whitespace.
+func NormalizeRequiredMetadataKey(raw string) string {
 	key := strings.ToLower(strings.TrimSpace(raw))
 	key = strings.TrimPrefix(key, "x-amz-meta-")
 	return strings.TrimSpace(key)
@@ -184,7 +187,7 @@ func envCSVMetadataKeys(key string) []string {
 	out := make([]string, 0, len(parts))
 	seen := make(map[string]struct{}, len(parts))
 	for _, p := range parts {
-		k := normalizeRequiredMetadataKey(p)
+		k := NormalizeRequiredMetadataKey(p)
 		if k == "" {
 			continue
 		}
@@ -200,7 +203,7 @@ func envCSVMetadataKeys(key string) []string {
 	return out
 }
 
-func loadConfig() Config {
+func LoadConfig() Config {
 	cfg := Config{
 		ListenAddr: env("LISTEN_ADDR", ":8080"),
 
@@ -208,7 +211,7 @@ func loadConfig() Config {
 		BaseDN:               envRequired("LDAP_BASE_DN"),
 		GroupTTL:             envDuration("LDAP_GROUP_TTL", 2*time.Minute),
 		LDAPDomain:           env("LDAP_DOMAIN", "example.com"),
-		GroupCacheMaxEntries: envInt("LDAP_GROUP_CACHE_MAX_ENTRIES", defaultGroupCacheMaxEntries),
+		GroupCacheMaxEntries: envInt("LDAP_GROUP_CACHE_MAX_ENTRIES", DefaultGroupCacheMaxEntries),
 
 		UpstreamEndpoint:       envRequired("S3_ENDPOINT"),
 		UpstreamRegion:         env("S3_REGION", "us-east-1"),
@@ -221,12 +224,12 @@ func loadConfig() Config {
 
 		RequiredUploadMetadataKeys: envCSVMetadataKeys("REQUIRED_UPLOAD_METADATA_KEYS"),
 
-		ReadHeaderTimeout:         envDuration("HTTP_READ_HEADER_TIMEOUT", defaultReadHeaderTimeout),
+		ReadHeaderTimeout:         envDuration("HTTP_READ_HEADER_TIMEOUT", DefaultReadHeaderTimeout),
 		ReadTimeout:               envDuration("HTTP_READ_TIMEOUT", defaultReadTimeout),
 		WriteTimeout:              envDuration("HTTP_WRITE_TIMEOUT", defaultWriteTimeout),
-		IdleTimeout:               envDuration("HTTP_IDLE_TIMEOUT", defaultIdleTimeout),
+		IdleTimeout:               envDuration("HTTP_IDLE_TIMEOUT", DefaultIdleTimeout),
 		ShutdownTimeout:           envDuration("HTTP_SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
-		MaxHeaderBytes:            envInt("HTTP_MAX_HEADER_BYTES", defaultMaxHeaderBytes),
+		MaxHeaderBytes:            envInt("HTTP_MAX_HEADER_BYTES", DefaultMaxHeaderBytes),
 		S3GatewayPrivateX25519Key: envEcdhPrivateKey("S3GATEWAY_PRIVATE_X25519_KEY"),
 		AcmeCaDir:                 env("ACME_CA_DIR", ""),
 		AcmeDomains:               env("ACME_DOMAINS", ""),

@@ -4,6 +4,8 @@ import (
 	"net"
 	"strings"
 	"testing"
+
+	"github.com/define42/s3gateway/internal/config"
 )
 
 func TestFetchGroupsUPNLDAPBindFailed(t *testing.T) {
@@ -23,7 +25,7 @@ func TestFetchGroupsUPNLDAPBindFailed(t *testing.T) {
 		_ = conn.Close()
 	}()
 
-	cfg := Config{
+	cfg := config.Config{
 		LDAPURL:    "ldap://" + ln.Addr().String(),
 		BaseDN:     "dc=example,dc=com",
 		LDAPDomain: "example.com",

@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/define42/s3gateway/internal/config"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 )
@@ -213,7 +214,7 @@ func newAdminSessionStore(ttl time.Duration, maxEntries int) *adminSessionStore 
 		ttl = defaultAdminSessionTTL
 	}
 	if maxEntries <= 0 {
-		maxEntries = defaultGroupCacheMaxEntries
+		maxEntries = config.DefaultGroupCacheMaxEntries
 	}
 	return &adminSessionStore{
 		ttl:        ttl,

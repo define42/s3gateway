@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/define42/s3gateway/internal/config"
 	ldap "github.com/go-ldap/ldap/v3"
 )
 
@@ -25,7 +26,7 @@ func ldapDialWithTimeout(ldapURL string, timeout time.Duration) (*ldap.Conn, err
 	return ldap.DialURL(ldapURL, ldap.DialWithDialer(&net.Dialer{Timeout: timeout}))
 }
 
-func fetchGroupsUPN(cfg Config, upn, password string) (map[string]struct{}, error) {
+func fetchGroupsUPN(cfg config.Config, upn, password string) (map[string]struct{}, error) {
 	conn, err := ldapDial(cfg.LDAPURL)
 	if err != nil {
 		return nil, fmt.Errorf("ldap dial: %w", err)

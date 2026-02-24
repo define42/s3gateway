@@ -15,14 +15,15 @@ import (
 
 	"github.com/caddyserver/certmagic"
 	"github.com/define42/s3gateway/internal/certreader"
+	"github.com/define42/s3gateway/internal/config"
 )
 
-func effectiveShutdownTimeout(cfg Config) time.Duration {
+func effectiveShutdownTimeout(cfg config.Config) time.Duration {
 	cfg.ApplyDefaults()
 	return cfg.ShutdownTimeout
 }
 
-func newHTTPServer(cfg Config, handler http.Handler) *http.Server {
+func newHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
 	cfg.ApplyDefaults()
 
 	return &http.Server{
@@ -36,8 +37,8 @@ func newHTTPServer(cfg Config, handler http.Handler) *http.Server {
 	}
 }
 
-func BootS3Gateway() (*http.Server, Config, error) {
-	cfg := loadConfig()
+func BootS3Gateway() (*http.Server, config.Config, error) {
+	cfg := config.LoadConfig()
 
 	up, err := newUpstreamS3(context.Background(), cfg)
 	if err != nil {
