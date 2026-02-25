@@ -1,4 +1,4 @@
-package main
+package upstream_test
 
 import (
 	"errors"

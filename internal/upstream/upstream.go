@@ -1,4 +1,4 @@
-package main
+package upstream
 
 import (
 	"context"
@@ -17,7 +17,7 @@ import (
 //
 // Key point: for PutObject/UploadPart with unseekable bodies, use
 // v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware and provide ContentLength. :contentReference[oaicite:6]{index=6}
-func newUpstreamS3(ctx context.Context, cfg config.Config) (*s3.Client, error) {
+func NewUpstreamS3(ctx context.Context, cfg config.Config) (*s3.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = http.ProxyFromEnvironment
 	transport.DialContext = (&net.Dialer{
@@ -52,4 +52,3 @@ func newUpstreamS3(ctx context.Context, cfg config.Config) (*s3.Client, error) {
 		o.UsePathStyle = cfg.UpstreamForcePathStyle
 	}), nil
 }
-

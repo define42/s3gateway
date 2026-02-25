@@ -30,6 +30,7 @@ import (
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
+	"github.com/define42/s3gateway/internal/upstream"
 	minio "github.com/minio/minio-go/v7"
 	minioCredentials "github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/testcontainers/testcontainers-go"
@@ -91,7 +92,7 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 		t.Fatalf("expected team2-r to deny create/delete permissions, got groups: %v", mapKeys(roGrps))
 	}
 
-	up, err := newUpstreamS3(ctx, cfg)
+	up, err := upstream.NewUpstreamS3(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
@@ -253,7 +254,7 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := newUpstreamS3(ctx, cfg)
+	up, err := upstream.NewUpstreamS3(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
@@ -343,7 +344,7 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := newUpstreamS3(ctx, cfg)
+	up, err := upstream.NewUpstreamS3(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
@@ -434,7 +435,7 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := newUpstreamS3(ctx, cfg)
+	up, err := upstream.NewUpstreamS3(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
@@ -526,7 +527,7 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := newUpstreamS3(ctx, cfg)
+	up, err := upstream.NewUpstreamS3(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
@@ -718,7 +719,7 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := newUpstreamS3(ctx, cfg)
+	up, err := upstream.NewUpstreamS3(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
@@ -910,7 +911,7 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := newUpstreamS3(ctx, cfg)
+	up, err := upstream.NewUpstreamS3(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
@@ -1140,7 +1141,7 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := newUpstreamS3(ctx, cfg)
+	up, err := upstream.NewUpstreamS3(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
@@ -1794,7 +1795,7 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := newUpstreamS3(ctx, cfg)
+	up, err := upstream.NewUpstreamS3(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
@@ -1873,7 +1874,7 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := newUpstreamS3(ctx, cfg)
+	up, err := upstream.NewUpstreamS3(ctx, cfg)
 	if err != nil {
 		stopMinio()
 		stopLDAP()

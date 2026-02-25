@@ -17,6 +17,7 @@ import (
 	"github.com/define42/s3gateway/internal/certreader"
 	"github.com/define42/s3gateway/internal/config"
 	adminpage "github.com/define42/s3gateway/internal/adminpage"
+	"github.com/define42/s3gateway/internal/upstream"
 )
 
 func effectiveShutdownTimeout(cfg config.Config) time.Duration {
@@ -41,7 +42,7 @@ func newHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
 func BootS3Gateway() (*http.Server, config.Config, error) {
 	cfg := config.LoadConfig()
 
-	up, err := newUpstreamS3(context.Background(), cfg)
+	up, err := upstream.NewUpstreamS3(context.Background(), cfg)
 	if err != nil {
 		return nil, cfg, fmt.Errorf("init upstream s3: %w", err)
 	}
