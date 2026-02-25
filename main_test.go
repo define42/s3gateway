@@ -29,6 +29,7 @@ import (
 	gatewaycache "github.com/define42/s3gateway/internal/groupcache"
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
+	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 	minio "github.com/minio/minio-go/v7"
 	minioCredentials "github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/testcontainers/testcontainers-go"
@@ -1402,8 +1403,8 @@ func TestLifecycleConfigXMLExpandedRoundTrip(t *testing.T) {
 }
 
 func TestDecodeBodyForS3WriteAWSChunked(t *testing.T) {
-	newAuth := func() *sigv4Auth {
-		return &sigv4Auth{
+	newAuth := func() *sigv4.SigV4Auth {
+		return &sigv4.SigV4Auth{
 			AccessKey:    "test-access-key",
 			Date:         "20260207",
 			Region:       "us-east-1",
@@ -1424,7 +1425,7 @@ func TestDecodeBodyForS3WriteAWSChunked(t *testing.T) {
 		req.Header.Set("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
 		req.Header.Set("x-amz-decoded-content-length", "11")
 
-		body, cl, err := decodeBodyForS3Write(req, newAWSChunkSignatureVerifier(auth, "password"))
+		body, cl, err := sigv4.DecodeBodyForS3Write(req, sigv4.NewAWSChunkSignatureVerifier(auth, "password"))
 		if err != nil {
 			t.Fatalf("decodeBodyForS3Write returned error: %v", err)
 		}
@@ -1453,13 +1454,13 @@ func TestDecodeBodyForS3WriteAWSChunked(t *testing.T) {
 		req.Header.Set("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
 		req.Header.Set("x-amz-decoded-content-length", "5")
 
-		body, _, err := decodeBodyForS3Write(req, newAWSChunkSignatureVerifier(auth, "password"))
+		body, _, err := sigv4.DecodeBodyForS3Write(req, sigv4.NewAWSChunkSignatureVerifier(auth, "password"))
 		if err != nil {
 			t.Fatalf("decodeBodyForS3Write returned unexpected error: %v", err)
 		}
 		defer body.Close()
 
-		if _, err := io.ReadAll(body); !errors.Is(err, errInvalidChunkSignature) {
+		if _, err := io.ReadAll(body); !errors.Is(err, sigv4.ErrInvalidChunkSignature) {
 			t.Fatalf("expected invalid chunk signature error, got: %v", err)
 		}
 	})
@@ -1468,7 +1469,7 @@ func TestDecodeBodyForS3WriteAWSChunked(t *testing.T) {
 		auth := newAuth()
 		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/object.txt", strings.NewReader(""))
 		req.Header.Set("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
-		if _, _, err := decodeBodyForS3Write(req, newAWSChunkSignatureVerifier(auth, "password")); err == nil {
+		if _, _, err := sigv4.DecodeBodyForS3Write(req, sigv4.NewAWSChunkSignatureVerifier(auth, "password")); err == nil {
 			t.Fatalf("expected decodeBodyForS3Write to fail for missing x-amz-decoded-content-length")
 		}
 	})
@@ -1479,54 +1480,54 @@ func TestValidateSigV4RequestTime(t *testing.T) {
 
 	t.Run("within allowed skew", func(t *testing.T) {
 		reqTime := now.Add(-10 * time.Minute)
-		auth := &sigv4Auth{
+		auth := &sigv4.SigV4Auth{
 			Date:    reqTime.Format("20060102"),
 			AmzDate: reqTime.Format("20060102T150405Z"),
 		}
-		if err := validateSigV4RequestTime(auth, now, 15*time.Minute); err != nil {
+		if err := sigv4.ValidateSigV4RequestTime(auth, now, 15*time.Minute); err != nil {
 			t.Fatalf("expected valid request time, got error: %v", err)
 		}
 	})
 
 	t.Run("too old", func(t *testing.T) {
 		reqTime := now.Add(-16 * time.Minute)
-		auth := &sigv4Auth{
+		auth := &sigv4.SigV4Auth{
 			Date:    reqTime.Format("20060102"),
 			AmzDate: reqTime.Format("20060102T150405Z"),
 		}
-		if err := validateSigV4RequestTime(auth, now, 15*time.Minute); !errors.Is(err, errSigV4RequestOutsideMaxSkew) {
+		if err := sigv4.ValidateSigV4RequestTime(auth, now, 15*time.Minute); !errors.Is(err, sigv4.ErrSigV4RequestOutsideMaxSkew) {
 			t.Fatalf("expected skew error, got: %v", err)
 		}
 	})
 
 	t.Run("too far in future", func(t *testing.T) {
 		reqTime := now.Add(16 * time.Minute)
-		auth := &sigv4Auth{
+		auth := &sigv4.SigV4Auth{
 			Date:    reqTime.Format("20060102"),
 			AmzDate: reqTime.Format("20060102T150405Z"),
 		}
-		if err := validateSigV4RequestTime(auth, now, 15*time.Minute); !errors.Is(err, errSigV4RequestOutsideMaxSkew) {
+		if err := sigv4.ValidateSigV4RequestTime(auth, now, 15*time.Minute); !errors.Is(err, sigv4.ErrSigV4RequestOutsideMaxSkew) {
 			t.Fatalf("expected skew error, got: %v", err)
 		}
 	})
 
 	t.Run("invalid amz date", func(t *testing.T) {
-		auth := &sigv4Auth{
+		auth := &sigv4.SigV4Auth{
 			Date:    now.Format("20060102"),
 			AmzDate: "not-a-date",
 		}
-		if err := validateSigV4RequestTime(auth, now, 15*time.Minute); !errors.Is(err, errInvalidAmzDate) {
+		if err := sigv4.ValidateSigV4RequestTime(auth, now, 15*time.Minute); !errors.Is(err, sigv4.ErrInvalidAmzDate) {
 			t.Fatalf("expected invalid amz date error, got: %v", err)
 		}
 	})
 
 	t.Run("credential scope date mismatch", func(t *testing.T) {
 		reqTime := now
-		auth := &sigv4Auth{
+		auth := &sigv4.SigV4Auth{
 			Date:    "20000101",
 			AmzDate: reqTime.Format("20060102T150405Z"),
 		}
-		if err := validateSigV4RequestTime(auth, now, 15*time.Minute); !errors.Is(err, errSigV4DateScopeMismatch) {
+		if err := sigv4.ValidateSigV4RequestTime(auth, now, 15*time.Minute); !errors.Is(err, sigv4.ErrSigV4DateScopeMismatch) {
 			t.Fatalf("expected date mismatch error, got: %v", err)
 		}
 	})
@@ -2810,10 +2811,10 @@ func mustGatewaySecretForAccessKey(tb testing.TB, accessKey string) string {
 	return secretKey
 }
 
-func signedAWSChunkedPayloadForTest(t *testing.T, secret string, auth *sigv4Auth, chunks [][]byte) string {
+func signedAWSChunkedPayloadForTest(t *testing.T, secret string, auth *sigv4.SigV4Auth, chunks [][]byte) string {
 	t.Helper()
 
-	signingKey := deriveSigningKey(secret, auth.Date, auth.Region, auth.Service)
+	signingKey := sigv4.DeriveSigningKey(secret, auth.Date, auth.Region, auth.Service)
 	scope := fmt.Sprintf("%s/%s/%s/aws4_request", auth.Date, auth.Region, auth.Service)
 	prevSig := strings.ToLower(auth.SignatureHex)
 	emptyHash := sha256.Sum256(nil)
@@ -2831,7 +2832,7 @@ func signedAWSChunkedPayloadForTest(t *testing.T, secret string, auth *sigv4Auth
 			emptyHashHex,
 			chunkHashHex,
 		}, "\n")
-		sig := hmacSHA256Hex(signingKey, []byte(stringToSign))
+		sig := sigv4.HmacSHA256Hex(signingKey, []byte(stringToSign))
 		b.WriteString(fmt.Sprintf("%x;chunk-signature=%s\r\n", len(chunk), sig))
 		b.Write(chunk)
 		b.WriteString("\r\n")
@@ -2846,7 +2847,7 @@ func signedAWSChunkedPayloadForTest(t *testing.T, secret string, auth *sigv4Auth
 		emptyHashHex,
 		emptyHashHex,
 	}, "\n")
-	finalSig := hmacSHA256Hex(signingKey, []byte(stringToSign))
+	finalSig := sigv4.HmacSHA256Hex(signingKey, []byte(stringToSign))
 	b.WriteString(fmt.Sprintf("0;chunk-signature=%s\r\n\r\n", finalSig))
 	return b.String()
 }

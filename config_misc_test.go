@@ -6,6 +6,7 @@ import (
 
 	"github.com/define42/s3gateway/internal/groupcache"
 	"github.com/define42/s3gateway/internal/config"
+	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 )
 
 func TestEnvAndCanonicalURIHelpers(t *testing.T) {
@@ -18,7 +19,7 @@ func TestEnvAndCanonicalURIHelpers(t *testing.T) {
 		{in: "/already/escaped", want: "/already/escaped"},
 	}
 	for _, tt := range tests {
-		if got := canonicalURI(tt.in); got != tt.want {
+		if got := sigv4.CanonicalURI(tt.in); got != tt.want {
 			t.Fatalf("canonicalURI(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}

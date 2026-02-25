@@ -14,16 +14,17 @@ import (
 
 	"github.com/define42/s3gateway/internal/config"
 	authz "github.com/define42/s3gateway/internal/authz"
+	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 )
 
 func reqWithRules(req *http.Request, rules []authz.Rule) *http.Request {
 	return req.WithContext(context.WithValue(req.Context(), ctxRulesKey, rules))
 }
 
-func reqWithRulesAndSigV4(req *http.Request, rules []authz.Rule, auth *sigv4Auth) *http.Request {
+func reqWithRulesAndSigV4(req *http.Request, rules []authz.Rule, auth *sigv4.SigV4Auth) *http.Request {
 	ctx := context.WithValue(req.Context(), ctxRulesKey, rules)
-	ctx = context.WithValue(ctx, ctxSigV4AuthKey, auth)
-	ctx = context.WithValue(ctx, ctxSigV4SecretKey, "secret")
+	ctx = context.WithValue(ctx, sigv4.CtxSigV4AuthKey, auth)
+	ctx = context.WithValue(ctx, sigv4.CtxSigV4SecretKey, "secret")
 	return req.WithContext(ctx)
 }
 
@@ -442,7 +443,7 @@ func TestHandleUploadPartValidationAndBranches(t *testing.T) {
 	})
 	defer cleanupNoUpstream()
 
-	sigAuth := &sigv4Auth{
+	sigAuth := &sigv4.SigV4Auth{
 		AccessKey:    "ak",
 		Date:         "20260207",
 		Region:       "us-east-1",

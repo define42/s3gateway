@@ -16,6 +16,7 @@ v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 "github.com/aws/aws-sdk-go-v2/service/s3"
 "github.com/aws/aws-sdk-go-v2/service/s3/types"
 "github.com/define42/s3gateway/internal/config"
+sigv4 "github.com/define42/s3gateway/internal/sigv4"
 )
 
 const maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
@@ -1149,15 +1150,15 @@ func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		return
 	}
 
-	verifier, err := chunkSignatureVerifierFromRequest(r)
+	verifier, err := sigv4.ChunkSignatureVerifierFromRequest(r)
 	if err != nil {
 		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "Unsupported or invalid streaming payload signature")
 		return
 	}
 
-	body, cl, err := decodeBodyForS3Write(r, verifier)
+	body, cl, err := sigv4.DecodeBodyForS3Write(r, verifier)
 	if err != nil {
-		if errors.Is(err, errContentLengthRequired) || errors.Is(err, errMissingDecodedContentLength) || errors.Is(err, errInvalidDecodedContentLength) {
+		if errors.Is(err, sigv4.ErrContentLengthRequired) || errors.Is(err, sigv4.ErrMissingDecodedContentLength) || errors.Is(err, sigv4.ErrInvalidDecodedContentLength) {
 			writeXMLError(w, http.StatusLengthRequired, "MissingContentLength", "Content-Length required")
 			return
 		}
@@ -1261,7 +1262,7 @@ func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		s3.WithAPIOptions(v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware),
 	)
 	if err != nil {
-		if isChunkSignatureValidationError(err) {
+		if sigv4.IsChunkSignatureValidationError(err) {
 			writeXMLError(w, http.StatusBadRequest, "SignatureDoesNotMatch", "Invalid aws-chunked chunk signature")
 			return
 		}

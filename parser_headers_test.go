@@ -11,6 +11,7 @@ import (
 	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 )
 
 func TestParseRequestPayerHeader(t *testing.T) {
@@ -338,22 +339,22 @@ func TestDecodeVersioningConfigXMLMFADeleteValues(t *testing.T) {
 func TestSigV4AuthFromCtx(t *testing.T) {
 	t.Run("missing context value", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil)
-		if got := sigV4AuthFromCtx(req); got != nil {
+		if got := sigv4.SigV4AuthFromCtx(req); got != nil {
 			t.Fatalf("sigV4AuthFromCtx() = %+v, want nil", got)
 		}
 	})
 
 	t.Run("wrong context value type", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
-			context.WithValue(context.Background(), ctxSigV4AuthKey, "not-auth"),
+			context.WithValue(context.Background(), sigv4.CtxSigV4AuthKey, "not-auth"),
 		)
-		if got := sigV4AuthFromCtx(req); got != nil {
+		if got := sigv4.SigV4AuthFromCtx(req); got != nil {
 			t.Fatalf("sigV4AuthFromCtx() = %+v, want nil for wrong context type", got)
 		}
 	})
 
 	t.Run("valid auth value", func(t *testing.T) {
-		want := &sigv4Auth{
+		want := &sigv4.SigV4Auth{
 			AccessKey:    "access",
 			Date:         "20260207",
 			Region:       "us-east-1",
@@ -362,9 +363,9 @@ func TestSigV4AuthFromCtx(t *testing.T) {
 			AmzDate:      "20260207T010203Z",
 		}
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
-			context.WithValue(context.Background(), ctxSigV4AuthKey, want),
+			context.WithValue(context.Background(), sigv4.CtxSigV4AuthKey, want),
 		)
-		got := sigV4AuthFromCtx(req)
+		got := sigv4.SigV4AuthFromCtx(req)
 		if got != want {
 			t.Fatalf("sigV4AuthFromCtx() pointer mismatch: got=%p want=%p", got, want)
 		}
@@ -374,16 +375,16 @@ func TestSigV4AuthFromCtx(t *testing.T) {
 func TestSigV4SecretFromCtx(t *testing.T) {
 	t.Run("missing context value", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil)
-		if got := sigV4SecretFromCtx(req); got != "" {
+		if got := sigv4.SigV4SecretFromCtx(req); got != "" {
 			t.Fatalf("sigV4SecretFromCtx() = %q, want empty string", got)
 		}
 	})
 
 	t.Run("wrong context value type", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
-			context.WithValue(context.Background(), ctxSigV4SecretKey, 123),
+			context.WithValue(context.Background(), sigv4.CtxSigV4SecretKey, 123),
 		)
-		if got := sigV4SecretFromCtx(req); got != "" {
+		if got := sigv4.SigV4SecretFromCtx(req); got != "" {
 			t.Fatalf("sigV4SecretFromCtx() = %q, want empty string for wrong context type", got)
 		}
 	})
@@ -391,9 +392,9 @@ func TestSigV4SecretFromCtx(t *testing.T) {
 	t.Run("valid secret value", func(t *testing.T) {
 		const want = "derived-secret"
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
-			context.WithValue(context.Background(), ctxSigV4SecretKey, want),
+			context.WithValue(context.Background(), sigv4.CtxSigV4SecretKey, want),
 		)
-		if got := sigV4SecretFromCtx(req); got != want {
+		if got := sigv4.SigV4SecretFromCtx(req); got != want {
 			t.Fatalf("sigV4SecretFromCtx() = %q, want %q", got, want)
 		}
 	})
@@ -406,9 +407,9 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil)
 		req.Header.Set("x-amz-content-sha256", mode)
 
-		verifier, err := chunkSignatureVerifierFromRequest(req)
-		if !errors.Is(err, errMissingSigV4AuthContext) {
-			t.Fatalf("chunkSignatureVerifierFromRequest() error = %v, want %v", err, errMissingSigV4AuthContext)
+		verifier, err := sigv4.ChunkSignatureVerifierFromRequest(req)
+		if !errors.Is(err, sigv4.ErrMissingSigV4AuthContext) {
+			t.Fatalf("chunkSignatureVerifierFromRequest() error = %v, want %v", err, sigv4.ErrMissingSigV4AuthContext)
 		}
 		if verifier != nil {
 			t.Fatalf("chunkSignatureVerifierFromRequest() verifier = %+v, want nil on missing context", verifier)
@@ -416,7 +417,7 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 	})
 
 	t.Run("missing sigv4 secret context", func(t *testing.T) {
-		auth := &sigv4Auth{
+		auth := &sigv4.SigV4Auth{
 			AccessKey:    "access",
 			Date:         "20260207",
 			Region:       "us-east-1",
@@ -425,13 +426,13 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 			AmzDate:      "20260207T010203Z",
 		}
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
-			context.WithValue(context.Background(), ctxSigV4AuthKey, auth),
+			context.WithValue(context.Background(), sigv4.CtxSigV4AuthKey, auth),
 		)
 		req.Header.Set("x-amz-content-sha256", mode)
 
-		verifier, err := chunkSignatureVerifierFromRequest(req)
-		if !errors.Is(err, errMissingSigV4SecretContext) {
-			t.Fatalf("chunkSignatureVerifierFromRequest() error = %v, want %v", err, errMissingSigV4SecretContext)
+		verifier, err := sigv4.ChunkSignatureVerifierFromRequest(req)
+		if !errors.Is(err, sigv4.ErrMissingSigV4SecretContext) {
+			t.Fatalf("chunkSignatureVerifierFromRequest() error = %v, want %v", err, sigv4.ErrMissingSigV4SecretContext)
 		}
 		if verifier != nil {
 			t.Fatalf("chunkSignatureVerifierFromRequest() verifier = %+v, want nil on missing secret context", verifier)
@@ -439,7 +440,7 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 	})
 
 	t.Run("with sigv4 auth context", func(t *testing.T) {
-		auth := &sigv4Auth{
+		auth := &sigv4.SigV4Auth{
 			AccessKey:    "access",
 			Date:         "20260207",
 			Region:       "us-east-1",
@@ -447,20 +448,20 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 			SignatureHex: strings.Repeat("b", 64),
 			AmzDate:      "20260207T010203Z",
 		}
-		ctx := context.WithValue(context.Background(), ctxSigV4AuthKey, auth)
-		ctx = context.WithValue(ctx, ctxSigV4SecretKey, "secret")
+		ctx := context.WithValue(context.Background(), sigv4.CtxSigV4AuthKey, auth)
+		ctx = context.WithValue(ctx, sigv4.CtxSigV4SecretKey, "secret")
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(ctx)
 		req.Header.Set("x-amz-content-sha256", mode)
 
-		verifier, err := chunkSignatureVerifierFromRequest(req)
+		verifier, err := sigv4.ChunkSignatureVerifierFromRequest(req)
 		if err != nil {
 			t.Fatalf("chunkSignatureVerifierFromRequest() error = %v", err)
 		}
 		if verifier == nil {
 			t.Fatalf("chunkSignatureVerifierFromRequest() verifier is nil")
 		}
-		if verifier.prevSig != auth.SignatureHex {
-			t.Fatalf("chunkSignatureVerifierFromRequest() prevSig = %q, want %q", verifier.prevSig, auth.SignatureHex)
+		if verifier.PrevSig != auth.SignatureHex {
+			t.Fatalf("chunkSignatureVerifierFromRequest() prevSig = %q, want %q", verifier.PrevSig, auth.SignatureHex)
 		}
 	})
 }
