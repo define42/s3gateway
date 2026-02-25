@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/define42/s3gateway/internal/groupcache"
 	"github.com/define42/s3gateway/internal/config"
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
@@ -120,7 +121,7 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 			return
 		}
 
-		rules := rulesFromGroups(grps)
+		rules := authz.RulesFromGroups(grps)
 		ctx := context.WithValue(r.Context(), ctxRulesKey, rules)
 		ctx = context.WithValue(ctx, ctxSigV4AuthKey, auth)
 		ctx = context.WithValue(ctx, ctxSigV4SecretKey, secretKey)
@@ -129,12 +130,12 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 	})
 }
 
-func rulesFromCtx(r *http.Request) []Rule {
+func rulesFromCtx(r *http.Request) []authz.Rule {
 	v := r.Context().Value(ctxRulesKey)
 	if v == nil {
 		return nil
 	}
-	rules, _ := v.([]Rule)
+	rules, _ := v.([]authz.Rule)
 	return rules
 }
 

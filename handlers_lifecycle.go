@@ -10,6 +10,7 @@ import (
 "strings"
 "time"
 
+authz "github.com/define42/s3gateway/internal/authz"
 "github.com/aws/aws-sdk-go-v2/aws"
 "github.com/aws/aws-sdk-go-v2/service/s3"
 "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -639,7 +640,7 @@ func lifecycleRuleLegacyPrefix(r types.LifecycleRule) *string {
 
 func (s *server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
-	if !canCreateBucket(rules, bucket) {
+	if !authz.CanCreateBucket(rules, bucket) {
 		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
@@ -663,7 +664,7 @@ func (s *server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r 
 
 func (s *server) handleGetBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
-	if !canRead(rules, bucket) {
+	if !authz.CanRead(rules, bucket) {
 		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
@@ -689,7 +690,7 @@ func (s *server) handleGetBucketLifecycleConfiguration(w http.ResponseWriter, r 
 
 func (s *server) handleDeleteBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
-	if !canDeleteBucket(rules, bucket) {
+	if !authz.CanDeleteBucket(rules, bucket) {
 		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
