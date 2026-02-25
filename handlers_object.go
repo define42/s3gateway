@@ -11,6 +11,7 @@ import (
 "time"
 
 authz "github.com/define42/s3gateway/internal/authz"
+handler_bucket "github.com/define42/s3gateway/internal/handler_bucket"
 "github.com/define42/s3gateway/internal/xmlhelper"
 "github.com/aws/aws-sdk-go-v2/aws"
 v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
@@ -42,7 +43,7 @@ func (s *server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	tagging, err := decodeTaggingXML(r.Body)
+	tagging, err := handler_bucket.DecodeTaggingXML(r.Body)
 	if err != nil {
 		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid tagging payload")
 		return
@@ -124,7 +125,7 @@ func (s *server) handleGetObjectTagging(w http.ResponseWriter, r *http.Request, 
 	if out.VersionId != nil {
 		w.Header().Set("x-amz-version-id", *out.VersionId)
 	}
-	writeTaggingXMLResponse(w, http.StatusOK, out.TagSet)
+	handler_bucket.WriteTaggingXMLResponse(w, http.StatusOK, out.TagSet)
 }
 
 func (s *server) handleDeleteObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
