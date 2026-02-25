@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -2911,7 +2912,11 @@ func newMinioGatewayClient(t *testing.T, gatewayURL, accessKey, secretKey string
 
 func pathRelative(tb testing.TB, elems ...string) string {
 	tb.Helper()
-	p := filepath.Join(elems...)
+	_, thisFile, _, _ := runtime.Caller(0)
+	// thisFile is the compile-time path of this source file (internal/handler/main_test.go).
+	// Navigate two levels up to reach the module root.
+	moduleRoot := filepath.Join(filepath.Dir(thisFile), "../..")
+	p := filepath.Join(append([]string{moduleRoot}, elems...)...)
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		tb.Fatalf("abs path: %v", err)
