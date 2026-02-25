@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	authz "github.com/define42/s3gateway/internal/authz"
+	"github.com/define42/s3gateway/internal/xmlhelper"
 	"github.com/define42/s3gateway/internal/groupcache"
 	"github.com/define42/s3gateway/internal/config"
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
@@ -95,28 +96,28 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 
 		auth, err := sigv4.ParseSigV4Authorization(r)
 		if err != nil || auth.Service != "s3" {
-			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
+			xmlhelper.WriteXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
 		if err := sigv4.ValidateSigV4RequestTime(auth, time.Now(), s.cfg.SigV4MaxSkew); err != nil {
-			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
+			xmlhelper.WriteXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
 
 		upn, pass, secretKey, err := s3credentials.S3credentials(auth.AccessKey, s.cfg.S3GatewayPrivateX25519Key)
 		if err != nil {
-			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
+			xmlhelper.WriteXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
 
 		if err := sigv4.VerifySigV4(r, auth, secretKey); err != nil {
-			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
+			xmlhelper.WriteXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
 
 		grps, err := s.groupsForCredentials(upn, pass)
 		if err != nil {
-			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Bad credentials")
+			xmlhelper.WriteXMLError(w, http.StatusUnauthorized, "AccessDenied", "Bad credentials")
 			return
 		}
 
@@ -181,7 +182,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	rest := strings.TrimPrefix(p, "/")
 	if rest == "" {
-		writeXMLError(w, http.StatusNotFound, "NoSuchKey", "Not Found")
+		xmlhelper.WriteXMLError(w, http.StatusNotFound, "NoSuchKey", "Not Found")
 		return
 	}
 	parts := strings.SplitN(rest, "/", 2)
@@ -205,7 +206,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.handleDeleteBucketLifecycleConfiguration(w, r, bucket)
 				return
 			default:
-				writeXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+				xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 				return
 			}
 		}
@@ -218,7 +219,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.handleGetBucketVersioning(w, r, bucket)
 				return
 			default:
-				writeXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+				xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 				return
 			}
 		}
@@ -234,7 +235,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.handleDeleteBucketTagging(w, r, bucket)
 				return
 			default:
-				writeXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+				xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 				return
 			}
 		}
@@ -268,7 +269,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		writeXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 		return
 	}
 
@@ -288,7 +289,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.handleDeleteObjectTagging(w, r, bucket, key)
 			return
 		default:
-			writeXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 			return
 		}
 	}
@@ -311,7 +312,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pnStr := q.Get("partNumber")
 			pn, err := strconv.ParseInt(pnStr, 10, 32)
 			if err != nil || pn <= 0 {
-				writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "partNumber required")
+				xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "partNumber required")
 				return
 			}
 			partNum := int32(pn)
@@ -328,7 +329,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.handleAbortMultipart(w, r, bucket, key, uploadID)
 			return
 		default:
-			writeXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 			return
 		}
 	}
@@ -351,7 +352,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleDeleteObject(w, r, bucket, key)
 		return
 	default:
-		writeXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 		return
 	}
 }

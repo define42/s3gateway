@@ -11,6 +11,7 @@ import (
 "time"
 
 authz "github.com/define42/s3gateway/internal/authz"
+"github.com/define42/s3gateway/internal/xmlhelper"
 "github.com/aws/aws-sdk-go-v2/aws"
 "github.com/aws/aws-sdk-go-v2/service/s3"
 "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -641,13 +642,13 @@ func lifecycleRuleLegacyPrefix(r types.LifecycleRule) *string {
 func (s *server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
 	if !authz.CanCreateBucket(rules, bucket) {
-		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
 	cfg, err := decodeLifecycleConfigXML(r.Body)
 	if err != nil {
-		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "Invalid lifecycle configuration")
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Invalid lifecycle configuration")
 		return
 	}
 
@@ -656,7 +657,7 @@ func (s *server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r 
 		LifecycleConfiguration: cfg,
 	})
 	if err != nil {
-		writeUpstreamError(w, err)
+		xmlhelper.WriteUpstreamError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -665,7 +666,7 @@ func (s *server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r 
 func (s *server) handleGetBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
-		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -673,13 +674,13 @@ func (s *server) handleGetBucketLifecycleConfiguration(w http.ResponseWriter, r 
 		Bucket: &bucket,
 	})
 	if err != nil {
-		writeUpstreamError(w, err)
+		xmlhelper.WriteUpstreamError(w, err)
 		return
 	}
 
 	body, err := encodeLifecycleConfigXML(out.Rules)
 	if err != nil {
-		writeUpstreamError(w, err)
+		xmlhelper.WriteUpstreamError(w, err)
 		return
 	}
 
@@ -691,7 +692,7 @@ func (s *server) handleGetBucketLifecycleConfiguration(w http.ResponseWriter, r 
 func (s *server) handleDeleteBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
 	if !authz.CanDeleteBucket(rules, bucket) {
-		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -699,7 +700,7 @@ func (s *server) handleDeleteBucketLifecycleConfiguration(w http.ResponseWriter,
 		Bucket: &bucket,
 	})
 	if err != nil {
-		writeUpstreamError(w, err)
+		xmlhelper.WriteUpstreamError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

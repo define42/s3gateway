@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
+	"github.com/define42/s3gateway/internal/xmlhelper"
 )
 
 func TestParseRequestPayerHeader(t *testing.T) {
@@ -33,12 +34,12 @@ func TestParseRequestPayerHeader(t *testing.T) {
 			if tt.headerVal != "" {
 				h.Set("x-amz-request-payer", tt.headerVal)
 			}
-			got, err := parseRequestPayerHeader(h)
+			got, err := xmlhelper.ParseRequestPayerHeader(h)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("parseRequestPayerHeader() error = %v, wantErr %v", err, tt.wantErr)
+				t.Fatalf("xmlhelper.ParseRequestPayerHeader() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err == nil && got != tt.want {
-				t.Fatalf("parseRequestPayerHeader() = %q, want %q", got, tt.want)
+				t.Fatalf("xmlhelper.ParseRequestPayerHeader() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -59,12 +60,12 @@ func TestParseTaggingDirective(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseTaggingDirective(tt.input)
+			got, err := xmlhelper.ParseTaggingDirective(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("parseTaggingDirective() error = %v, wantErr %v", err, tt.wantErr)
+				t.Fatalf("xmlhelper.ParseTaggingDirective() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err == nil && got != tt.want {
-				t.Fatalf("parseTaggingDirective() = %q, want %q", got, tt.want)
+				t.Fatalf("xmlhelper.ParseTaggingDirective() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -85,12 +86,12 @@ func TestParseStorageClass(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseStorageClass(tt.input)
+			got, err := xmlhelper.ParseStorageClass(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("parseStorageClass() error = %v, wantErr %v", err, tt.wantErr)
+				t.Fatalf("xmlhelper.ParseStorageClass() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err == nil && got != tt.want {
-				t.Fatalf("parseStorageClass() = %q, want %q", got, tt.want)
+				t.Fatalf("xmlhelper.ParseStorageClass() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -111,12 +112,12 @@ func TestParseObjectCannedACL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseObjectCannedACL(tt.input)
+			got, err := xmlhelper.ParseObjectCannedACL(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("parseObjectCannedACL() error = %v, wantErr %v", err, tt.wantErr)
+				t.Fatalf("xmlhelper.ParseObjectCannedACL() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err == nil && got != tt.want {
-				t.Fatalf("parseObjectCannedACL() = %q, want %q", got, tt.want)
+				t.Fatalf("xmlhelper.ParseObjectCannedACL() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -134,13 +135,13 @@ func TestParseSSEWriteHeaders(t *testing.T) {
 	tests := []struct {
 		name    string
 		headers http.Header
-		want    sseWriteHeaders
+		want    xmlhelper.SSEWriteHeaders
 		wantErr bool
 	}{
 		{
 			name:    "empty",
 			headers: mkHeader(nil),
-			want:    sseWriteHeaders{},
+			want:    xmlhelper.SSEWriteHeaders{},
 			wantErr: false,
 		},
 		{
@@ -148,7 +149,7 @@ func TestParseSSEWriteHeaders(t *testing.T) {
 			headers: mkHeader(map[string]string{
 				"x-amz-server-side-encryption": "AES256",
 			}),
-			want: sseWriteHeaders{
+			want: xmlhelper.SSEWriteHeaders{
 				ServerSideEncryption: types.ServerSideEncryptionAes256,
 			},
 			wantErr: false,
@@ -160,7 +161,7 @@ func TestParseSSEWriteHeaders(t *testing.T) {
 				"x-amz-server-side-encryption-aws-kms-key-id": "key-arn",
 				"x-amz-server-side-encryption-context":        "{\"a\":\"b\"}",
 			}),
-			want: sseWriteHeaders{
+			want: xmlhelper.SSEWriteHeaders{
 				ServerSideEncryption:    types.ServerSideEncryptionAwsKms,
 				SSEKMSKeyID:             aws.String("key-arn"),
 				SSEKMSEncryptionContext: aws.String("{\"a\":\"b\"}"),
@@ -174,7 +175,7 @@ func TestParseSSEWriteHeaders(t *testing.T) {
 				"x-amz-server-side-encryption-aws-kms-key-id": "key-arn-dsse",
 				"x-amz-server-side-encryption-context":        "{\"c\":\"d\"}",
 			}),
-			want: sseWriteHeaders{
+			want: xmlhelper.SSEWriteHeaders{
 				ServerSideEncryption:    types.ServerSideEncryptionAwsKmsDsse,
 				SSEKMSKeyID:             aws.String("key-arn-dsse"),
 				SSEKMSEncryptionContext: aws.String("{\"c\":\"d\"}"),
@@ -209,7 +210,7 @@ func TestParseSSEWriteHeaders(t *testing.T) {
 				"x-amz-server-side-encryption-customer-key":       "Zm9v",
 				"x-amz-server-side-encryption-customer-key-md5":   "YmFy",
 			}),
-			want: sseWriteHeaders{
+			want: xmlhelper.SSEWriteHeaders{
 				SSECustomerAlgorithm: aws.String("AES256"),
 				SSECustomerKey:       aws.String("Zm9v"),
 				SSECustomerKeyMD5:    aws.String("YmFy"),
@@ -238,30 +239,30 @@ func TestParseSSEWriteHeaders(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseSSEWriteHeaders(tt.headers)
+			got, err := xmlhelper.ParseSSEWriteHeaders(tt.headers)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("parseSSEWriteHeaders() error = %v, wantErr %v", err, tt.wantErr)
+				t.Fatalf("xmlhelper.ParseSSEWriteHeaders() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err != nil {
 				return
 			}
 			if got.ServerSideEncryption != tt.want.ServerSideEncryption {
-				t.Fatalf("parseSSEWriteHeaders() ServerSideEncryption = %q, want %q", got.ServerSideEncryption, tt.want.ServerSideEncryption)
+				t.Fatalf("xmlhelper.ParseSSEWriteHeaders() ServerSideEncryption = %q, want %q", got.ServerSideEncryption, tt.want.ServerSideEncryption)
 			}
 			if aws.ToString(got.SSEKMSKeyID) != aws.ToString(tt.want.SSEKMSKeyID) {
-				t.Fatalf("parseSSEWriteHeaders() SSEKMSKeyID = %q, want %q", aws.ToString(got.SSEKMSKeyID), aws.ToString(tt.want.SSEKMSKeyID))
+				t.Fatalf("xmlhelper.ParseSSEWriteHeaders() SSEKMSKeyID = %q, want %q", aws.ToString(got.SSEKMSKeyID), aws.ToString(tt.want.SSEKMSKeyID))
 			}
 			if aws.ToString(got.SSEKMSEncryptionContext) != aws.ToString(tt.want.SSEKMSEncryptionContext) {
-				t.Fatalf("parseSSEWriteHeaders() SSEKMSEncryptionContext = %q, want %q", aws.ToString(got.SSEKMSEncryptionContext), aws.ToString(tt.want.SSEKMSEncryptionContext))
+				t.Fatalf("xmlhelper.ParseSSEWriteHeaders() SSEKMSEncryptionContext = %q, want %q", aws.ToString(got.SSEKMSEncryptionContext), aws.ToString(tt.want.SSEKMSEncryptionContext))
 			}
 			if aws.ToString(got.SSECustomerAlgorithm) != aws.ToString(tt.want.SSECustomerAlgorithm) {
-				t.Fatalf("parseSSEWriteHeaders() SSECustomerAlgorithm = %q, want %q", aws.ToString(got.SSECustomerAlgorithm), aws.ToString(tt.want.SSECustomerAlgorithm))
+				t.Fatalf("xmlhelper.ParseSSEWriteHeaders() SSECustomerAlgorithm = %q, want %q", aws.ToString(got.SSECustomerAlgorithm), aws.ToString(tt.want.SSECustomerAlgorithm))
 			}
 			if aws.ToString(got.SSECustomerKey) != aws.ToString(tt.want.SSECustomerKey) {
-				t.Fatalf("parseSSEWriteHeaders() SSECustomerKey = %q, want %q", aws.ToString(got.SSECustomerKey), aws.ToString(tt.want.SSECustomerKey))
+				t.Fatalf("xmlhelper.ParseSSEWriteHeaders() SSECustomerKey = %q, want %q", aws.ToString(got.SSECustomerKey), aws.ToString(tt.want.SSECustomerKey))
 			}
 			if aws.ToString(got.SSECustomerKeyMD5) != aws.ToString(tt.want.SSECustomerKeyMD5) {
-				t.Fatalf("parseSSEWriteHeaders() SSECustomerKeyMD5 = %q, want %q", aws.ToString(got.SSECustomerKeyMD5), aws.ToString(tt.want.SSECustomerKeyMD5))
+				t.Fatalf("xmlhelper.ParseSSEWriteHeaders() SSECustomerKeyMD5 = %q, want %q", aws.ToString(got.SSECustomerKeyMD5), aws.ToString(tt.want.SSECustomerKeyMD5))
 			}
 		})
 	}
@@ -285,12 +286,12 @@ func TestParseChecksumAlgorithmHeader(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseChecksumAlgorithmHeader(tt.input)
+			got, err := xmlhelper.ParseChecksumAlgorithmHeader(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("parseChecksumAlgorithmHeader() error = %v, wantErr %v", err, tt.wantErr)
+				t.Fatalf("xmlhelper.ParseChecksumAlgorithmHeader() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err == nil && got != tt.want {
-				t.Fatalf("parseChecksumAlgorithmHeader() = %q, want %q", got, tt.want)
+				t.Fatalf("xmlhelper.ParseChecksumAlgorithmHeader() = %q, want %q", got, tt.want)
 			}
 		})
 	}

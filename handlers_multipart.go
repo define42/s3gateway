@@ -9,6 +9,7 @@ import (
 "strings"
 
 authz "github.com/define42/s3gateway/internal/authz"
+"github.com/define42/s3gateway/internal/xmlhelper"
 "github.com/aws/aws-sdk-go-v2/aws"
 v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 "github.com/aws/aws-sdk-go-v2/service/s3"
@@ -19,7 +20,7 @@ sigv4 "github.com/define42/s3gateway/internal/sigv4"
 func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := rulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
-		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -43,7 +44,7 @@ func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 	if v := q.Get("max-uploads"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 32)
 		if err != nil || n <= 0 {
-			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-uploads")
+			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-uploads")
 			return
 		}
 		in.MaxUploads = aws.Int32(int32(n))
@@ -51,14 +52,14 @@ func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 
 	out, err := s.up.ListMultipartUploads(r.Context(), in)
 	if err != nil {
-		writeUpstreamError(w, err)
+		xmlhelper.WriteUpstreamError(w, err)
 		return
 	}
 
-	xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(xw)
+	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
+	defer xmlhelper.FlushXMLWriterResponse(xw)
 
-	encodeS3RootStart(xw, "ListMultipartUploadsResult")
+	xmlhelper.EncodeS3RootStart(xw, "ListMultipartUploadsResult")
 	xw.Elem("Bucket", bucket)
 	if out.KeyMarker != nil {
 		xw.Elem("KeyMarker", *out.KeyMarker)
@@ -82,7 +83,7 @@ func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 		xw.ElemInt("MaxUploads", int64(*out.MaxUploads))
 	}
 	xw.ElemBool("IsTruncated", aws.ToBool(out.IsTruncated))
-	encodeCommonPrefixes(xw, out.CommonPrefixes)
+	xmlhelper.EncodeCommonPrefixes(xw, out.CommonPrefixes)
 	for _, u := range out.Uploads {
 		xw.Start("Upload")
 		if u.Key != nil {
@@ -92,7 +93,7 @@ func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 			xw.Elem("UploadId", *u.UploadId)
 		}
 		if u.Initiated != nil {
-			xw.Elem("Initiated", formatS3Time(*u.Initiated))
+			xw.Elem("Initiated", xmlhelper.FormatS3Time(*u.Initiated))
 		}
 		if u.StorageClass != "" {
 			xw.Elem("StorageClass", string(u.StorageClass))
@@ -103,8 +104,8 @@ func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 		if u.ChecksumType != "" {
 			xw.Elem("ChecksumType", string(u.ChecksumType))
 		}
-		encodeOwnerDisplayNameThenID(xw, u.Owner)
-		encodeInitiatorDisplayNameThenID(xw, u.Initiator)
+		xmlhelper.EncodeOwnerDisplayNameThenID(xw, u.Owner)
+		xmlhelper.EncodeInitiatorDisplayNameThenID(xw, u.Initiator)
 		xw.End("Upload")
 	}
 	xw.End("ListMultipartUploadsResult")
@@ -122,7 +123,7 @@ type completeMultipartUpload struct {
 func (s *server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := rulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
-		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -130,22 +131,22 @@ func (s *server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 	meta := extractAmzMeta(r.Header)
 	meta = ensureUploadedByMetadata(meta, uploaderFromCtx(r))
 	if missing := missingRequiredUploadMetadata(meta, s.cfg.RequiredUploadMetadataKeys); len(missing) > 0 {
-		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
 		return
 	}
 	expires, err := parseExpiresHeader(r.Header)
 	if err != nil {
-		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid Expires header")
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid Expires header")
 		return
 	}
-	sse, err := parseSSEWriteHeaders(r.Header)
+	sse, err := xmlhelper.ParseSSEWriteHeaders(r.Header)
 	if err != nil {
-		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid server-side encryption headers")
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid server-side encryption headers")
 		return
 	}
-	checksum, err := parseChecksumWriteHeaders(r.Header)
+	checksum, err := xmlhelper.ParseChecksumWriteHeaders(r.Header)
 	if err != nil {
-		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum headers")
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum headers")
 		return
 	}
 
@@ -172,14 +173,14 @@ func (s *server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 
 	out, err := s.up.CreateMultipartUpload(r.Context(), in)
 	if err != nil {
-		writeUpstreamError(w, err)
+		xmlhelper.WriteUpstreamError(w, err)
 		return
 	}
 
-	xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(xw)
+	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
+	defer xmlhelper.FlushXMLWriterResponse(xw)
 
-	encodeS3RootStart(xw, "InitiateMultipartUploadResult")
+	xmlhelper.EncodeS3RootStart(xw, "InitiateMultipartUploadResult")
 	xw.Elem("Bucket", bucket)
 	xw.Elem("Key", key)
 	xw.Elem("UploadId", aws.ToString(out.UploadId))
@@ -189,39 +190,39 @@ func (s *server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 func (s *server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string, partNumber int32) {
 	rules := rulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
-		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
 	verifier, err := sigv4.ChunkSignatureVerifierFromRequest(r)
 	if err != nil {
-		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "Unsupported or invalid streaming payload signature")
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Unsupported or invalid streaming payload signature")
 		return
 	}
 
 	body, cl, err := sigv4.DecodeBodyForS3Write(r, verifier)
 	if err != nil {
 		if errors.Is(err, sigv4.ErrContentLengthRequired) || errors.Is(err, sigv4.ErrMissingDecodedContentLength) || errors.Is(err, sigv4.ErrInvalidDecodedContentLength) {
-			writeXMLError(w, http.StatusLengthRequired, "MissingContentLength", "Content-Length required")
+			xmlhelper.WriteXMLError(w, http.StatusLengthRequired, "MissingContentLength", "Content-Length required")
 			return
 		}
-		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "Invalid request body")
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Invalid request body")
 		return
 	}
 	defer body.Close()
-	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := parseSSECustomerHeaders(r.Header)
+	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := xmlhelper.ParseSSECustomerHeaders(r.Header)
 	if err != nil {
-		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
 		return
 	}
-	checksum, err := parseChecksumWriteHeaders(r.Header)
+	checksum, err := xmlhelper.ParseChecksumWriteHeaders(r.Header)
 	if err != nil {
-		writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum headers")
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum headers")
 		return
 	}
 	contentMD5 := strings.TrimSpace(r.Header.Get("Content-MD5"))
 	if contentMD5 != "" && checksum.ChecksumAlgorithm != "" {
-		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "Content-MD5 cannot be combined with x-amz-checksum-algorithm")
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Content-MD5 cannot be combined with x-amz-checksum-algorithm")
 		return
 	}
 
@@ -256,10 +257,10 @@ func (s *server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 	)
 	if err != nil {
 		if sigv4.IsChunkSignatureValidationError(err) {
-			writeXMLError(w, http.StatusBadRequest, "SignatureDoesNotMatch", "Invalid aws-chunked chunk signature")
+			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "SignatureDoesNotMatch", "Invalid aws-chunked chunk signature")
 			return
 		}
-		writeUpstreamError(w, err)
+		xmlhelper.WriteUpstreamError(w, err)
 		return
 	}
 
@@ -272,7 +273,7 @@ func (s *server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 func (s *server) handleListParts(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
 	rules := rulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
-		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -285,7 +286,7 @@ func (s *server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 	if pnmStr := r.URL.Query().Get("part-number-marker"); pnmStr != "" {
 		pnm, err := strconv.Atoi(pnmStr)
 		if err != nil || pnm < 0 {
-			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid part-number-marker")
+			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid part-number-marker")
 			return
 		}
 		in.PartNumberMarker = aws.String(strconv.Itoa(pnm))
@@ -293,7 +294,7 @@ func (s *server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 	if mpStr := r.URL.Query().Get("max-parts"); mpStr != "" {
 		mp, err := strconv.ParseInt(mpStr, 10, 32)
 		if err != nil || mp <= 0 {
-			writeXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-parts")
+			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-parts")
 			return
 		}
 		in.MaxParts = aws.Int32(int32(mp))
@@ -301,14 +302,14 @@ func (s *server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 
 	out, err := s.up.ListParts(r.Context(), in)
 	if err != nil {
-		writeUpstreamError(w, err)
+		xmlhelper.WriteUpstreamError(w, err)
 		return
 	}
 
-	xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(xw)
+	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
+	defer xmlhelper.FlushXMLWriterResponse(xw)
 
-	encodeS3RootStart(xw, "ListPartsResult")
+	xmlhelper.EncodeS3RootStart(xw, "ListPartsResult")
 	xw.Elem("Bucket", bucket)
 	xw.Elem("Key", key)
 	xw.Elem("UploadId", uploadID)
@@ -320,7 +321,7 @@ func (s *server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 		xw.Start("Part")
 		xw.ElemInt("PartNumber", int64(aws.ToInt32(p.PartNumber)))
 		if p.LastModified != nil {
-			xw.Elem("LastModified", formatS3Time(*p.LastModified))
+			xw.Elem("LastModified", xmlhelper.FormatS3Time(*p.LastModified))
 		}
 		if p.ETag != nil {
 			xw.Elem("ETag", *p.ETag)
@@ -335,13 +336,13 @@ func (s *server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 func (s *server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
 	rules := rulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
-		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
 	var cmu completeMultipartUpload
 	if err := xml.NewDecoder(r.Body).Decode(&cmu); err != nil {
-		writeXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid XML")
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid XML")
 		return
 	}
 
@@ -364,7 +365,7 @@ func (s *server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		})
 	}
 	if len(parts) == 0 {
-		writeXMLError(w, http.StatusBadRequest, "InvalidRequest", "No parts provided")
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "No parts provided")
 		return
 	}
 	sort.Slice(parts, func(i, j int) bool {
@@ -382,19 +383,19 @@ func (s *server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 
 	out, err := s.up.CompleteMultipartUpload(r.Context(), in)
 	if err != nil {
-		writeUpstreamError(w, err)
+		xmlhelper.WriteUpstreamError(w, err)
 		return
 	}
 
-	xw := beginXMLWriterResponse(w, http.StatusOK)
-	defer flushXMLWriterResponse(xw)
+	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
+	defer xmlhelper.FlushXMLWriterResponse(xw)
 
-	encodeS3RootStart(xw, "CompleteMultipartUploadResult")
+	xmlhelper.EncodeS3RootStart(xw, "CompleteMultipartUploadResult")
 	xw.Elem("Bucket", bucket)
 	xw.Elem("Key", key)
 	if out.ETag != nil {
 		xw.Start("ETag")
-		xw.RawString(`"` + xmlEscape(strings.Trim(*out.ETag, `"`)) + `"`)
+		xw.RawString(`"` + xmlhelper.XMLEscape(strings.Trim(*out.ETag, `"`)) + `"`)
 		xw.End("ETag")
 	}
 	xw.End("CompleteMultipartUploadResult")
@@ -403,7 +404,7 @@ func (s *server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 func (s *server) handleAbortMultipart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
 	rules := rulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
-		writeXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 	_, err := s.up.AbortMultipartUpload(r.Context(), &s3.AbortMultipartUploadInput{
@@ -412,7 +413,7 @@ func (s *server) handleAbortMultipart(w http.ResponseWriter, r *http.Request, bu
 		UploadId: &uploadID,
 	})
 	if err != nil {
-		writeUpstreamError(w, err)
+		xmlhelper.WriteUpstreamError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
