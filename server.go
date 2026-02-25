@@ -15,6 +15,7 @@ import (
 	"github.com/define42/s3gateway/internal/config"
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
+	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 	adminpage "github.com/define42/s3gateway/internal/adminpage"
 	"golang.org/x/sync/singleflight"
 )
@@ -25,8 +26,6 @@ const defaultReadyCheckTimeout = 2 * time.Second
 type ctxKey string
 
 const ctxRulesKey ctxKey = "rules"
-const ctxSigV4AuthKey ctxKey = "sigv4-auth"
-const ctxSigV4SecretKey ctxKey = "sigv4-secret"
 const ctxUploaderKey ctxKey = "uploader-upn"
 
 type server struct {
@@ -94,12 +93,12 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 			return
 		}
 
-		auth, err := parseSigV4Authorization(r)
+		auth, err := sigv4.ParseSigV4Authorization(r)
 		if err != nil || auth.Service != "s3" {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
-		if err := validateSigV4RequestTime(auth, time.Now(), s.cfg.SigV4MaxSkew); err != nil {
+		if err := sigv4.ValidateSigV4RequestTime(auth, time.Now(), s.cfg.SigV4MaxSkew); err != nil {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
@@ -110,7 +109,7 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 			return
 		}
 
-		if err := verifySigV4(r, auth, secretKey); err != nil {
+		if err := sigv4.VerifySigV4(r, auth, secretKey); err != nil {
 			writeXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
@@ -123,8 +122,8 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 
 		rules := authz.RulesFromGroups(grps)
 		ctx := context.WithValue(r.Context(), ctxRulesKey, rules)
-		ctx = context.WithValue(ctx, ctxSigV4AuthKey, auth)
-		ctx = context.WithValue(ctx, ctxSigV4SecretKey, secretKey)
+		ctx = sigv4.WithSigV4Auth(ctx, auth)
+		ctx = sigv4.WithSigV4Secret(ctx, secretKey)
 		ctx = context.WithValue(ctx, ctxUploaderKey, upn)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -137,24 +136,6 @@ func rulesFromCtx(r *http.Request) []authz.Rule {
 	}
 	rules, _ := v.([]authz.Rule)
 	return rules
-}
-
-func sigV4AuthFromCtx(r *http.Request) *sigv4Auth {
-	v := r.Context().Value(ctxSigV4AuthKey)
-	if v == nil {
-		return nil
-	}
-	auth, _ := v.(*sigv4Auth)
-	return auth
-}
-
-func sigV4SecretFromCtx(r *http.Request) string {
-	v := r.Context().Value(ctxSigV4SecretKey)
-	if v == nil {
-		return ""
-	}
-	secret, _ := v.(string)
-	return secret
 }
 
 func uploaderFromCtx(r *http.Request) string {

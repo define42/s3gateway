@@ -1,8 +1,9 @@
-package main
+package sigv4
 
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -21,7 +22,7 @@ import (
 //
 // We verify signatures using the secret derived from access key credentials.
 // Real auth is then done by decoding accessKey -> upn:pass and binding to AD.
-type sigv4Auth struct {
+type SigV4Auth struct {
 	AccessKey     string // #nosec G117 -- AccessKey is a public identifier, not a secret
 	Date          string
 	Region        string
@@ -32,18 +33,18 @@ type sigv4Auth struct {
 }
 
 var (
-	errInvalidAmzDate             = errors.New("invalid x-amz-date")
-	errSigV4DateScopeMismatch     = errors.New("credential scope date mismatch")
-	errSigV4RequestOutsideMaxSkew = errors.New("request outside allowed time skew")
+	ErrInvalidAmzDate             = errors.New("invalid x-amz-date")
+	ErrSigV4DateScopeMismatch     = errors.New("credential scope date mismatch")
+	ErrSigV4RequestOutsideMaxSkew = errors.New("request outside allowed time skew")
 )
 
-func validateSigV4RequestTime(auth *sigv4Auth, now time.Time, maxSkew time.Duration) error {
+func ValidateSigV4RequestTime(auth *SigV4Auth, now time.Time, maxSkew time.Duration) error {
 	amzTime, err := time.Parse("20060102T150405Z", strings.TrimSpace(auth.AmzDate))
 	if err != nil {
-		return errInvalidAmzDate
+		return ErrInvalidAmzDate
 	}
 	if auth.Date != amzTime.UTC().Format("20060102") {
-		return errSigV4DateScopeMismatch
+		return ErrSigV4DateScopeMismatch
 	}
 	if maxSkew <= 0 {
 		return nil
@@ -51,12 +52,12 @@ func validateSigV4RequestTime(auth *sigv4Auth, now time.Time, maxSkew time.Durat
 
 	delta := now.UTC().Sub(amzTime.UTC())
 	if delta > maxSkew || delta < -maxSkew {
-		return errSigV4RequestOutsideMaxSkew
+		return ErrSigV4RequestOutsideMaxSkew
 	}
 	return nil
 }
 
-func parseSigV4Authorization(r *http.Request) (*sigv4Auth, error) {
+func ParseSigV4Authorization(r *http.Request) (*SigV4Auth, error) {
 	az := r.Header.Get("Authorization")
 	if az == "" {
 		return nil, errors.New("missing Authorization")
@@ -96,12 +97,12 @@ func parseSigV4Authorization(r *http.Request) (*sigv4Auth, error) {
 		sh[i] = strings.ToLower(strings.TrimSpace(sh[i]))
 	}
 
-	return &sigv4Auth{
+	return &SigV4Auth{
 		AccessKey:     accessKey,
 		Date:          date,
 		Region:        region,
 		Service:       service,
-		SignedHeaders: sh,
+		SignedHeaders:  sh,
 		SignatureHex:  strings.ToLower(sig),
 		AmzDate:       amzDate,
 	}, nil
@@ -125,13 +126,13 @@ func splitAuthParts(s string) map[string]string {
 	return out
 }
 
-func verifySigV4(r *http.Request, auth *sigv4Auth, secret string) error {
+func VerifySigV4(r *http.Request, auth *SigV4Auth, secret string) error {
 	payloadHash := r.Header.Get("x-amz-content-sha256")
 	if payloadHash == "" {
 		return errors.New("missing x-amz-content-sha256")
 	}
 
-	canonURI := canonicalURI(r.URL.EscapedPath())
+	canonURI := CanonicalURI(r.URL.EscapedPath())
 	canonQuery := canonicalQuery(r.URL.Query())
 	canonHeaders, signedHeadersStr, err := canonicalHeaders(r, auth.SignedHeaders)
 	if err != nil {
@@ -155,8 +156,8 @@ func verifySigV4(r *http.Request, auth *sigv4Auth, secret string) error {
 		hex.EncodeToString(crHash[:]),
 	}, "\n")
 
-	signingKey := deriveSigningKey(secret, auth.Date, auth.Region, auth.Service)
-	gotSig := hmacSHA256Hex(signingKey, []byte(stringToSign))
+	signingKey := DeriveSigningKey(secret, auth.Date, auth.Region, auth.Service)
+	gotSig := HmacSHA256Hex(signingKey, []byte(stringToSign))
 
 	if !constantTimeEq(auth.SignatureHex, gotSig) {
 		return errors.New("signature mismatch")
@@ -164,7 +165,7 @@ func verifySigV4(r *http.Request, auth *sigv4Auth, secret string) error {
 	return nil
 }
 
-func canonicalURI(escapedPath string) string {
+func CanonicalURI(escapedPath string) string {
 	if escapedPath == "" {
 		return "/"
 	}
@@ -275,7 +276,7 @@ func awsURLEncode(s string, encodeSlash bool) string {
 	return b.String()
 }
 
-func deriveSigningKey(secret, date, region, service string) []byte {
+func DeriveSigningKey(secret, date, region, service string) []byte {
 	kDate := hmacSHA256([]byte("AWS4"+secret), []byte(date))
 	kRegion := hmacSHA256(kDate, []byte(region))
 	kService := hmacSHA256(kRegion, []byte(service))
@@ -287,7 +288,7 @@ func hmacSHA256(key, data []byte) []byte {
 	m.Write(data)
 	return m.Sum(nil)
 }
-func hmacSHA256Hex(key, data []byte) string {
+func HmacSHA256Hex(key, data []byte) string {
 	return hex.EncodeToString(hmacSHA256(key, data))
 }
 func constantTimeEq(a, b string) bool {
@@ -304,15 +305,15 @@ func constantTimeEq(a, b string) bool {
 }
 
 var (
-	errMissingDecodedContentLength = errors.New("missing x-amz-decoded-content-length")
-	errInvalidDecodedContentLength = errors.New("invalid x-amz-decoded-content-length")
-	errContentLengthRequired       = errors.New("content length required")
-	errUnsupportedStreamingMode    = errors.New("unsupported streaming payload mode")
-	errMissingSigV4AuthContext     = errors.New("missing sigv4 auth context")
-	errMissingSigV4SecretContext   = errors.New("missing sigv4 secret context")
-	errMissingChunkSignature       = errors.New("missing aws-chunked chunk signature")
-	errInvalidChunkSignature       = errors.New("invalid aws-chunked chunk signature")
-	errInvalidChunkHeader          = errors.New("invalid aws-chunked chunk header")
+	ErrMissingDecodedContentLength = errors.New("missing x-amz-decoded-content-length")
+	ErrInvalidDecodedContentLength = errors.New("invalid x-amz-decoded-content-length")
+	ErrContentLengthRequired       = errors.New("content length required")
+	ErrUnsupportedStreamingMode    = errors.New("unsupported streaming payload mode")
+	ErrMissingSigV4AuthContext     = errors.New("missing sigv4 auth context")
+	ErrMissingSigV4SecretContext   = errors.New("missing sigv4 secret context")
+	ErrMissingChunkSignature       = errors.New("missing aws-chunked chunk signature")
+	ErrInvalidChunkSignature       = errors.New("invalid aws-chunked chunk signature")
+	ErrInvalidChunkHeader          = errors.New("invalid aws-chunked chunk header")
 )
 
 func isAWSChunkedPayload(h http.Header) bool {
@@ -326,38 +327,38 @@ func streamingPayloadMode(h http.Header) string {
 func parseDecodedContentLength(h http.Header) (int64, error) {
 	raw := strings.TrimSpace(h.Get("x-amz-decoded-content-length"))
 	if raw == "" {
-		return 0, errMissingDecodedContentLength
+		return 0, ErrMissingDecodedContentLength
 	}
 	n, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || n < 0 {
-		return 0, errInvalidDecodedContentLength
+		return 0, ErrInvalidDecodedContentLength
 	}
 	return n, nil
 }
 
-type awsChunkSignatureVerifier struct {
+type AWSChunkSignatureVerifier struct {
 	signingKey []byte
 	amzDate    string
 	scope      string
-	prevSig    string
+	PrevSig    string
 }
 
-func newAWSChunkSignatureVerifier(auth *sigv4Auth, secret string) *awsChunkSignatureVerifier {
-	return &awsChunkSignatureVerifier{
-		signingKey: deriveSigningKey(secret, auth.Date, auth.Region, auth.Service),
+func NewAWSChunkSignatureVerifier(auth *SigV4Auth, secret string) *AWSChunkSignatureVerifier {
+	return &AWSChunkSignatureVerifier{
+		signingKey: DeriveSigningKey(secret, auth.Date, auth.Region, auth.Service),
 		amzDate:    auth.AmzDate,
 		scope:      fmt.Sprintf("%s/%s/%s/aws4_request", auth.Date, auth.Region, auth.Service),
-		prevSig:    strings.ToLower(auth.SignatureHex),
+		PrevSig:    strings.ToLower(auth.SignatureHex),
 	}
 }
 
-func (v *awsChunkSignatureVerifier) verifyChunk(signatureHex string, chunk []byte) error {
+func (v *AWSChunkSignatureVerifier) verifyChunk(signatureHex string, chunk []byte) error {
 	sig := strings.ToLower(strings.TrimSpace(signatureHex))
 	if len(sig) != 64 {
-		return fmt.Errorf("%w: invalid signature length", errInvalidChunkSignature)
+		return fmt.Errorf("%w: invalid signature length", ErrInvalidChunkSignature)
 	}
 	if _, err := hex.DecodeString(sig); err != nil {
-		return fmt.Errorf("%w: invalid signature encoding", errInvalidChunkSignature)
+		return fmt.Errorf("%w: invalid signature encoding", ErrInvalidChunkSignature)
 	}
 
 	emptyHash := sha256.Sum256(nil)
@@ -366,44 +367,82 @@ func (v *awsChunkSignatureVerifier) verifyChunk(signatureHex string, chunk []byt
 		"AWS4-HMAC-SHA256-PAYLOAD",
 		v.amzDate,
 		v.scope,
-		v.prevSig,
+		v.PrevSig,
 		hex.EncodeToString(emptyHash[:]),
 		hex.EncodeToString(chunkHash[:]),
 	}, "\n")
 
-	expected := hmacSHA256Hex(v.signingKey, []byte(stringToSign))
+	expected := HmacSHA256Hex(v.signingKey, []byte(stringToSign))
 	if !constantTimeEq(sig, expected) {
-		return fmt.Errorf("%w: signature mismatch", errInvalidChunkSignature)
+		return fmt.Errorf("%w: signature mismatch", ErrInvalidChunkSignature)
 	}
-	v.prevSig = sig
+	v.PrevSig = sig
 	return nil
 }
 
-func chunkSignatureVerifierFromRequest(r *http.Request) (*awsChunkSignatureVerifier, error) {
+// CtxKey is the type used for context keys in the sigv4 package.
+type CtxKey string
+
+const (
+	CtxSigV4AuthKey   CtxKey = "sigv4-auth"
+	CtxSigV4SecretKey CtxKey = "sigv4-secret"
+)
+
+// SigV4AuthFromCtx retrieves the SigV4Auth from the request context.
+func SigV4AuthFromCtx(r *http.Request) *SigV4Auth {
+	v := r.Context().Value(CtxSigV4AuthKey)
+	if v == nil {
+		return nil
+	}
+	auth, _ := v.(*SigV4Auth)
+	return auth
+}
+
+// SigV4SecretFromCtx retrieves the SigV4 secret from the request context.
+func SigV4SecretFromCtx(r *http.Request) string {
+	v := r.Context().Value(CtxSigV4SecretKey)
+	if v == nil {
+		return ""
+	}
+	secret, _ := v.(string)
+	return secret
+}
+
+// WithSigV4Auth returns a context with the SigV4Auth set.
+func WithSigV4Auth(ctx context.Context, auth *SigV4Auth) context.Context {
+	return context.WithValue(ctx, CtxSigV4AuthKey, auth)
+}
+
+// WithSigV4Secret returns a context with the SigV4 secret set.
+func WithSigV4Secret(ctx context.Context, secret string) context.Context {
+	return context.WithValue(ctx, CtxSigV4SecretKey, secret)
+}
+
+func ChunkSignatureVerifierFromRequest(r *http.Request) (*AWSChunkSignatureVerifier, error) {
 	if !isAWSChunkedPayload(r.Header) {
 		return nil, nil
 	}
 
 	mode := streamingPayloadMode(r.Header)
 	if mode != "STREAMING-AWS4-HMAC-SHA256-PAYLOAD" {
-		return nil, fmt.Errorf("%w: %s", errUnsupportedStreamingMode, mode)
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedStreamingMode, mode)
 	}
 
-	auth := sigV4AuthFromCtx(r)
+	auth := SigV4AuthFromCtx(r)
 	if auth == nil {
-		return nil, errMissingSigV4AuthContext
+		return nil, ErrMissingSigV4AuthContext
 	}
-	secret := sigV4SecretFromCtx(r)
+	secret := SigV4SecretFromCtx(r)
 	if strings.TrimSpace(secret) == "" {
-		return nil, errMissingSigV4SecretContext
+		return nil, ErrMissingSigV4SecretContext
 	}
-	return newAWSChunkSignatureVerifier(auth, secret), nil
+	return NewAWSChunkSignatureVerifier(auth, secret), nil
 }
 
-func isChunkSignatureValidationError(err error) bool {
-	return errors.Is(err, errInvalidChunkSignature) ||
-		errors.Is(err, errMissingChunkSignature) ||
-		errors.Is(err, errInvalidChunkHeader)
+func IsChunkSignatureValidationError(err error) bool {
+	return errors.Is(err, ErrInvalidChunkSignature) ||
+		errors.Is(err, ErrMissingChunkSignature) ||
+		errors.Is(err, ErrInvalidChunkHeader)
 }
 
 type awsChunkedReadCloser struct {
@@ -415,13 +454,13 @@ func (r *awsChunkedReadCloser) Close() error { return r.c.Close() }
 
 type awsChunkedReader struct {
 	br       *bufio.Reader
-	verifier *awsChunkSignatureVerifier
+	verifier *AWSChunkSignatureVerifier
 	buf      []byte
 	offset   int
 	done     bool
 }
 
-func newAWSChunkedReader(r io.Reader, verifier *awsChunkSignatureVerifier) *awsChunkedReader {
+func newAWSChunkedReader(r io.Reader, verifier *AWSChunkSignatureVerifier) *awsChunkedReader {
 	return &awsChunkedReader{br: bufio.NewReader(r), verifier: verifier}
 }
 
@@ -461,7 +500,7 @@ func (r *awsChunkedReader) beginChunk() error {
 	if n == 0 {
 		if r.verifier != nil {
 			if sig == "" {
-				return errMissingChunkSignature
+				return ErrMissingChunkSignature
 			}
 			if err := r.verifier.verifyChunk(sig, nil); err != nil {
 				return err
@@ -475,7 +514,7 @@ func (r *awsChunkedReader) beginChunk() error {
 	}
 
 	if n > int64(^uint(0)>>1) {
-		return fmt.Errorf("%w: chunk too large", errInvalidChunkHeader)
+		return fmt.Errorf("%w: chunk too large", ErrInvalidChunkHeader)
 	}
 	chunk := make([]byte, int(n))
 	if _, err := io.ReadFull(r.br, chunk); err != nil {
@@ -487,7 +526,7 @@ func (r *awsChunkedReader) beginChunk() error {
 
 	if r.verifier != nil {
 		if sig == "" {
-			return errMissingChunkSignature
+			return ErrMissingChunkSignature
 		}
 		if err := r.verifier.verifyChunk(sig, chunk); err != nil {
 			return err
@@ -502,16 +541,16 @@ func (r *awsChunkedReader) beginChunk() error {
 func parseAWSChunkHeader(line string) (int64, string, error) {
 	line = strings.TrimRight(line, "\r\n")
 	if line == "" {
-		return 0, "", fmt.Errorf("%w: empty chunk header", errInvalidChunkHeader)
+		return 0, "", fmt.Errorf("%w: empty chunk header", ErrInvalidChunkHeader)
 	}
 	parts := strings.Split(line, ";")
 	chunkSizeHex := strings.TrimSpace(parts[0])
 	if chunkSizeHex == "" {
-		return 0, "", fmt.Errorf("%w: missing chunk size", errInvalidChunkHeader)
+		return 0, "", fmt.Errorf("%w: missing chunk size", ErrInvalidChunkHeader)
 	}
 	n, err := strconv.ParseInt(chunkSizeHex, 16, 64)
 	if err != nil || n < 0 {
-		return 0, "", fmt.Errorf("%w: invalid chunk size", errInvalidChunkHeader)
+		return 0, "", fmt.Errorf("%w: invalid chunk size", ErrInvalidChunkHeader)
 	}
 
 	var sig string
@@ -559,14 +598,14 @@ func (r *awsChunkedReader) consumeTrailers() error {
 	}
 }
 
-func decodeBodyForS3Write(r *http.Request, verifier *awsChunkSignatureVerifier) (io.ReadCloser, int64, error) {
+func DecodeBodyForS3Write(r *http.Request, verifier *AWSChunkSignatureVerifier) (io.ReadCloser, int64, error) {
 	if isAWSChunkedPayload(r.Header) {
 		mode := streamingPayloadMode(r.Header)
 		if mode != "STREAMING-AWS4-HMAC-SHA256-PAYLOAD" {
-			return nil, 0, fmt.Errorf("%w: %s", errUnsupportedStreamingMode, mode)
+			return nil, 0, fmt.Errorf("%w: %s", ErrUnsupportedStreamingMode, mode)
 		}
 		if verifier == nil {
-			return nil, 0, errMissingSigV4AuthContext
+			return nil, 0, ErrMissingSigV4AuthContext
 		}
 		decodedLen, err := parseDecodedContentLength(r.Header)
 		if err != nil {
@@ -578,8 +617,7 @@ func decodeBodyForS3Write(r *http.Request, verifier *awsChunkSignatureVerifier) 
 		}, decodedLen, nil
 	}
 	if r.ContentLength < 0 {
-		return nil, 0, errContentLengthRequired
+		return nil, 0, ErrContentLengthRequired
 	}
 	return r.Body, r.ContentLength, nil
 }
-
