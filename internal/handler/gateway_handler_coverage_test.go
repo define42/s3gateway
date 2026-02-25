@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"bytes"
@@ -548,7 +548,7 @@ func TestCoverageHelpersLifecycleAndShutdown(t *testing.T) {
 		t.Fatalf("lifecycleRuleLegacyPrefix(zero) = %v, want nil", got)
 	}
 
-	if got := effectiveShutdownTimeout(config.Config{}); got <= 0 {
-		t.Fatalf("effectiveShutdownTimeout() should apply defaults, got=%s", got)
+	if got := EffectiveShutdownTimeout(config.Config{}); got <= 0 {
+		t.Fatalf("EffectiveShutdownTimeout() should apply defaults, got=%s", got)
 	}
 }
