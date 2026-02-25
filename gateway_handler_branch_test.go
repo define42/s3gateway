@@ -13,13 +13,14 @@ import (
 	"time"
 
 	"github.com/define42/s3gateway/internal/config"
+	authz "github.com/define42/s3gateway/internal/authz"
 )
 
-func reqWithRules(req *http.Request, rules []Rule) *http.Request {
+func reqWithRules(req *http.Request, rules []authz.Rule) *http.Request {
 	return req.WithContext(context.WithValue(req.Context(), ctxRulesKey, rules))
 }
 
-func reqWithRulesAndSigV4(req *http.Request, rules []Rule, auth *sigv4Auth) *http.Request {
+func reqWithRulesAndSigV4(req *http.Request, rules []authz.Rule, auth *sigv4Auth) *http.Request {
 	ctx := context.WithValue(req.Context(), ctxRulesKey, rules)
 	ctx = context.WithValue(ctx, ctxSigV4AuthKey, auth)
 	ctx = context.WithValue(ctx, ctxSigV4SecretKey, "secret")
@@ -41,7 +42,7 @@ func TestHandleCopyObjectValidationMatrix(t *testing.T) {
 	tests := []struct {
 		name       string
 		mutate     func(*http.Request)
-		rules      []Rule
+		rules      []authz.Rule
 		wantStatus int
 	}{
 		{
@@ -270,7 +271,7 @@ func TestHandleUploadPartCopyValidationMatrix(t *testing.T) {
 	tests := []struct {
 		name       string
 		mutate     func(*http.Request)
-		rules      []Rule
+		rules      []authz.Rule
 		wantStatus int
 	}{
 		{
@@ -578,7 +579,7 @@ func TestHandleDeleteObjectsValidationMatrix(t *testing.T) {
 		name       string
 		body       string
 		headers    map[string]string
-		rules      []Rule
+		rules      []authz.Rule
 		wantStatus int
 	}{
 		{
@@ -1411,9 +1412,9 @@ func TestHandleListBucketsAllowsAnyPermission(t *testing.T) {
 	defer cleanup()
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req = reqWithRules(req, []Rule{{
+	req = reqWithRules(req, []authz.Rule{{
 		BucketPrefix: "team2-",
-		Perm:         PermDeleteBucket,
+		Perm:         authz.PermDeleteBucket,
 	}})
 	rr := httptest.NewRecorder()
 
@@ -1759,9 +1760,9 @@ func TestBucketLifecycleHandlersBranches(t *testing.T) {
 		defer cleanup()
 
 		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?lifecycle", strings.NewReader(validLifecycle))
-		req = reqWithRules(req, []Rule{{
+		req = reqWithRules(req, []authz.Rule{{
 			BucketPrefix: "team2-",
-			Perm:         PermWrite,
+			Perm:         authz.PermWrite,
 		}})
 		rr := httptest.NewRecorder()
 		gw.handlePutBucketLifecycleConfiguration(rr, req, "team2-bucket")
@@ -1777,9 +1778,9 @@ func TestBucketLifecycleHandlersBranches(t *testing.T) {
 		defer cleanup()
 
 		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?lifecycle", strings.NewReader(validLifecycle))
-		req = reqWithRules(req, []Rule{{
+		req = reqWithRules(req, []authz.Rule{{
 			BucketPrefix: "team2-",
-			Perm:         PermCreateBucket,
+			Perm:         authz.PermCreateBucket,
 		}})
 		rr := httptest.NewRecorder()
 		gw.handlePutBucketLifecycleConfiguration(rr, req, "team2-bucket")
@@ -1909,9 +1910,9 @@ func TestBucketLifecycleHandlersBranches(t *testing.T) {
 		defer cleanup()
 
 		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?lifecycle", nil)
-		req = reqWithRules(req, []Rule{{
+		req = reqWithRules(req, []authz.Rule{{
 			BucketPrefix: "team2-",
-			Perm:         PermWrite,
+			Perm:         authz.PermWrite,
 		}})
 		rr := httptest.NewRecorder()
 		gw.handleDeleteBucketLifecycleConfiguration(rr, req, "team2-bucket")
@@ -1927,9 +1928,9 @@ func TestBucketLifecycleHandlersBranches(t *testing.T) {
 		defer cleanup()
 
 		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?lifecycle", nil)
-		req = reqWithRules(req, []Rule{{
+		req = reqWithRules(req, []authz.Rule{{
 			BucketPrefix: "team2-",
-			Perm:         PermDeleteBucket,
+			Perm:         authz.PermDeleteBucket,
 		}})
 		rr := httptest.NewRecorder()
 		gw.handleDeleteBucketLifecycleConfiguration(rr, req, "team2-bucket")

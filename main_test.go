@@ -25,6 +25,7 @@ import (
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
 	gatewayconfig "github.com/define42/s3gateway/internal/config"
+	authz "github.com/define42/s3gateway/internal/authz"
 	gatewaycache "github.com/define42/s3gateway/internal/groupcache"
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
@@ -65,27 +66,27 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ldap auth/group lookup failed: %v", err)
 	}
-	if !canWrite(rulesFromGroups(grps), "team2-integration-check") {
+	if !authz.CanWrite(authz.RulesFromGroups(grps), "team2-integration-check") {
 		t.Fatalf("expected team2-rwcdb write permission, got groups: %v", mapKeys(grps))
 	}
-	if !canCreateBucket(rulesFromGroups(grps), "team2-integration-check") {
+	if !authz.CanCreateBucket(authz.RulesFromGroups(grps), "team2-integration-check") {
 		t.Fatalf("expected team2-rwcdb create-bucket permission, got groups: %v", mapKeys(grps))
 	}
-	if !canDeleteObject(rulesFromGroups(grps), "team2-integration-check") {
+	if !authz.CanDeleteObject(authz.RulesFromGroups(grps), "team2-integration-check") {
 		t.Fatalf("expected team2-rwcdb delete-object permission, got groups: %v", mapKeys(grps))
 	}
-	if !canDeleteBucket(rulesFromGroups(grps), "team2-integration-check") {
+	if !authz.CanDeleteBucket(authz.RulesFromGroups(grps), "team2-integration-check") {
 		t.Fatalf("expected team2-rwcdb delete-bucket permission, got groups: %v", mapKeys(grps))
 	}
 	roGrps, err := ldapinternal.FetchGroupsUPN(cfg, "readonly", "dogood")
 	if err != nil {
 		t.Fatalf("ldap auth/group lookup failed for readonly user: %v", err)
 	}
-	roRules := rulesFromGroups(roGrps)
-	if !canRead(roRules, "team2-integration-check") || canWrite(roRules, "team2-integration-check") {
+	roRules := authz.RulesFromGroups(roGrps)
+	if !authz.CanRead(roRules, "team2-integration-check") || authz.CanWrite(roRules, "team2-integration-check") {
 		t.Fatalf("expected team2-r read-only permission, got groups: %v", mapKeys(roGrps))
 	}
-	if canCreateBucket(roRules, "team2-integration-check") || canDeleteObject(roRules, "team2-integration-check") || canDeleteBucket(roRules, "team2-integration-check") {
+	if authz.CanCreateBucket(roRules, "team2-integration-check") || authz.CanDeleteObject(roRules, "team2-integration-check") || authz.CanDeleteBucket(roRules, "team2-integration-check") {
 		t.Fatalf("expected team2-r to deny create/delete permissions, got groups: %v", mapKeys(roGrps))
 	}
 
@@ -1643,7 +1644,7 @@ func TestGatewayPreservesUpstreamErrorStatusAndHeaders(t *testing.T) {
 	upstreamClient := NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
 	gw := newServer(gatewayconfig.Config{}, upstreamClient)
 	gwSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.WithValue(r.Context(), ctxRulesKey, []Rule{{BucketPrefix: "team2-", Perm: PermReadWrite}})
+		ctx := context.WithValue(r.Context(), ctxRulesKey, []authz.Rule{{BucketPrefix: "team2-", Perm: authz.PermReadWrite}})
 		gw.ServeHTTP(w, r.WithContext(ctx))
 	}))
 	defer gwSrv.Close()
@@ -1689,7 +1690,7 @@ func TestGatewayHandlesUpstreamLatencySpike(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	timeoutCtx, cancel := context.WithTimeout(req.Context(), 150*time.Millisecond)
 	defer cancel()
-	req = req.WithContext(context.WithValue(timeoutCtx, ctxRulesKey, []Rule{{BucketPrefix: "team2-", Perm: PermReadWrite}}))
+	req = req.WithContext(context.WithValue(timeoutCtx, ctxRulesKey, []authz.Rule{{BucketPrefix: "team2-", Perm: authz.PermReadWrite}}))
 
 	rr := httptest.NewRecorder()
 	start := time.Now()
@@ -1736,7 +1737,7 @@ func TestHandleGetObjectAttributesIncludesChecksum(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/team2-checksum/object.txt?attributes", nil)
 	req.Header.Set("x-amz-object-attributes", "Checksum")
-	req = req.WithContext(context.WithValue(req.Context(), ctxRulesKey, []Rule{{BucketPrefix: "team2-", Perm: PermRead}}))
+	req = req.WithContext(context.WithValue(req.Context(), ctxRulesKey, []authz.Rule{{BucketPrefix: "team2-", Perm: authz.PermRead}}))
 
 	rr := httptest.NewRecorder()
 	gw.ServeHTTP(rr, req)

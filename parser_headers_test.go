@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
@@ -469,35 +470,35 @@ func TestParseGroupPermissions(t *testing.T) {
 		name       string
 		group      string
 		wantPrefix string
-		wantPerm   Perm
+		wantPerm   authz.Perm
 		wantOK     bool
 	}{
 		{
 			name:       "read only",
 			group:      "team2-r",
 			wantPrefix: "team2",
-			wantPerm:   PermRead,
+			wantPerm:   authz.PermRead,
 			wantOK:     true,
 		},
 		{
 			name:       "read write",
 			group:      "team2-rw",
 			wantPrefix: "team2",
-			wantPerm:   PermRead | PermWrite,
+			wantPerm:   authz.PermRead | authz.PermWrite,
 			wantOK:     true,
 		},
 		{
 			name:       "full letters mixed order",
 			group:      "team2-bcdwr",
 			wantPrefix: "team2",
-			wantPerm:   PermRead | PermWrite | PermCreateBucket | PermDeleteObject | PermDeleteBucket,
+			wantPerm:   authz.PermRead | authz.PermWrite | authz.PermCreateBucket | authz.PermDeleteObject | authz.PermDeleteBucket,
 			wantOK:     true,
 		},
 		{
 			name:       "trimmed and case insensitive",
 			group:      "  TEAM2-RWCDB  ",
 			wantPrefix: "team2",
-			wantPerm:   PermRead | PermWrite | PermCreateBucket | PermDeleteObject | PermDeleteBucket,
+			wantPerm:   authz.PermRead | authz.PermWrite | authz.PermCreateBucket | authz.PermDeleteObject | authz.PermDeleteBucket,
 			wantOK:     true,
 		},
 		{
@@ -524,7 +525,7 @@ func TestParseGroupPermissions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotPrefix, gotPerm, gotOK := parseGroup(tt.group)
+			gotPrefix, gotPerm, gotOK := authz.ParseGroup(tt.group)
 			if gotOK != tt.wantOK {
 				t.Fatalf("parseGroup() ok = %v, want %v", gotOK, tt.wantOK)
 			}
@@ -542,7 +543,7 @@ func TestParseGroupPermissions(t *testing.T) {
 }
 
 func TestRulesFromGroupsCombinesPermissions(t *testing.T) {
-	rules := rulesFromGroups(map[string]struct{}{
+	rules := authz.RulesFromGroups(map[string]struct{}{
 		"team2-r": {},
 		"team2-w": {},
 		"team2-c": {},
@@ -551,32 +552,32 @@ func TestRulesFromGroupsCombinesPermissions(t *testing.T) {
 	})
 	bucket := "team2-bucket"
 
-	if !canRead(rules, bucket) {
+	if !authz.CanRead(rules, bucket) {
 		t.Fatalf("expected read permission")
 	}
-	if !canWrite(rules, bucket) {
+	if !authz.CanWrite(rules, bucket) {
 		t.Fatalf("expected write permission")
 	}
-	if !canCreateBucket(rules, bucket) {
+	if !authz.CanCreateBucket(rules, bucket) {
 		t.Fatalf("expected create-bucket permission")
 	}
-	if !canDeleteObject(rules, bucket) {
+	if !authz.CanDeleteObject(rules, bucket) {
 		t.Fatalf("expected delete-object permission")
 	}
-	if !canDeleteBucket(rules, bucket) {
+	if !authz.CanDeleteBucket(rules, bucket) {
 		t.Fatalf("expected delete-bucket permission")
 	}
 
-	readOnlyRules := rulesFromGroups(map[string]struct{}{
+	readOnlyRules := authz.RulesFromGroups(map[string]struct{}{
 		"team2-r": {},
 	})
-	if canWrite(readOnlyRules, bucket) || canCreateBucket(readOnlyRules, bucket) || canDeleteObject(readOnlyRules, bucket) || canDeleteBucket(readOnlyRules, bucket) {
+	if authz.CanWrite(readOnlyRules, bucket) || authz.CanCreateBucket(readOnlyRules, bucket) || authz.CanDeleteObject(readOnlyRules, bucket) || authz.CanDeleteBucket(readOnlyRules, bucket) {
 		t.Fatalf("read-only permissions unexpectedly granted write/create/delete")
 	}
 }
 
 func TestRulesFromGroupsIgnoresGroupWithoutAccessFlag(t *testing.T) {
-	rules := rulesFromGroups(map[string]struct{}{
+	rules := authz.RulesFromGroups(map[string]struct{}{
 		"team2-":    {},
 		"team2-   ": {},
 	})
@@ -584,7 +585,7 @@ func TestRulesFromGroupsIgnoresGroupWithoutAccessFlag(t *testing.T) {
 	if len(rules) != 0 {
 		t.Fatalf("expected no rules from groups without access flags, got=%+v", rules)
 	}
-	if canRead(rules, "team2-any") || canWrite(rules, "team2-any") || canCreateBucket(rules, "team2-any") || canDeleteObject(rules, "team2-any") || canDeleteBucket(rules, "team2-any") {
+	if authz.CanRead(rules, "team2-any") || authz.CanWrite(rules, "team2-any") || authz.CanCreateBucket(rules, "team2-any") || authz.CanDeleteObject(rules, "team2-any") || authz.CanDeleteBucket(rules, "team2-any") {
 		t.Fatalf("expected no permissions from groups without access flags")
 	}
 }

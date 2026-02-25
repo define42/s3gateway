@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/define42/s3gateway/internal/config"
+	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/define42/s3gateway/internal/s3credentials"
 )
 
@@ -32,10 +33,10 @@ func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*server, func
 	}
 }
 
-func fullTeam2Rule() []Rule {
-	return []Rule{{
+func fullTeam2Rule() []authz.Rule {
+	return []authz.Rule{{
 		BucketPrefix: "team2-",
-		Perm:         PermRead | PermWrite | PermCreateBucket | PermDeleteObject | PermDeleteBucket,
+		Perm:         authz.PermRead | authz.PermWrite | authz.PermCreateBucket | authz.PermDeleteObject | authz.PermDeleteBucket,
 	}}
 }
 
