@@ -14,6 +14,7 @@ import (
 	"github.com/define42/s3gateway/internal/config"
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
+	adminpage "github.com/define42/s3gateway/internal/adminpage"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -33,20 +34,15 @@ type server struct {
 	gcache           *groupcache.GroupCache
 	groupLookupSF    singleflight.Group
 	fetchGroups      func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
-	adminSessions    *adminSessionStore
-	adminWebSessions *adminGorillaStore
 }
 
 func newServer(cfg config.Config, up *s3.Client) *server {
 	cfg.ApplyDefaults()
-	adminSessions := newAdminSessionStore(defaultAdminSessionTTL, cfg.GroupCacheMaxEntries)
 	return &server{
-		cfg:              cfg,
-		up:               up,
-		gcache:           groupcache.NewGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
-		fetchGroups:      ldapinternal.FetchGroupsUPN,
-		adminSessions:    adminSessions,
-		adminWebSessions: newAdminGorillaStore(cfg.CookieSecret, defaultAdminSessionTTL, adminSessions),
+		cfg:         cfg,
+		up:          up,
+		gcache:      groupcache.NewGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
+		fetchGroups: ldapinternal.FetchGroupsUPN,
 	}
 }
 
@@ -92,7 +88,7 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 			next.ServeHTTP(w, r)
 			return
 		}
-		if isBrowser(r) && isAdminRoute(r.URL.Path) {
+		if adminpage.IsBrowser(r) && adminpage.IsAdminRoute(r.URL.Path) {
 			adminHandler.ServeHTTP(w, r)
 			return
 		}
