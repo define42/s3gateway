@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"github.com/define42/s3gateway/internal/xmlhelper"
 )
 
 type stubAPIError struct {
@@ -109,7 +110,7 @@ func TestWriteUpstreamHeadError(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
-			writeUpstreamHeadError(rr, tc.err)
+			xmlhelper.WriteUpstreamHeadError(rr, tc.err)
 
 			if rr.Code != tc.wantStatus {
 				t.Fatalf("status mismatch: got=%d want=%d", rr.Code, tc.wantStatus)

@@ -1,4 +1,4 @@
-package main
+package xmlhelper
 
 import (
 	"encoding/xml"
@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	s3XMLNamespace      = "http://s3.amazonaws.com/doc/2006-03-01/"
-	s3TimeMillisFormat  = "2006-01-02T15:04:05.000Z"
-	xmlDeclaration      = `<?xml version="1.0" encoding="UTF-8"?>`
+	s3XMLNamespace     = "http://s3.amazonaws.com/doc/2006-03-01/"
+	s3TimeMillisFormat = "2006-01-02T15:04:05.000Z"
+	xmlDeclaration     = `<?xml version="1.0" encoding="UTF-8"?>`
 )
 
 var xmlEscaper = strings.NewReplacer(
@@ -32,23 +32,23 @@ var xmlEscaper = strings.NewReplacer(
 )
 
 // ==================== XML helpers ====================
-func xmlEscape(s string) string {
+func XMLEscape(s string) string {
 	return xmlEscaper.Replace(s)
 }
 
-func formatS3Time(t time.Time) string {
+func FormatS3Time(t time.Time) string {
 	return t.UTC().Format(s3TimeMillisFormat)
 }
 
-func boolString(v bool) string {
+func BoolString(v bool) string {
 	if v {
 		return "true"
 	}
 	return "false"
 }
 
-func writeXMLError(w http.ResponseWriter, status int, code, msg string) {
-	xw := beginXMLWriterResponse(w, status)
+func WriteXMLError(w http.ResponseWriter, status int, code, msg string) {
+	xw := BeginXMLWriterResponse(w, status)
 	xw.Start("Error")
 	xw.Elem("Code", code)
 	xw.Elem("Message", msg)
@@ -61,52 +61,52 @@ func beginXMLResponse(w http.ResponseWriter, status int) {
 	w.WriteHeader(status)
 }
 
-type xmlWriter struct {
+type XMLWriter struct {
 	enc *xml.Encoder
 	out io.Writer
 	err error
 }
 
-func beginXMLWriterResponse(w http.ResponseWriter, status int) *xmlWriter {
+func BeginXMLWriterResponse(w http.ResponseWriter, status int) *XMLWriter {
 	beginXMLResponse(w, status)
-	xw := &xmlWriter{enc: xml.NewEncoder(w), out: w}
+	xw := &XMLWriter{enc: xml.NewEncoder(w), out: w}
 	_, err := io.WriteString(w, xmlDeclaration)
 	xw.setErr(err)
 	return xw
 }
 
-func flushXMLWriterResponse(xw *xmlWriter) {
+func FlushXMLWriterResponse(xw *XMLWriter) {
 	_ = xw.Flush()
 }
 
-func (xw *xmlWriter) setErr(err error) {
+func (xw *XMLWriter) setErr(err error) {
 	if xw.err == nil {
 		xw.err = err
 	}
 }
 
-func (xw *xmlWriter) Start(name string, attrs ...xml.Attr) {
+func (xw *XMLWriter) Start(name string, attrs ...xml.Attr) {
 	if xw.err != nil {
 		return
 	}
 	xw.setErr(xw.enc.EncodeToken(xml.StartElement{Name: xml.Name{Local: name}, Attr: attrs}))
 }
 
-func (xw *xmlWriter) End(name string) {
+func (xw *XMLWriter) End(name string) {
 	if xw.err != nil {
 		return
 	}
 	xw.setErr(xw.enc.EncodeToken(xml.EndElement{Name: xml.Name{Local: name}}))
 }
 
-func (xw *xmlWriter) Elem(name, value string) {
+func (xw *XMLWriter) Elem(name, value string) {
 	if xw.err != nil {
 		return
 	}
 	xw.setErr(xw.enc.EncodeElement(value, xml.StartElement{Name: xml.Name{Local: name}}))
 }
 
-func (xw *xmlWriter) RawString(value string) {
+func (xw *XMLWriter) RawString(value string) {
 	if xw.err != nil {
 		return
 	}
@@ -118,15 +118,15 @@ func (xw *xmlWriter) RawString(value string) {
 	xw.setErr(err)
 }
 
-func (xw *xmlWriter) ElemInt(name string, value int64) {
+func (xw *XMLWriter) ElemInt(name string, value int64) {
 	xw.Elem(name, strconv.FormatInt(value, 10))
 }
 
-func (xw *xmlWriter) ElemBool(name string, value bool) {
-	xw.Elem(name, boolString(value))
+func (xw *XMLWriter) ElemBool(name string, value bool) {
+	xw.Elem(name, BoolString(value))
 }
 
-func (xw *xmlWriter) Flush() error {
+func (xw *XMLWriter) Flush() error {
 	if xw.err != nil {
 		return xw.err
 	}
@@ -136,14 +136,14 @@ func (xw *xmlWriter) Flush() error {
 	return xw.err
 }
 
-func encodeS3RootStart(xw *xmlWriter, name string) {
+func EncodeS3RootStart(xw *XMLWriter, name string) {
 	xw.Start(name, xml.Attr{
 		Name:  xml.Name{Local: "xmlns"},
 		Value: s3XMLNamespace,
 	})
 }
 
-func encodeCommonPrefixes(xw *xmlWriter, prefixes []types.CommonPrefix) {
+func EncodeCommonPrefixes(xw *XMLWriter, prefixes []types.CommonPrefix) {
 	for _, cp := range prefixes {
 		if cp.Prefix == nil {
 			continue
@@ -154,7 +154,7 @@ func encodeCommonPrefixes(xw *xmlWriter, prefixes []types.CommonPrefix) {
 	}
 }
 
-func encodeOwnerIDThenDisplayName(xw *xmlWriter, owner *types.Owner) {
+func EncodeOwnerIDThenDisplayName(xw *XMLWriter, owner *types.Owner) {
 	if owner == nil {
 		return
 	}
@@ -168,7 +168,7 @@ func encodeOwnerIDThenDisplayName(xw *xmlWriter, owner *types.Owner) {
 	xw.End("Owner")
 }
 
-func encodeOwnerDisplayNameThenID(xw *xmlWriter, owner *types.Owner) {
+func EncodeOwnerDisplayNameThenID(xw *XMLWriter, owner *types.Owner) {
 	if owner == nil {
 		return
 	}
@@ -182,7 +182,7 @@ func encodeOwnerDisplayNameThenID(xw *xmlWriter, owner *types.Owner) {
 	xw.End("Owner")
 }
 
-func encodeInitiatorDisplayNameThenID(xw *xmlWriter, initiator *types.Initiator) {
+func EncodeInitiatorDisplayNameThenID(xw *XMLWriter, initiator *types.Initiator) {
 	if initiator == nil {
 		return
 	}
@@ -196,7 +196,7 @@ func encodeInitiatorDisplayNameThenID(xw *xmlWriter, initiator *types.Initiator)
 	xw.End("Initiator")
 }
 
-func encodeRestoreStatus(xw *xmlWriter, restore *types.RestoreStatus) {
+func EncodeRestoreStatus(xw *XMLWriter, restore *types.RestoreStatus) {
 	if restore == nil {
 		return
 	}
@@ -205,7 +205,7 @@ func encodeRestoreStatus(xw *xmlWriter, restore *types.RestoreStatus) {
 		xw.ElemBool("IsRestoreInProgress", *restore.IsRestoreInProgress)
 	}
 	if restore.RestoreExpiryDate != nil {
-		xw.Elem("RestoreExpiryDate", formatS3Time(*restore.RestoreExpiryDate))
+		xw.Elem("RestoreExpiryDate", FormatS3Time(*restore.RestoreExpiryDate))
 	}
 	xw.End("RestoreStatus")
 }
@@ -257,17 +257,17 @@ func extractUpstreamErrorInfo(err error) upstreamErrorInfo {
 	return info
 }
 
-func writeUpstreamError(w http.ResponseWriter, err error) {
+func WriteUpstreamError(w http.ResponseWriter, err error) {
 	info := extractUpstreamErrorInfo(err)
 	for k, vals := range info.headers {
 		for _, v := range vals {
 			w.Header().Add(k, v)
 		}
 	}
-	writeXMLError(w, info.status, info.code, info.message)
+	WriteXMLError(w, info.status, info.code, info.message)
 }
 
-func writeUpstreamHeadError(w http.ResponseWriter, err error) {
+func WriteUpstreamHeadError(w http.ResponseWriter, err error) {
 	info := extractUpstreamErrorInfo(err)
 	for k, vals := range info.headers {
 		for _, v := range vals {
@@ -277,7 +277,7 @@ func writeUpstreamHeadError(w http.ResponseWriter, err error) {
 	w.WriteHeader(info.status)
 }
 
-func parseEncodingType(v string) (types.EncodingType, error) {
+func ParseEncodingType(v string) (types.EncodingType, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
 		return "", nil
@@ -288,7 +288,7 @@ func parseEncodingType(v string) (types.EncodingType, error) {
 	return "", fmt.Errorf("unsupported encoding-type %q", raw)
 }
 
-func parseRequestPayerHeader(h http.Header) (types.RequestPayer, error) {
+func ParseRequestPayerHeader(h http.Header) (types.RequestPayer, error) {
 	raw := strings.TrimSpace(h.Get("x-amz-request-payer"))
 	if raw == "" {
 		return "", nil
@@ -299,7 +299,7 @@ func parseRequestPayerHeader(h http.Header) (types.RequestPayer, error) {
 	return "", fmt.Errorf("unsupported request payer %q", raw)
 }
 
-func parseOptionalObjectAttributes(v string) ([]types.OptionalObjectAttributes, error) {
+func ParseOptionalObjectAttributes(v string) ([]types.OptionalObjectAttributes, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
 		return nil, nil
@@ -330,7 +330,7 @@ func parseOptionalObjectAttributes(v string) ([]types.OptionalObjectAttributes, 
 	return out, nil
 }
 
-func parseMetadataDirective(v string) (types.MetadataDirective, error) {
+func ParseMetadataDirective(v string) (types.MetadataDirective, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
 		return "", nil
@@ -343,7 +343,7 @@ func parseMetadataDirective(v string) (types.MetadataDirective, error) {
 	return "", fmt.Errorf("unsupported metadata directive %q", raw)
 }
 
-func parseTaggingDirective(v string) (types.TaggingDirective, error) {
+func ParseTaggingDirective(v string) (types.TaggingDirective, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
 		return "", nil
@@ -356,7 +356,7 @@ func parseTaggingDirective(v string) (types.TaggingDirective, error) {
 	return "", fmt.Errorf("unsupported tagging directive %q", raw)
 }
 
-func parseStorageClass(v string) (types.StorageClass, error) {
+func ParseStorageClass(v string) (types.StorageClass, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
 		return "", nil
@@ -369,7 +369,7 @@ func parseStorageClass(v string) (types.StorageClass, error) {
 	return "", fmt.Errorf("unsupported storage class %q", raw)
 }
 
-func parseObjectCannedACL(v string) (types.ObjectCannedACL, error) {
+func ParseObjectCannedACL(v string) (types.ObjectCannedACL, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
 		return "", nil
@@ -382,7 +382,7 @@ func parseObjectCannedACL(v string) (types.ObjectCannedACL, error) {
 	return "", fmt.Errorf("unsupported x-amz-acl %q", raw)
 }
 
-func parseOptionalHTTPTime(v string) (*time.Time, error) {
+func ParseOptionalHTTPTime(v string) (*time.Time, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
 		return nil, nil
@@ -395,7 +395,7 @@ func parseOptionalHTTPTime(v string) (*time.Time, error) {
 	return &utc, nil
 }
 
-func parseOptionalBool(v string) (bool, bool, error) {
+func ParseOptionalBool(v string) (bool, bool, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
 		return false, false, nil
@@ -410,7 +410,7 @@ func parseOptionalBool(v string) (bool, bool, error) {
 	}
 }
 
-func parseSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string, present bool, err error) {
+func ParseSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string, present bool, err error) {
 	a := strings.TrimSpace(h.Get("x-amz-server-side-encryption-customer-algorithm"))
 	k := strings.TrimSpace(h.Get("x-amz-server-side-encryption-customer-key"))
 	m := strings.TrimSpace(h.Get("x-amz-server-side-encryption-customer-key-md5"))
@@ -424,7 +424,7 @@ func parseSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string, present 
 	return aws.String(a), aws.String(k), aws.String(m), true, nil
 }
 
-func parseCopySourceSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string, present bool, err error) {
+func ParseCopySourceSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string, present bool, err error) {
 	a := strings.TrimSpace(h.Get("x-amz-copy-source-server-side-encryption-customer-algorithm"))
 	k := strings.TrimSpace(h.Get("x-amz-copy-source-server-side-encryption-customer-key"))
 	m := strings.TrimSpace(h.Get("x-amz-copy-source-server-side-encryption-customer-key-md5"))
@@ -438,23 +438,23 @@ func parseCopySourceSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string
 	return aws.String(a), aws.String(k), aws.String(m), true, nil
 }
 
-func parseCopySourceConditionalHeaders(h http.Header) (ifMatch, ifNoneMatch *string, ifModifiedSince, ifUnmodifiedSince *time.Time, err error) {
+func ParseCopySourceConditionalHeaders(h http.Header) (ifMatch, ifNoneMatch *string, ifModifiedSince, ifUnmodifiedSince *time.Time, err error) {
 	if raw := strings.TrimSpace(h.Get("x-amz-copy-source-if-match")); raw != "" {
 		ifMatch = aws.String(raw)
 	}
 	if raw := strings.TrimSpace(h.Get("x-amz-copy-source-if-none-match")); raw != "" {
 		ifNoneMatch = aws.String(raw)
 	}
-	if ifModifiedSince, err = parseOptionalHTTPTime(h.Get("x-amz-copy-source-if-modified-since")); err != nil {
+	if ifModifiedSince, err = ParseOptionalHTTPTime(h.Get("x-amz-copy-source-if-modified-since")); err != nil {
 		return nil, nil, nil, nil, err
 	}
-	if ifUnmodifiedSince, err = parseOptionalHTTPTime(h.Get("x-amz-copy-source-if-unmodified-since")); err != nil {
+	if ifUnmodifiedSince, err = ParseOptionalHTTPTime(h.Get("x-amz-copy-source-if-unmodified-since")); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	return ifMatch, ifNoneMatch, ifModifiedSince, ifUnmodifiedSince, nil
 }
 
-func sourceBucketFromCopySource(copySource string) (string, error) {
+func SourceBucketFromCopySource(copySource string) (string, error) {
 	raw := strings.TrimSpace(copySource)
 	if raw == "" {
 		return "", errors.New("empty copy source")
@@ -482,7 +482,7 @@ func sourceBucketFromCopySource(copySource string) (string, error) {
 	return bucket, nil
 }
 
-type sseWriteHeaders struct {
+type SSEWriteHeaders struct {
 	ServerSideEncryption    types.ServerSideEncryption
 	SSEKMSKeyID             *string
 	SSEKMSEncryptionContext *string
@@ -491,8 +491,8 @@ type sseWriteHeaders struct {
 	SSECustomerKeyMD5       *string
 }
 
-func parseSSEWriteHeaders(h http.Header) (sseWriteHeaders, error) {
-	out := sseWriteHeaders{}
+func ParseSSEWriteHeaders(h http.Header) (SSEWriteHeaders, error) {
+	out := SSEWriteHeaders{}
 	sse := strings.TrimSpace(h.Get("x-amz-server-side-encryption"))
 	if sse != "" {
 		switch strings.ToLower(sse) {
@@ -525,7 +525,7 @@ func parseSSEWriteHeaders(h http.Header) (sseWriteHeaders, error) {
 		out.SSEKMSEncryptionContext = aws.String(kmsCtx)
 	}
 
-	ssecAlgo, ssecKey, ssecMD5, presentSSEC, err := parseSSECustomerHeaders(h)
+	ssecAlgo, ssecKey, ssecMD5, presentSSEC, err := ParseSSECustomerHeaders(h)
 	if err != nil {
 		return out, err
 	}
@@ -541,7 +541,7 @@ func parseSSEWriteHeaders(h http.Header) (sseWriteHeaders, error) {
 	return out, nil
 }
 
-type checksumWriteHeaders struct {
+type ChecksumWriteHeaders struct {
 	ChecksumAlgorithm types.ChecksumAlgorithm
 	ChecksumCRC32     *string
 	ChecksumCRC32C    *string
@@ -550,7 +550,7 @@ type checksumWriteHeaders struct {
 	ChecksumSHA256    *string
 }
 
-func parseChecksumAlgorithmHeader(v string) (types.ChecksumAlgorithm, error) {
+func ParseChecksumAlgorithmHeader(v string) (types.ChecksumAlgorithm, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
 		return "", nil
@@ -571,10 +571,10 @@ func parseChecksumAlgorithmHeader(v string) (types.ChecksumAlgorithm, error) {
 	}
 }
 
-func parseChecksumWriteHeaders(h http.Header) (checksumWriteHeaders, error) {
-	out := checksumWriteHeaders{}
+func ParseChecksumWriteHeaders(h http.Header) (ChecksumWriteHeaders, error) {
+	out := ChecksumWriteHeaders{}
 	var err error
-	out.ChecksumAlgorithm, err = parseChecksumAlgorithmHeader(h.Get("x-amz-checksum-algorithm"))
+	out.ChecksumAlgorithm, err = ParseChecksumAlgorithmHeader(h.Get("x-amz-checksum-algorithm"))
 	if err != nil {
 		return out, err
 	}
@@ -600,7 +600,7 @@ func parseChecksumWriteHeaders(h http.Header) (checksumWriteHeaders, error) {
 	return out, nil
 }
 
-func parseChecksumMode(v string) (types.ChecksumMode, error) {
+func ParseChecksumMode(v string) (types.ChecksumMode, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
 		return "", nil
@@ -612,4 +612,3 @@ func parseChecksumMode(v string) (types.ChecksumMode, error) {
 		return "", fmt.Errorf("unsupported checksum mode %q", raw)
 	}
 }
-

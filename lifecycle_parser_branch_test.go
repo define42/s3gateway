@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/define42/s3gateway/internal/xmlhelper"
 )
 
 func TestParseMetadataDirective(t *testing.T) {
@@ -25,12 +26,12 @@ func TestParseMetadataDirective(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseMetadataDirective(tt.input)
+			got, err := xmlhelper.ParseMetadataDirective(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("parseMetadataDirective() error = %v, wantErr %v", err, tt.wantErr)
+				t.Fatalf("xmlhelper.ParseMetadataDirective() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err == nil && got != tt.want {
-				t.Fatalf("parseMetadataDirective() = %q, want %q", got, tt.want)
+				t.Fatalf("xmlhelper.ParseMetadataDirective() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -52,12 +53,12 @@ func TestParseOptionalObjectAttributesMatrix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseOptionalObjectAttributes(tt.input)
+			got, err := xmlhelper.ParseOptionalObjectAttributes(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("parseOptionalObjectAttributes() error = %v, wantErr %v", err, tt.wantErr)
+				t.Fatalf("xmlhelper.ParseOptionalObjectAttributes() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if err == nil && len(got) != tt.wantLen {
-				t.Fatalf("parseOptionalObjectAttributes() len = %d, want %d", len(got), tt.wantLen)
+				t.Fatalf("xmlhelper.ParseOptionalObjectAttributes() len = %d, want %d", len(got), tt.wantLen)
 			}
 		})
 	}
@@ -259,12 +260,12 @@ func TestParseOptionalHTTPTime(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseOptionalHTTPTime(tt.input)
+			got, err := xmlhelper.ParseOptionalHTTPTime(tt.input)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("parseOptionalHTTPTime() error = %v, wantErr %v", err, tt.wantErr)
+				t.Fatalf("xmlhelper.ParseOptionalHTTPTime() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if (got == nil) != tt.wantNil {
-				t.Fatalf("parseOptionalHTTPTime() nil = %v, want %v", got == nil, tt.wantNil)
+				t.Fatalf("xmlhelper.ParseOptionalHTTPTime() nil = %v, want %v", got == nil, tt.wantNil)
 			}
 		})
 	}
