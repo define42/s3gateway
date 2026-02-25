@@ -1,4 +1,4 @@
-package main
+package adminpage
 
 import (
 	"bytes"
@@ -25,8 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/define42/s3gateway/internal/groupcache"
-	"github.com/define42/s3gateway/internal/config"
+	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 )
@@ -39,7 +38,7 @@ const (
 	adminPreviewMaxKeys    = int32(25)
 )
 
-func isBrowser(r *http.Request) bool {
+func IsBrowser(r *http.Request) bool {
 	auth := strings.ToLower(strings.TrimSpace(r.Header.Get("Authorization")))
 	if strings.HasPrefix(auth, "aws4-hmac-sha256 ") {
 		return false
@@ -66,7 +65,7 @@ func normalizeAdminRoutePath(path string) string {
 	return p
 }
 
-func isAdminRoute(path string) bool {
+func IsAdminRoute(path string) bool {
 	switch normalizeAdminRoutePath(path) {
 	case "/", "/login", "/admin", "/admin/create-bucket", "/admin/bucket", "/admin/bucket/download", "/admin/bucket/upload", "/admin/bucket/delete", "/logout":
 		return true
@@ -105,7 +104,7 @@ func isSameOrigin(rawURL, expectedOrigin string) bool {
 func hasTrustedAdminOrigin(r *http.Request) bool {
 	// Non-browser requests cannot reach admin routes in production because withAuth
 	// dispatches admin handlers only for browser traffic.
-	if !isBrowser(r) {
+	if !IsBrowser(r) {
 		return true
 	}
 	expectedOrigin := requestOrigin(r)
@@ -203,28 +202,28 @@ type adminSession struct {
 	LastSeen time.Time
 }
 
-type adminSessionStore struct {
+type AdminSessionStore struct {
 	mu         sync.Mutex
 	ttl        time.Duration
 	maxEntries int
 	data       map[string]adminSession
 }
 
-func newAdminSessionStore(ttl time.Duration, maxEntries int) *adminSessionStore {
+func NewAdminSessionStore(ttl time.Duration, maxEntries int) *AdminSessionStore {
 	if ttl <= 0 {
 		ttl = defaultAdminSessionTTL
 	}
 	if maxEntries <= 0 {
-		maxEntries = config.DefaultGroupCacheMaxEntries
+		maxEntries = 100
 	}
-	return &adminSessionStore{
+	return &AdminSessionStore{
 		ttl:        ttl,
 		maxEntries: maxEntries,
 		data:       map[string]adminSession{},
 	}
 }
 
-func (s *adminSessionStore) save(sessionID, username string, groups map[string]struct{}) (string, error) {
+func (s *AdminSessionStore) save(sessionID, username string, groups map[string]struct{}) (string, error) {
 	if username == "" {
 		return "", errors.New("missing username")
 	}
@@ -240,7 +239,7 @@ func (s *adminSessionStore) save(sessionID, username string, groups map[string]s
 		if _, ok := s.data[existingID]; ok {
 			s.data[existingID] = adminSession{
 				Username: username,
-				Groups:   groupcache.CloneGroups(groups),
+				Groups:   cloneGroups(groups),
 				Expires:  now.Add(s.ttl),
 				LastSeen: now,
 			}
@@ -262,7 +261,7 @@ func (s *adminSessionStore) save(sessionID, username string, groups map[string]s
 		}
 		s.data[newID] = adminSession{
 			Username: username,
-			Groups:   groupcache.CloneGroups(groups),
+			Groups:   cloneGroups(groups),
 			Expires:  now.Add(s.ttl),
 			LastSeen: now,
 		}
@@ -272,7 +271,7 @@ func (s *adminSessionStore) save(sessionID, username string, groups map[string]s
 	return "", errors.New("failed to allocate unique session id")
 }
 
-func (s *adminSessionStore) get(sessionID string) (adminSession, bool) {
+func (s *AdminSessionStore) get(sessionID string) (adminSession, bool) {
 	if sessionID == "" {
 		return adminSession{}, false
 	}
@@ -297,13 +296,13 @@ func (s *adminSessionStore) get(sessionID string) (adminSession, bool) {
 
 	return adminSession{
 		Username: e.Username,
-		Groups:   groupcache.CloneGroups(e.Groups),
+		Groups:   cloneGroups(e.Groups),
 		Expires:  e.Expires,
 		LastSeen: e.LastSeen,
 	}, true
 }
 
-func (s *adminSessionStore) delete(sessionID string) {
+func (s *AdminSessionStore) delete(sessionID string) {
 	if sessionID == "" {
 		return
 	}
@@ -312,7 +311,7 @@ func (s *adminSessionStore) delete(sessionID string) {
 	delete(s.data, sessionID)
 }
 
-func (s *adminSessionStore) evictExpiredLocked(now time.Time) {
+func (s *AdminSessionStore) evictExpiredLocked(now time.Time) {
 	for key, e := range s.data {
 		if now.After(e.Expires) {
 			delete(s.data, key)
@@ -320,7 +319,7 @@ func (s *adminSessionStore) evictExpiredLocked(now time.Time) {
 	}
 }
 
-func (s *adminSessionStore) evictOneOldestLocked() {
+func (s *AdminSessionStore) evictOneOldestLocked() {
 	var victimKey string
 	var victim adminSession
 	set := false
@@ -336,6 +335,14 @@ func (s *adminSessionStore) evictOneOldestLocked() {
 	}
 }
 
+func cloneGroups(groups map[string]struct{}) map[string]struct{} {
+	out := make(map[string]struct{}, len(groups))
+	for k := range groups {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
 func newAdminSessionID() (string, error) {
 	raw := make([]byte, 32)
 	if err := readAdminSessionRandom(raw); err != nil {
@@ -344,8 +351,8 @@ func newAdminSessionID() (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
-type adminGorillaStore struct {
-	backend *adminSessionStore
+type AdminGorillaStore struct {
+	backend *AdminSessionStore
 	Codecs  []securecookie.Codec
 	Options *sessions.Options
 }
@@ -365,7 +372,7 @@ func random32() [32]byte {
 	return b
 }
 
-func newAdminGorillaStore(cookieSecret string, ttl time.Duration, backend *adminSessionStore) *adminGorillaStore {
+func NewAdminGorillaStore(cookieSecret string, ttl time.Duration, backend *AdminSessionStore) *AdminGorillaStore {
 
 	if ttl <= 0 {
 		ttl = defaultAdminSessionTTL
@@ -381,7 +388,7 @@ func newAdminGorillaStore(cookieSecret string, ttl time.Duration, backend *admin
 	}
 	codecs := securecookie.CodecsFromPairs(hashKey[:], blockKey[:])
 
-	store := &adminGorillaStore{
+	store := &AdminGorillaStore{
 		backend: backend,
 		Codecs:  codecs,
 		Options: &sessions.Options{
@@ -395,7 +402,7 @@ func newAdminGorillaStore(cookieSecret string, ttl time.Duration, backend *admin
 	return store
 }
 
-func (s *adminGorillaStore) MaxAge(age int) {
+func (s *AdminGorillaStore) MaxAge(age int) {
 	s.Options.MaxAge = age
 	for _, codec := range s.Codecs {
 		if sc, ok := codec.(*securecookie.SecureCookie); ok {
@@ -404,7 +411,7 @@ func (s *adminGorillaStore) MaxAge(age int) {
 	}
 }
 
-func (s *adminGorillaStore) Get(r *http.Request, name string) (*sessions.Session, error) {
+func (s *AdminGorillaStore) Get(r *http.Request, name string) (*sessions.Session, error) {
 	return sessions.GetRegistry(r).Get(s, name)
 }
 
@@ -477,7 +484,7 @@ func adminSessionFromValues(values map[interface{}]interface{}) (string, map[str
 	return username, groups, nil
 }
 
-func (s *adminGorillaStore) New(r *http.Request, name string) (*sessions.Session, error) {
+func (s *AdminGorillaStore) New(r *http.Request, name string) (*sessions.Session, error) {
 	session := sessions.NewSession(s, name)
 	opts := *s.Options
 	opts.Secure = r.TLS != nil
@@ -500,7 +507,7 @@ func (s *adminGorillaStore) New(r *http.Request, name string) (*sessions.Session
 	return session, err
 }
 
-func (s *adminGorillaStore) Save(r *http.Request, w http.ResponseWriter, session *sessions.Session) error {
+func (s *AdminGorillaStore) Save(r *http.Request, w http.ResponseWriter, session *sessions.Session) error {
 	if session.Options == nil {
 		opts := *s.Options
 		session.Options = &opts
@@ -540,41 +547,41 @@ func (s *adminGorillaStore) Save(r *http.Request, w http.ResponseWriter, session
 	return nil
 }
 
-func permLetters(perm Perm) string {
+func permLetters(perm authz.Perm) string {
 	var b strings.Builder
-	if perm&PermRead != 0 {
+	if perm&authz.PermRead != 0 {
 		b.WriteByte('r')
 	}
-	if perm&PermWrite != 0 {
+	if perm&authz.PermWrite != 0 {
 		b.WriteByte('w')
 	}
-	if perm&PermCreateBucket != 0 {
+	if perm&authz.PermCreateBucket != 0 {
 		b.WriteByte('c')
 	}
-	if perm&PermDeleteObject != 0 {
+	if perm&authz.PermDeleteObject != 0 {
 		b.WriteByte('d')
 	}
-	if perm&PermDeleteBucket != 0 {
+	if perm&authz.PermDeleteBucket != 0 {
 		b.WriteByte('b')
 	}
 	return b.String()
 }
 
-func permViews(perm Perm) []adminPermissionView {
+func permViews(perm authz.Perm) []adminPermissionView {
 	out := make([]adminPermissionView, 0, 5)
-	if perm&PermRead != 0 {
+	if perm&authz.PermRead != 0 {
 		out = append(out, adminPermissionView{Letter: "r", Name: "Read"})
 	}
-	if perm&PermWrite != 0 {
+	if perm&authz.PermWrite != 0 {
 		out = append(out, adminPermissionView{Letter: "w", Name: "Write"})
 	}
-	if perm&PermCreateBucket != 0 {
+	if perm&authz.PermCreateBucket != 0 {
 		out = append(out, adminPermissionView{Letter: "c", Name: "Create bucket"})
 	}
-	if perm&PermDeleteObject != 0 {
+	if perm&authz.PermDeleteObject != 0 {
 		out = append(out, adminPermissionView{Letter: "d", Name: "Delete object"})
 	}
-	if perm&PermDeleteBucket != 0 {
+	if perm&authz.PermDeleteBucket != 0 {
 		out = append(out, adminPermissionView{Letter: "b", Name: "Delete bucket"})
 	}
 	return out
@@ -594,7 +601,7 @@ func buildAdminGroupAccess(groups map[string]struct{}, buckets []string, preview
 	groupRows := make([]adminGroupAccessView, 0, len(groups))
 	ignored := make([]string, 0)
 	for group := range groups {
-		prefix, perm, ok := parseGroup(group)
+		prefix, perm, ok := authz.ParseGroup(group)
 		if !ok {
 			ignored = append(ignored, group)
 			continue
@@ -648,11 +655,11 @@ func countUniqueBuckets(rows []adminGroupAccessView) int {
 func adminCreateBucketSpaces(groups map[string]struct{}) []string {
 	seen := make(map[string]struct{})
 	for group := range groups {
-		prefix, perm, ok := parseGroup(group)
+		prefix, perm, ok := authz.ParseGroup(group)
 		if !ok {
 			continue
 		}
-		if perm&PermCreateBucket == 0 {
+		if perm&authz.PermCreateBucket == 0 {
 			continue
 		}
 		prefix = strings.ToLower(strings.TrimSpace(prefix))
@@ -700,15 +707,15 @@ func adminBuildBucketName(space, suffix string) (string, error) {
 	return space + "-" + suffix, nil
 }
 
-func (s *server) listAllBuckets(ctx context.Context) ([]string, error) {
-	if s == nil {
-		return nil, errors.New("server not configured")
+func (h *handler) listAllBuckets(ctx context.Context) ([]string, error) {
+	if h == nil {
+		return nil, errors.New("handler not configured")
 	}
-	if s.up == nil {
+	if h.s3 == nil {
 		return nil, errors.New("upstream s3 client is not configured")
 	}
 
-	out, err := s.up.ListBuckets(ctx, &s3.ListBucketsInput{})
+	out, err := h.s3.ListBuckets(ctx, &s3.ListBucketsInput{})
 	if err != nil {
 		return nil, err
 	}
@@ -761,8 +768,8 @@ func formatObjectExpiresUTC(expiresString *string) string {
 	return parsed.UTC().Format(time.RFC3339)
 }
 
-func (s *server) headObjectMetadata(ctx context.Context, bucket, key string) ([]adminMetadataPair, string, string) {
-	out, err := s.up.HeadObject(ctx, &s3.HeadObjectInput{
+func (h *handler) headObjectMetadata(ctx context.Context, bucket, key string) ([]adminMetadataPair, string, string) {
+	out, err := h.s3.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: &bucket,
 		Key:    &key,
 	})
@@ -779,11 +786,11 @@ func formatObjectLastModifiedUTC(lastModified *time.Time) string {
 	return lastModified.UTC().Format(time.RFC3339)
 }
 
-func (s *server) listBucketObjects(ctx context.Context, bucket, continuationToken string, maxKeys int32) ([]adminBucketObjectView, string, bool, error) {
-	if s == nil {
-		return nil, "", false, errors.New("server not configured")
+func (h *handler) listBucketObjects(ctx context.Context, bucket, continuationToken string, maxKeys int32) ([]adminBucketObjectView, string, bool, error) {
+	if h == nil {
+		return nil, "", false, errors.New("handler not configured")
 	}
-	if s.up == nil {
+	if h.s3 == nil {
 		return nil, "", false, errors.New("upstream s3 client is not configured")
 	}
 	if strings.TrimSpace(bucket) == "" {
@@ -801,7 +808,7 @@ func (s *server) listBucketObjects(ctx context.Context, bucket, continuationToke
 		in.ContinuationToken = aws.String(tok)
 	}
 
-	out, err := s.up.ListObjectsV2(ctx, in)
+	out, err := h.s3.ListObjectsV2(ctx, in)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -820,15 +827,15 @@ func (s *server) listBucketObjects(ctx context.Context, bucket, continuationToke
 			SizeBytes:  aws.ToInt64(obj.Size),
 			LastModUTC: formatObjectLastModifiedUTC(obj.LastModified),
 		}
-		view.Metadata, view.ExpiresUTC, view.MetadataErr = s.headObjectMetadata(ctx, bucket, key)
+		view.Metadata, view.ExpiresUTC, view.MetadataErr = h.headObjectMetadata(ctx, bucket, key)
 		objects = append(objects, view)
 	}
 	return objects, strings.TrimSpace(aws.ToString(out.NextContinuationToken)), out.IsTruncated != nil && *out.IsTruncated, nil
 }
 
-func (s *server) bucketPreviewsForGroups(groups map[string]struct{}, buckets []string) map[string]adminBucketView {
+func (h *handler) bucketPreviewsForGroups(groups map[string]struct{}, buckets []string) map[string]adminBucketView {
 	previews := make(map[string]adminBucketView, len(buckets))
-	rules := rulesFromGroups(groups)
+	rules := authz.RulesFromGroups(groups)
 
 	for _, bucket := range buckets {
 		bucket = strings.TrimSpace(bucket)
@@ -838,7 +845,7 @@ func (s *server) bucketPreviewsForGroups(groups map[string]struct{}, buckets []s
 
 		view := adminBucketView{
 			Name:    bucket,
-			CanRead: canRead(rules, bucket),
+			CanRead: authz.CanRead(rules, bucket),
 		}
 		previews[bucket] = view
 	}
@@ -927,12 +934,12 @@ func adminBucketFileActionRedirectURL(r *http.Request, bucket, notice, pageErr s
 	return adminBucketPageURLWithStatus(bucket, cursor, history, notice, pageErr)
 }
 
-func (s *server) currentAdminSession(r *http.Request) (adminSession, *sessions.Session, bool) {
-	if s == nil || s.adminWebSessions == nil {
+func (h *handler) currentAdminSession(r *http.Request) (adminSession, *sessions.Session, bool) {
+	if h == nil || h.webSessions == nil {
 		return adminSession{}, nil, false
 	}
 
-	webSession, err := s.adminWebSessions.Get(r, adminSessionCookieName)
+	webSession, err := h.webSessions.Get(r, adminSessionCookieName)
 	if err != nil || webSession == nil {
 		return adminSession{}, webSession, false
 	}
@@ -993,7 +1000,7 @@ func handleAdminRoot(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func handleAdminLogin(s *server, w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodPost:
 	default:
@@ -1002,8 +1009,8 @@ func handleAdminLogin(s *server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s != nil {
-		if _, _, ok := s.currentAdminSession(r); ok {
+	if h != nil {
+		if _, _, ok := h.currentAdminSession(r); ok {
 			http.Redirect(w, r, "/admin", http.StatusSeeOther)
 			return
 		}
@@ -1031,7 +1038,7 @@ func handleAdminLogin(s *server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s == nil || s.adminWebSessions == nil {
+	if h == nil || h.webSessions == nil {
 		writeAdminLoginPage(w, r, http.StatusInternalServerError, adminLoginPageData{
 			Username: upn,
 			Error:    "Admin backend is not configured.",
@@ -1039,7 +1046,7 @@ func handleAdminLogin(s *server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	groups, err := s.groupsForCredentials(upn, pass)
+	groups, err := h.authenticate(upn, pass)
 	if err != nil {
 		writeAdminLoginPage(w, r, http.StatusUnauthorized, adminLoginPageData{
 			Username: upn,
@@ -1048,10 +1055,10 @@ func handleAdminLogin(s *server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	webSession, err := s.adminWebSessions.Get(r, adminSessionCookieName)
+	webSession, err := h.webSessions.Get(r, adminSessionCookieName)
 	if webSession == nil {
-		webSession = sessions.NewSession(s.adminWebSessions, adminSessionCookieName)
-		opts := *s.adminWebSessions.Options
+		webSession = sessions.NewSession(h.webSessions, adminSessionCookieName)
+		opts := *h.webSessions.Options
 		opts.Secure = r.TLS != nil
 		webSession.Options = &opts
 	}
@@ -1075,7 +1082,7 @@ func handleAdminLogin(s *server, w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
 }
 
-func handleAdminDashboard(s *server, w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleAdminDashboard(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 	default:
@@ -1084,7 +1091,7 @@ func handleAdminDashboard(s *server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, webSession, ok := s.currentAdminSession(r)
+	session, webSession, ok := h.currentAdminSession(r)
 	if !ok {
 		if webSession != nil {
 			clearAdminSession(w, r, webSession)
@@ -1113,7 +1120,7 @@ func handleAdminDashboard(s *server, w http.ResponseWriter, r *http.Request) {
 		data.CreateBucketLabel = bucketName
 	}
 
-	buckets, err := s.listAllBuckets(r.Context())
+	buckets, err := h.listAllBuckets(r.Context())
 	if err != nil {
 		data.Error = "Could not list S3 buckets."
 		data.Groups, data.IgnoredGroups = buildAdminGroupAccess(session.Groups, nil, nil)
@@ -1122,7 +1129,7 @@ func handleAdminDashboard(s *server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	previews := s.bucketPreviewsForGroups(session.Groups, buckets)
+	previews := h.bucketPreviewsForGroups(session.Groups, buckets)
 	data.Groups, data.IgnoredGroups = buildAdminGroupAccess(session.Groups, buckets, previews)
 	data.GroupCount = len(data.Groups)
 	data.TotalBuckets = countUniqueBuckets(data.Groups)
@@ -1130,14 +1137,14 @@ func handleAdminDashboard(s *server, w http.ResponseWriter, r *http.Request) {
 	writeAdminDashboardPage(w, r, http.StatusOK, data)
 }
 
-func handleAdminCreateBucket(s *server, w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleAdminCreateBucket(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
 
-	session, webSession, ok := s.currentAdminSession(r)
+	session, webSession, ok := h.currentAdminSession(r)
 	if !ok {
 		if webSession != nil {
 			clearAdminSession(w, r, webSession)
@@ -1145,7 +1152,7 @@ func handleAdminCreateBucket(s *server, w http.ResponseWriter, r *http.Request) 
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	if s == nil || s.up == nil {
+	if h == nil || h.s3 == nil {
 		http.Redirect(w, r, adminDashboardURL("", "Admin backend is not configured.", "", ""), http.StatusSeeOther)
 		return
 	}
@@ -1177,13 +1184,13 @@ func handleAdminCreateBucket(s *server, w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	rules := rulesFromGroups(session.Groups)
-	if !canCreateBucket(rules, bucketName) {
+	rules := authz.RulesFromGroups(session.Groups)
+	if !authz.CanCreateBucket(rules, bucketName) {
 		http.Redirect(w, r, adminDashboardURL("", "Create-bucket permission is required.", space, suffix), http.StatusSeeOther)
 		return
 	}
 
-	if _, err := s.up.CreateBucket(r.Context(), &s3.CreateBucketInput{
+	if _, err := h.s3.CreateBucket(r.Context(), &s3.CreateBucketInput{
 		Bucket: &bucketName,
 	}); err != nil {
 		http.Redirect(w, r, adminDashboardURL("", "Could not create bucket.", space, suffix), http.StatusSeeOther)
@@ -1193,7 +1200,7 @@ func handleAdminCreateBucket(s *server, w http.ResponseWriter, r *http.Request) 
 	http.Redirect(w, r, adminDashboardURL("Created bucket: "+bucketName, "", space, ""), http.StatusSeeOther)
 }
 
-func handleAdminBucketPage(s *server, w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleAdminBucketPage(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 	default:
@@ -1202,7 +1209,7 @@ func handleAdminBucketPage(s *server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, webSession, ok := s.currentAdminSession(r)
+	session, webSession, ok := h.currentAdminSession(r)
 	if !ok {
 		if webSession != nil {
 			clearAdminSession(w, r, webSession)
@@ -1221,10 +1228,10 @@ func handleAdminBucketPage(s *server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rules := rulesFromGroups(session.Groups)
-	canUpload := canWrite(rules, bucket)
-	canDelete := canDeleteObject(rules, bucket)
-	if !canRead(rules, bucket) {
+	rules := authz.RulesFromGroups(session.Groups)
+	canUpload := authz.CanWrite(rules, bucket)
+	canDelete := authz.CanDeleteObject(rules, bucket)
+	if !authz.CanRead(rules, bucket) {
 		writeAdminBucketPage(w, r, http.StatusForbidden, adminBucketPageData{
 			Username:         session.Username,
 			BucketName:       bucket,
@@ -1251,7 +1258,7 @@ func handleAdminBucketPage(s *server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	objects, nextCursor, truncated, err := s.listBucketObjects(r.Context(), bucket, cursor, adminPreviewMaxKeys)
+	objects, nextCursor, truncated, err := h.listBucketObjects(r.Context(), bucket, cursor, adminPreviewMaxKeys)
 	if err != nil {
 		writeAdminBucketPage(w, r, http.StatusBadGateway, adminBucketPageData{
 			Username:         session.Username,
@@ -1306,7 +1313,7 @@ func contentDispositionAttachment(filename string) string {
 	return `attachment; filename="` + f + `"`
 }
 
-func handleAdminBucketDownload(s *server, w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleAdminBucketDownload(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 	default:
@@ -1315,7 +1322,7 @@ func handleAdminBucketDownload(s *server, w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	session, webSession, ok := s.currentAdminSession(r)
+	session, webSession, ok := h.currentAdminSession(r)
 	if !ok {
 		if webSession != nil {
 			clearAdminSession(w, r, webSession)
@@ -1326,7 +1333,7 @@ func handleAdminBucketDownload(s *server, w http.ResponseWriter, r *http.Request
 
 	bucket := strings.TrimSpace(r.URL.Query().Get("name"))
 	key := strings.TrimSpace(r.URL.Query().Get("key"))
-	if s == nil || s.up == nil {
+	if h == nil || h.s3 == nil {
 		http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, "", "", "", "Admin backend is not configured."), http.StatusSeeOther)
 		return
 	}
@@ -1335,13 +1342,13 @@ func handleAdminBucketDownload(s *server, w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	rules := rulesFromGroups(session.Groups)
-	if !canRead(rules, bucket) {
+	rules := authz.RulesFromGroups(session.Groups)
+	if !authz.CanRead(rules, bucket) {
 		http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, "", "", "", "Read permission is required for this bucket."), http.StatusSeeOther)
 		return
 	}
 
-	out, err := s.up.GetObject(r.Context(), &s3.GetObjectInput{
+	out, err := h.s3.GetObject(r.Context(), &s3.GetObjectInput{
 		Bucket: &bucket,
 		Key:    &key,
 	})
@@ -1375,14 +1382,14 @@ func handleAdminBucketDownload(s *server, w http.ResponseWriter, r *http.Request
 	_, _ = io.Copy(w, out.Body)
 }
 
-func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
 
-	session, webSession, ok := s.currentAdminSession(r)
+	session, webSession, ok := h.currentAdminSession(r)
 	if !ok {
 		if webSession != nil {
 			clearAdminSession(w, r, webSession)
@@ -1390,7 +1397,7 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	if s == nil || s.up == nil {
+	if h == nil || h.s3 == nil {
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
@@ -1423,7 +1430,7 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	rules := rulesFromGroups(session.Groups)
+	rules := authz.RulesFromGroups(session.Groups)
 
 	for {
 		part, partErr := reader.NextPart()
@@ -1487,7 +1494,7 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 			redirectToBucket := func(notice, pageErr string) {
 				http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, cursor, history, notice, pageErr), http.StatusSeeOther)
 			}
-			if !canWrite(rules, bucket) {
+			if !authz.CanWrite(rules, bucket) {
 				_ = part.Close()
 				redirectToBucket("", "Write permission is required for uploads.")
 				return
@@ -1523,7 +1530,7 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 				createIn.ContentType = aws.String(fileContentType)
 			}
 
-			createOut, err := s.up.CreateMultipartUpload(r.Context(), createIn)
+			createOut, err := h.s3.CreateMultipartUpload(r.Context(), createIn)
 			if err != nil {
 				_ = part.Close()
 				redirectToBucket("", "Could not upload object.")
@@ -1541,7 +1548,7 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 				if completed {
 					return
 				}
-				_, _ = s.up.AbortMultipartUpload(r.Context(), &s3.AbortMultipartUploadInput{
+				_, _ = h.s3.AbortMultipartUpload(r.Context(), &s3.AbortMultipartUploadInput{
 					Bucket:   &bucket,
 					Key:      &finalKey,
 					UploadId: &uploadID,
@@ -1573,7 +1580,7 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 				}
 
 				partBody := bytes.NewReader(buf[:n])
-				uploadOut, uploadErr := s.up.UploadPart(r.Context(), &s3.UploadPartInput{
+				uploadOut, uploadErr := h.s3.UploadPart(r.Context(), &s3.UploadPartInput{
 					Bucket:        &bucket,
 					Key:           &finalKey,
 					UploadId:      &uploadID,
@@ -1607,7 +1614,7 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 
 			if len(completedParts) == 0 {
 				// Multipart uploads require at least one uploaded part.
-				putOut, putErr := s.up.PutObject(r.Context(), &s3.PutObjectInput{
+				putOut, putErr := h.s3.PutObject(r.Context(), &s3.PutObjectInput{
 					Bucket:        &bucket,
 					Key:           &finalKey,
 					Body:          bytes.NewReader(nil),
@@ -1623,7 +1630,7 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 				return
 			}
 
-			_, err = s.up.CompleteMultipartUpload(r.Context(), &s3.CompleteMultipartUploadInput{
+			_, err = h.s3.CompleteMultipartUpload(r.Context(), &s3.CompleteMultipartUploadInput{
 				Bucket:   &bucket,
 				Key:      &finalKey,
 				UploadId: &uploadID,
@@ -1649,21 +1656,21 @@ func handleAdminBucketUpload(s *server, w http.ResponseWriter, r *http.Request) 
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
-	if !canWrite(rules, bucket) {
+	if !authz.CanWrite(rules, bucket) {
 		http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, cursor, history, "", "Write permission is required for uploads."), http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, cursor, history, "", "A file is required for upload."), http.StatusSeeOther)
 }
 
-func handleAdminBucketDelete(s *server, w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleAdminBucketDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
 
-	session, webSession, ok := s.currentAdminSession(r)
+	session, webSession, ok := h.currentAdminSession(r)
 	if !ok {
 		if webSession != nil {
 			clearAdminSession(w, r, webSession)
@@ -1671,7 +1678,7 @@ func handleAdminBucketDelete(s *server, w http.ResponseWriter, r *http.Request) 
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	if s == nil || s.up == nil {
+	if h == nil || h.s3 == nil {
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
@@ -1696,13 +1703,13 @@ func handleAdminBucketDelete(s *server, w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	rules := rulesFromGroups(session.Groups)
-	if !canDeleteObject(rules, bucket) {
+	rules := authz.RulesFromGroups(session.Groups)
+	if !authz.CanDeleteObject(rules, bucket) {
 		http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "", "Delete permission is required for this bucket."), http.StatusSeeOther)
 		return
 	}
 
-	if _, err := s.up.DeleteObject(r.Context(), &s3.DeleteObjectInput{
+	if _, err := h.s3.DeleteObject(r.Context(), &s3.DeleteObjectInput{
 		Bucket: &bucket,
 		Key:    &key,
 	}); err != nil {
@@ -1713,7 +1720,7 @@ func handleAdminBucketDelete(s *server, w http.ResponseWriter, r *http.Request) 
 	http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "Deleted object: "+key, ""), http.StatusSeeOther)
 }
 
-func handleAdminLogout(s *server, w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
 	default:
@@ -1726,39 +1733,63 @@ func handleAdminLogout(s *server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s != nil && s.adminWebSessions != nil {
-		webSession, _ := s.adminWebSessions.Get(r, adminSessionCookieName)
+	if h != nil && h.webSessions != nil {
+		webSession, _ := h.webSessions.Get(r, adminSessionCookieName)
 		clearAdminSession(w, r, webSession)
 	}
 
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
-func adminWebpageHandler(s *server) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch normalizeAdminRoutePath(r.URL.Path) {
-		case "/":
-			handleAdminRoot(w, r)
-		case "/login":
-			handleAdminLogin(s, w, r)
-		case "/admin":
-			handleAdminDashboard(s, w, r)
-		case "/admin/create-bucket":
-			handleAdminCreateBucket(s, w, r)
-		case "/admin/bucket":
-			handleAdminBucketPage(s, w, r)
-		case "/admin/bucket/download":
-			handleAdminBucketDownload(s, w, r)
-		case "/admin/bucket/upload":
-			handleAdminBucketUpload(s, w, r)
-		case "/admin/bucket/delete":
-			handleAdminBucketDelete(s, w, r)
-		case "/logout":
-			handleAdminLogout(s, w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	})
+type handler struct {
+	s3           *s3.Client
+	webSessions  *AdminGorillaStore
+	authenticate func(upn, pass string) (map[string]struct{}, error)
+}
+
+func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	switch normalizeAdminRoutePath(r.URL.Path) {
+	case "/":
+		handleAdminRoot(w, r)
+	case "/login":
+		h.handleAdminLogin(w, r)
+	case "/admin":
+		h.handleAdminDashboard(w, r)
+	case "/admin/create-bucket":
+		h.handleAdminCreateBucket(w, r)
+	case "/admin/bucket":
+		h.handleAdminBucketPage(w, r)
+	case "/admin/bucket/download":
+		h.handleAdminBucketDownload(w, r)
+	case "/admin/bucket/upload":
+		h.handleAdminBucketUpload(w, r)
+	case "/admin/bucket/delete":
+		h.handleAdminBucketDelete(w, r)
+	case "/logout":
+		h.handleAdminLogout(w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// NewHandler creates the admin page HTTP handler.
+func NewHandler(s3Client *s3.Client, cookieSecret string, maxSessions int, authenticate func(upn, pass string) (map[string]struct{}, error)) http.Handler {
+	sessions := NewAdminSessionStore(defaultAdminSessionTTL, maxSessions)
+	webSessions := NewAdminGorillaStore(cookieSecret, defaultAdminSessionTTL, sessions)
+	return &handler{
+		s3:           s3Client,
+		webSessions:  webSessions,
+		authenticate: authenticate,
+	}
+}
+
+// NewHandlerWithSessions creates the admin page HTTP handler with pre-created sessions (for testing).
+func NewHandlerWithSessions(s3Client *s3.Client, webSessions *AdminGorillaStore, authenticate func(upn, pass string) (map[string]struct{}, error)) http.Handler {
+	return &handler{
+		s3:           s3Client,
+		webSessions:  webSessions,
+		authenticate: authenticate,
+	}
 }
 
 var (

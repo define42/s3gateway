@@ -1,4 +1,4 @@
-package main
+package adminpage
 
 import (
 	"bytes"
@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/define42/s3gateway/internal/config"
 )
 
 func adminLoginSessionCookie(t *testing.T, handler http.Handler, username, password string) *http.Cookie {
@@ -110,14 +109,14 @@ func TestIsBrowser(t *testing.T) {
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 
-	if !isBrowser(req) {
+	if !IsBrowser(req) {
 		t.Fatalf("expected request to be detected as browser")
 	}
 
 	apiReq := httptest.NewRequest(http.MethodGet, "/", nil)
 	apiReq.Header.Set("Accept", "application/xml")
 	apiReq.Header.Set("User-Agent", "aws-sdk-go-v2")
-	if isBrowser(apiReq) {
+	if IsBrowser(apiReq) {
 		t.Fatalf("expected API request not to be detected as browser")
 	}
 
@@ -125,7 +124,7 @@ func TestIsBrowser(t *testing.T) {
 	sigV4Req.Header.Set("Accept", "text/html,application/xhtml+xml")
 	sigV4Req.Header.Set("User-Agent", "Mozilla/5.0")
 	sigV4Req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential=akid/20260207/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature="+strings.Repeat("a", 64))
-	if isBrowser(sigV4Req) {
+	if IsBrowser(sigV4Req) {
 		t.Fatalf("expected SigV4-authenticated request not to be detected as browser")
 	}
 }
@@ -148,14 +147,14 @@ func TestIsAdminRoute(t *testing.T) {
 		{path: "/team2-bucket", want: false},
 	}
 	for _, tc := range cases {
-		if got := isAdminRoute(tc.path); got != tc.want {
+		if got := IsAdminRoute(tc.path); got != tc.want {
 			t.Fatalf("isAdminRoute(%q) mismatch: got=%v want=%v", tc.path, got, tc.want)
 		}
 	}
 }
 
 func TestAdminRootRedirectsToLogin(t *testing.T) {
-	handler := adminWebpageHandler(nil)
+	handler := newHandlerWithNilS3(nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()
@@ -170,7 +169,7 @@ func TestAdminRootRedirectsToLogin(t *testing.T) {
 }
 
 func TestAdminLoginGetRendersLoginPage(t *testing.T) {
-	handler := adminWebpageHandler(newServer(config.Config{}, nil))
+	handler := newHandlerWithNilS3(nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/login", nil)
 	rr := httptest.NewRecorder()
@@ -189,7 +188,7 @@ func TestAdminLoginGetRendersLoginPage(t *testing.T) {
 }
 
 func TestAdminLoginPostRequiresCredentials(t *testing.T) {
-	handler := adminWebpageHandler(newServer(config.Config{}, nil))
+	handler := newHandlerWithNilS3(nil)
 
 	form := url.Values{}
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
@@ -206,11 +205,9 @@ func TestAdminLoginPostRequiresCredentials(t *testing.T) {
 }
 
 func TestAdminLoginPostSuccessSetsCookieAndRedirects(t *testing.T) {
-	s := newServer(config.Config{}, nil)
-	s.gcache.Set("alice", "secret", map[string]struct{}{
+	handler := newHandlerWithNilS3(map[string]struct{}{
 		"team2-rw": {},
 	})
-	handler := adminWebpageHandler(s)
 
 	form := url.Values{
 		"username": []string{"alice"},
@@ -241,7 +238,7 @@ func TestAdminLoginPostSuccessSetsCookieAndRedirects(t *testing.T) {
 }
 
 func TestAdminDashboardRequiresSession(t *testing.T) {
-	handler := adminWebpageHandler(newServer(config.Config{}, nil))
+	handler := newHandlerWithNilS3(nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/admin", nil)
 	rr := httptest.NewRecorder()
@@ -256,7 +253,7 @@ func TestAdminDashboardRequiresSession(t *testing.T) {
 }
 
 func TestAdminDashboardWithSessionRendersGroupsAndBuckets(t *testing.T) {
-	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/" {
 			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 		}
@@ -274,13 +271,13 @@ func TestAdminDashboardWithSessionRendersGroupsAndBuckets(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.Set("alice", "secret", map[string]struct{}{
+	creds.set("alice", "secret", map[string]struct{}{
 		"team2-rw":   {},
 		"team3-w":    {},
 		"misc-group": {},
 	})
 
-	handler := adminWebpageHandler(gw)
+	handler := gw
 	loginForm := url.Values{
 		"username": []string{"alice"},
 		"password": []string{"secret"},
@@ -335,7 +332,7 @@ func TestAdminDashboardWithSessionRendersGroupsAndBuckets(t *testing.T) {
 }
 
 func TestAdminDashboardShowsCreateBucketForm(t *testing.T) {
-	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/" {
 			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 		}
@@ -351,11 +348,11 @@ func TestAdminDashboardShowsCreateBucketForm(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.Set("alice", "secret", map[string]struct{}{
+	creds.set("alice", "secret", map[string]struct{}{
 		"team2-c": {},
 		"team3-c": {},
 	})
-	handler := adminWebpageHandler(gw)
+	handler := gw
 	sessionCookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
 	req := httptest.NewRequest(http.MethodGet, "/admin?space=team3&suffix=newname", nil)
@@ -381,7 +378,7 @@ func TestAdminDashboardShowsCreateBucketForm(t *testing.T) {
 func TestAdminCreateBucketSuccess(t *testing.T) {
 	var createdBucket string
 
-	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {
 			t.Fatalf("unexpected upstream method: %s", r.Method)
 		}
@@ -393,10 +390,10 @@ func TestAdminCreateBucketSuccess(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.Set("alice", "secret", map[string]struct{}{
+	creds.set("alice", "secret", map[string]struct{}{
 		"team2-c": {},
 	})
-	handler := adminWebpageHandler(gw)
+	handler := gw
 	sessionCookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
 	form := url.Values{
@@ -428,15 +425,15 @@ func TestAdminCreateBucketSuccess(t *testing.T) {
 }
 
 func TestAdminCreateBucketRequiresPermission(t *testing.T) {
-	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected upstream request without create permission: %s %s", r.Method, r.URL.Path)
 	})
 	defer cleanup()
 
-	gw.gcache.Set("alice", "secret", map[string]struct{}{
+	creds.set("alice", "secret", map[string]struct{}{
 		"team2-rw": {},
 	})
-	handler := adminWebpageHandler(gw)
+	handler := gw
 	sessionCookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
 	form := url.Values{
@@ -462,15 +459,15 @@ func TestAdminCreateBucketRequiresPermission(t *testing.T) {
 }
 
 func TestAdminCreateBucketRejectsInvalidSpace(t *testing.T) {
-	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected upstream request for invalid space: %s %s", r.Method, r.URL.Path)
 	})
 	defer cleanup()
 
-	gw.gcache.Set("alice", "secret", map[string]struct{}{
+	creds.set("alice", "secret", map[string]struct{}{
 		"team2-c": {},
 	})
-	handler := adminWebpageHandler(gw)
+	handler := gw
 	sessionCookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
 	form := url.Values{
@@ -496,7 +493,7 @@ func TestAdminCreateBucketRejectsInvalidSpace(t *testing.T) {
 }
 
 func TestAdminBucketPagePagination(t *testing.T) {
-	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/team2-logs" && r.URL.Query().Get("list-type") == "2":
 			if r.URL.Query().Get("max-keys") != "25" {
@@ -542,10 +539,10 @@ func TestAdminBucketPagePagination(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.Set("alice", "secret", map[string]struct{}{
+	creds.set("alice", "secret", map[string]struct{}{
 		"team2-r": {},
 	})
-	handler := adminWebpageHandler(gw)
+	handler := gw
 
 	loginForm := url.Values{
 		"username": []string{"alice"},
@@ -628,7 +625,7 @@ func TestAdminBucketPagePagination(t *testing.T) {
 }
 
 func TestAdminBucketDownload(t *testing.T) {
-	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/team2-logs/readme.txt" {
 			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 		}
@@ -639,10 +636,10 @@ func TestAdminBucketDownload(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.Set("alice", "secret", map[string]struct{}{
+	creds.set("alice", "secret", map[string]struct{}{
 		"team2-r": {},
 	})
-	handler := adminWebpageHandler(gw)
+	handler := gw
 	sessionCookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/bucket/download?name=team2-logs&key=readme.txt", nil)
@@ -671,7 +668,7 @@ func TestAdminBucketUploadAndDelete(t *testing.T) {
 	var deletePath string
 	const uploadID = "upload-new-1"
 
-	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/team2-logs/uploads/new.txt" && q.Has("uploads"):
@@ -700,10 +697,10 @@ func TestAdminBucketUploadAndDelete(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.Set("alice", "secret", map[string]struct{}{
+	creds.set("alice", "secret", map[string]struct{}{
 		"team2-wd": {},
 	})
-	handler := adminWebpageHandler(gw)
+	handler := gw
 	sessionCookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
 	var uploadBuf bytes.Buffer
@@ -776,15 +773,15 @@ func TestAdminBucketUploadAndDelete(t *testing.T) {
 }
 
 func TestAdminBucketUploadAndDeleteRequirePermissions(t *testing.T) {
-	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected upstream request without permissions: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 	})
 	defer cleanup()
 
-	gw.gcache.Set("alice", "secret", map[string]struct{}{
+	creds.set("alice", "secret", map[string]struct{}{
 		"team2-r": {},
 	})
-	handler := adminWebpageHandler(gw)
+	handler := gw
 	sessionCookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
 	var uploadBuf bytes.Buffer
@@ -849,7 +846,7 @@ func TestAdminBucketUpload100MB(t *testing.T) {
 	var putUploadedBy string
 	const uploadID = "upload-100mb-1"
 
-	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/team2-logs/uploads/large-100mb.bin" && q.Has("uploads"):
@@ -874,10 +871,10 @@ func TestAdminBucketUpload100MB(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.Set("alice", "secret", map[string]struct{}{
+	creds.set("alice", "secret", map[string]struct{}{
 		"team2-w": {},
 	})
-	handler := adminWebpageHandler(gw)
+	handler := gw
 	sessionCookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
 	pr, pw := io.Pipe()
@@ -956,7 +953,7 @@ func TestAdminBucketUploadSmallFileWithoutWritableTempDir(t *testing.T) {
 	var uploadedPart1 bytes.Buffer
 	const uploadID = "upload-notmp-1"
 
-	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/team2-logs/uploads/no-tempdir.txt" && q.Has("uploads"):
@@ -981,10 +978,10 @@ func TestAdminBucketUploadSmallFileWithoutWritableTempDir(t *testing.T) {
 	})
 	defer cleanup()
 
-	gw.gcache.Set("alice", "secret", map[string]struct{}{
+	creds.set("alice", "secret", map[string]struct{}{
 		"team2-w": {},
 	})
-	handler := adminWebpageHandler(gw)
+	handler := gw
 	sessionCookie := adminLoginSessionCookie(t, handler, "alice", "secret")
 
 	t.Setenv("TMPDIR", "/definitely-not-a-real-temp-dir")
@@ -1030,12 +1027,9 @@ func TestAdminBucketUploadSmallFileWithoutWritableTempDir(t *testing.T) {
 }
 
 func TestAdminLogoutClearsCookieAndRedirects(t *testing.T) {
-	s := newServer(config.Config{}, nil)
-	s.gcache.Set("alice", "secret", map[string]struct{}{
+	handler := newHandlerWithNilS3(map[string]struct{}{
 		"team2-rw": {},
 	})
-
-	handler := adminWebpageHandler(s)
 	loginForm := url.Values{
 		"username": []string{"alice"},
 		"password": []string{"secret"},

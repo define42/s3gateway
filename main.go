@@ -16,6 +16,7 @@ import (
 	"github.com/caddyserver/certmagic"
 	"github.com/define42/s3gateway/internal/certreader"
 	"github.com/define42/s3gateway/internal/config"
+	adminpage "github.com/define42/s3gateway/internal/adminpage"
 )
 
 func effectiveShutdownTimeout(cfg config.Config) time.Duration {
@@ -47,9 +48,8 @@ func BootS3Gateway() (*http.Server, config.Config, error) {
 
 	s := newServer(cfg, up)
 
-	adminWebpageHandler := adminWebpageHandler(s)
-
-	httpSrv := newHTTPServer(cfg, s.withAuth(s, adminWebpageHandler))
+	adminHandler := adminpage.NewHandler(up, cfg.CookieSecret, cfg.GroupCacheMaxEntries, s.groupsForCredentials)
+	httpSrv := newHTTPServer(cfg, s.withAuth(s, adminHandler))
 	return httpSrv, cfg, nil
 }
 
