@@ -2913,6 +2913,11 @@ func newMinioGatewayClient(t *testing.T, gatewayURL, accessKey, secretKey string
 	return client
 }
 
+// pathRelative resolves elems relative to the module root, regardless of the
+// working directory from which the test is invoked. It derives the module root
+// from the source file location recorded at compile time, so this function must
+// remain in a file that is exactly two directory levels below the module root
+// (i.e. internal/server/<file>.go).
 func pathRelative(tb testing.TB, elems ...string) string {
 	tb.Helper()
 	_, thisFile, _, _ := runtime.Caller(0)
