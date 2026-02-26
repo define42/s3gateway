@@ -1,20 +1,20 @@
 package server
 
 import (
-"encoding/xml"
-"errors"
-"fmt"
-"io"
-"net/http"
-"reflect"
-"strings"
-"time"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"reflect"
+	"strings"
+	"time"
 
-authz "github.com/define42/s3gateway/internal/authz"
-"github.com/define42/s3gateway/internal/xmlhelper"
-"github.com/aws/aws-sdk-go-v2/aws"
-"github.com/aws/aws-sdk-go-v2/service/s3"
-"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	authz "github.com/define42/s3gateway/internal/authz"
+	"github.com/define42/s3gateway/internal/xmlhelper"
 )
 
 type lifecycleConfigReqXML struct {
@@ -705,4 +705,3 @@ func (s *Server) handleDeleteBucketLifecycleConfiguration(w http.ResponseWriter,
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-

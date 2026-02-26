@@ -1,20 +1,20 @@
 package server
 
 import (
-"encoding/xml"
-"errors"
-"net/http"
-"sort"
-"strconv"
-"strings"
+	"encoding/xml"
+	"errors"
+	"net/http"
+	"sort"
+	"strconv"
+	"strings"
 
-authz "github.com/define42/s3gateway/internal/authz"
-"github.com/define42/s3gateway/internal/xmlhelper"
-"github.com/aws/aws-sdk-go-v2/aws"
-v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-"github.com/aws/aws-sdk-go-v2/service/s3"
-"github.com/aws/aws-sdk-go-v2/service/s3/types"
-sigv4 "github.com/define42/s3gateway/internal/sigv4"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	authz "github.com/define42/s3gateway/internal/authz"
+	sigv4 "github.com/define42/s3gateway/internal/sigv4"
+	"github.com/define42/s3gateway/internal/xmlhelper"
 )
 
 func (s *Server) handleListMultipartUploads(w http.ResponseWriter, r *http.Request, bucket string) {
@@ -110,7 +110,6 @@ func (s *Server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 	}
 	xw.End("ListMultipartUploadsResult")
 }
-
 
 type completeMultipartUpload struct {
 	XMLName xml.Name `xml:"CompleteMultipartUpload"`
@@ -418,4 +417,3 @@ func (s *Server) handleAbortMultipart(w http.ResponseWriter, r *http.Request, bu
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-

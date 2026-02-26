@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/define42/s3gateway/internal/config"
 	authz "github.com/define42/s3gateway/internal/authz"
+	"github.com/define42/s3gateway/internal/config"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 )
 

@@ -1,24 +1,24 @@
 package server
 
 import (
-"encoding/xml"
-"errors"
-"fmt"
-"io"
-"net/http"
-"strconv"
-"strings"
-"time"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
-authz "github.com/define42/s3gateway/internal/authz"
-handler_bucket "github.com/define42/s3gateway/internal/handler_bucket"
-"github.com/define42/s3gateway/internal/xmlhelper"
-"github.com/aws/aws-sdk-go-v2/aws"
-v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-"github.com/aws/aws-sdk-go-v2/service/s3"
-"github.com/aws/aws-sdk-go-v2/service/s3/types"
-"github.com/define42/s3gateway/internal/config"
-sigv4 "github.com/define42/s3gateway/internal/sigv4"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	authz "github.com/define42/s3gateway/internal/authz"
+	"github.com/define42/s3gateway/internal/config"
+	handler_bucket "github.com/define42/s3gateway/internal/handler_bucket"
+	sigv4 "github.com/define42/s3gateway/internal/sigv4"
+	"github.com/define42/s3gateway/internal/xmlhelper"
 )
 
 const maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
@@ -34,7 +34,6 @@ type deleteObjectReqItemXML struct {
 	VersionID *string `xml:"VersionId,omitempty"`
 	ETag      *string `xml:"ETag,omitempty"`
 }
-
 
 func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromCtx(r)
@@ -550,7 +549,6 @@ func (s *Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 	}
 	xw.End("ListBucketResult")
 }
-
 
 func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromCtx(r)
@@ -1809,5 +1807,3 @@ func parseExpiresHeader(h http.Header) (*time.Time, error) {
 	utc := t.UTC()
 	return &utc, nil
 }
-
-

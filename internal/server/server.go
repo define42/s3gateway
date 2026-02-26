@@ -10,14 +10,14 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	adminpage "github.com/define42/s3gateway/internal/adminpage"
 	authz "github.com/define42/s3gateway/internal/authz"
-	"github.com/define42/s3gateway/internal/xmlhelper"
-	"github.com/define42/s3gateway/internal/groupcache"
 	"github.com/define42/s3gateway/internal/config"
+	"github.com/define42/s3gateway/internal/groupcache"
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
-	adminpage "github.com/define42/s3gateway/internal/adminpage"
+	"github.com/define42/s3gateway/internal/xmlhelper"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -48,11 +48,11 @@ type ctxKey string
 const ctxUploaderKey ctxKey = "uploader-upn"
 
 type Server struct {
-	cfg              config.Config
-	up               *s3.Client
-	gcache           *groupcache.GroupCache
-	groupLookupSF    singleflight.Group
-	fetchGroups      func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
+	cfg           config.Config
+	up            *s3.Client
+	gcache        *groupcache.GroupCache
+	groupLookupSF singleflight.Group
+	fetchGroups   func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
 }
 
 func NewServer(cfg config.Config, up *s3.Client) *Server {
@@ -430,4 +430,3 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok\n"))
 	}
 }
-
