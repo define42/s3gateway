@@ -14,29 +14,19 @@ import (
 	"time"
 
 	"github.com/caddyserver/certmagic"
+	adminpage "github.com/define42/s3gateway/internal/adminpage"
 	"github.com/define42/s3gateway/internal/certreader"
 	"github.com/define42/s3gateway/internal/config"
-	adminpage "github.com/define42/s3gateway/internal/adminpage"
+	srv "github.com/define42/s3gateway/internal/server"
 	"github.com/define42/s3gateway/internal/upstream"
 )
 
 func effectiveShutdownTimeout(cfg config.Config) time.Duration {
-	cfg.ApplyDefaults()
-	return cfg.ShutdownTimeout
+	return srv.EffectiveShutdownTimeout(cfg)
 }
 
 func newHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
-	cfg.ApplyDefaults()
-
-	return &http.Server{
-		Addr:              cfg.ListenAddr,
-		Handler:           handler,
-		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
-		ReadTimeout:       cfg.ReadTimeout,
-		WriteTimeout:      cfg.WriteTimeout,
-		IdleTimeout:       cfg.IdleTimeout,
-		MaxHeaderBytes:    cfg.MaxHeaderBytes,
-	}
+	return srv.NewHTTPServer(cfg, handler)
 }
 
 func BootS3Gateway() (*http.Server, config.Config, error) {
@@ -47,10 +37,10 @@ func BootS3Gateway() (*http.Server, config.Config, error) {
 		return nil, cfg, fmt.Errorf("init upstream s3: %w", err)
 	}
 
-	s := newServer(cfg, up)
+	s := srv.NewServer(cfg, up)
 
-	adminHandler := adminpage.NewHandler(up, cfg.CookieSecret, cfg.GroupCacheMaxEntries, s.groupsForCredentials)
-	httpSrv := newHTTPServer(cfg, s.withAuth(s, adminHandler))
+	adminHandler := adminpage.NewHandler(up, cfg.CookieSecret, cfg.GroupCacheMaxEntries, s.GroupsForCredentials)
+	httpSrv := newHTTPServer(cfg, s.WithAuth(s, adminHandler))
 	return httpSrv, cfg, nil
 }
 

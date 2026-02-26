@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"errors"
@@ -11,7 +11,7 @@ import (
 )
 
 func TestGroupsForCredentialsSingleflightDeduplicatesConcurrentMisses(t *testing.T) {
-	s := newServer(config.Config{
+	s := NewServer(config.Config{
 		GroupTTL:             time.Minute,
 		GroupCacheMaxEntries: 64,
 	}, nil)
@@ -37,7 +37,7 @@ func TestGroupsForCredentialsSingleflightDeduplicatesConcurrentMisses(t *testing
 		go func() {
 			defer wg.Done()
 			<-start
-			groups, err := s.groupsForCredentials("singleflight-user", "singleflight-pass")
+			groups, err := s.GroupsForCredentials("singleflight-user", "singleflight-pass")
 			if err != nil {
 				errs <- err
 				return
@@ -77,7 +77,7 @@ func TestGroupsForCredentialsSingleflightDeduplicatesConcurrentMisses(t *testing
 	}
 
 	// Verify warm-cache path after singleflight returns still avoids backend fetches.
-	if _, err := s.groupsForCredentials("singleflight-user", "singleflight-pass"); err != nil {
+	if _, err := s.GroupsForCredentials("singleflight-user", "singleflight-pass"); err != nil {
 		t.Fatalf("cache hit after singleflight failed: %v", err)
 	}
 	if got := calls.Load(); got != 1 {

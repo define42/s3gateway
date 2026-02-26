@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -97,8 +98,8 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
+	gw := NewServer(cfg, up)
+	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	gatewayAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -259,8 +260,8 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
+	gw := NewServer(cfg, up)
+	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	gatewayAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -349,8 +350,8 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
+	gw := NewServer(cfg, up)
+	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -440,8 +441,8 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
+	gw := NewServer(cfg, up)
+	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -532,8 +533,8 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
+	gw := NewServer(cfg, up)
+	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -724,8 +725,8 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
+	gw := NewServer(cfg, up)
+	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -916,8 +917,8 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
+	gw := NewServer(cfg, up)
+	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -1146,8 +1147,8 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
+	gw := NewServer(cfg, up)
+	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -1591,7 +1592,7 @@ func TestGroupCacheExpiredEntryIsRemovedOnLookup(t *testing.T) {
 }
 
 func TestNewHTTPServerAppliesDefaultsAndOverrides(t *testing.T) {
-	srv := newHTTPServer(gatewayconfig.Config{ListenAddr: ":8080"}, http.NewServeMux())
+	srv := NewHTTPServer(gatewayconfig.Config{ListenAddr: ":8080"}, http.NewServeMux())
 	if srv.ReadHeaderTimeout != gatewayconfig.DefaultReadHeaderTimeout {
 		t.Fatalf("default read header timeout mismatch: got=%s want=%s", srv.ReadHeaderTimeout, gatewayconfig.DefaultReadHeaderTimeout)
 	}
@@ -1610,7 +1611,7 @@ func TestNewHTTPServerAppliesDefaultsAndOverrides(t *testing.T) {
 		IdleTimeout:       13 * time.Second,
 		MaxHeaderBytes:    8192,
 	}
-	overrideSrv := newHTTPServer(overrideCfg, http.NewServeMux())
+	overrideSrv := NewHTTPServer(overrideCfg, http.NewServeMux())
 	if overrideSrv.ReadHeaderTimeout != 3*time.Second {
 		t.Fatalf("override read header timeout mismatch: got=%s", overrideSrv.ReadHeaderTimeout)
 	}
@@ -1644,7 +1645,7 @@ func TestGatewayPreservesUpstreamErrorStatusAndHeaders(t *testing.T) {
 	defer upstreamSrv.Close()
 
 	upstreamClient := NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := newServer(gatewayconfig.Config{}, upstreamClient)
+	gw := NewServer(gatewayconfig.Config{}, upstreamClient)
 	gwSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := authz.WithRules(r.Context(), []authz.Rule{{BucketPrefix: "team2-", Perm: authz.PermReadWrite}})
 		gw.ServeHTTP(w, r.WithContext(ctx))
@@ -1687,7 +1688,7 @@ func TestGatewayHandlesUpstreamLatencySpike(t *testing.T) {
 	defer upstreamSrv.Close()
 
 	upstreamClient := NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := newServer(gatewayconfig.Config{}, upstreamClient)
+	gw := NewServer(gatewayconfig.Config{}, upstreamClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	timeoutCtx, cancel := context.WithTimeout(req.Context(), 150*time.Millisecond)
@@ -1735,7 +1736,7 @@ func TestHandleGetObjectAttributesIncludesChecksum(t *testing.T) {
 	defer upstreamSrv.Close()
 
 	upstreamClient := NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := newServer(gatewayconfig.Config{}, upstreamClient)
+	gw := NewServer(gatewayconfig.Config{}, upstreamClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/team2-checksum/object.txt?attributes", nil)
 	req.Header.Set("x-amz-object-attributes", "Checksum")
@@ -1800,8 +1801,8 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
+	gw := NewServer(cfg, up)
+	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -1881,8 +1882,8 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 		cancel()
 		tb.Fatalf("init upstream s3: %v", err)
 	}
-	gw := newServer(cfg, up)
-	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
+	gw := NewServer(cfg, up)
+	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
 	rwClient := NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(tb, rwAccessKey))
@@ -2914,12 +2915,10 @@ func newMinioGatewayClient(t *testing.T, gatewayURL, accessKey, secretKey string
 
 func pathRelative(tb testing.TB, elems ...string) string {
 	tb.Helper()
-	p := filepath.Join(elems...)
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		tb.Fatalf("abs path: %v", err)
-	}
-	return abs
+	_, thisFile, _, _ := runtime.Caller(0)
+	// thisFile is <moduleRoot>/internal/server/server_test.go; go up 3 levels to reach module root
+	moduleRoot := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
+	return filepath.Join(append([]string{moduleRoot}, elems...)...)
 }
 
 func StartMinio(ctx context.Context, tb testing.TB, accessKey string, secretKey string) (string, func()) {
