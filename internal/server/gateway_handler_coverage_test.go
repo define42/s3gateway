@@ -18,6 +18,7 @@ import (
 	"github.com/define42/s3gateway/internal/config"
 	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/define42/s3gateway/internal/s3credentials"
+	"github.com/define42/s3gateway/internal/testutil"
 )
 
 func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func()) {
@@ -25,7 +26,7 @@ func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func
 
 	upstreamSrv := httptest.NewServer(h)
 	ctx := context.Background()
-	upstreamClient := NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
+	upstreamClient := testutil.NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
 	gw := NewServer(config.Config{}, upstreamClient)
 
 	return gw, func() {
@@ -72,7 +73,7 @@ func TestS3ClientUpload100MBThroughGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate keys: %v", err)
 	}
-	client := NewS3Client(t, context.Background(), gwSrv.URL, "us-east-1", accessKey, secretKey)
+	client := testutil.NewS3Client(t, context.Background(), gwSrv.URL, "us-east-1", accessKey, secretKey)
 
 	tmpFile, err := os.CreateTemp(t.TempDir(), "gateway-upload-100mb-*")
 	if err != nil {

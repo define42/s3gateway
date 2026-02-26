@@ -2,204 +2,28 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
+	"github.com/define42/s3gateway/internal/testutil"
 )
 
 func WriteGatewayGlauthConfig(tb testing.TB) string {
 	tb.Helper()
-
-	const cfg = `
-debug = true
-
-[ldap]
-  enabled = true
-  listen = "0.0.0.0:389"
-  tls = false
-
-[ldaps]
-  enabled = false
-
-[backend]
-  datastore = "config"
-  baseDN = "dc=glauth,dc=com"
-  nameformat = "userPrincipalName"
-  groupformat = "cn"
-
-[behaviors]
-  IgnoreCapabilities = true
-
-[[users]]
-  name = "testuser"
-  mail = "testuser@example.com"
-  primarygroup = 5506
-  othergroups = [5506]
-  passsha256 = "6478579e37aff45f013e14eeb30b3cc56c72ccdc310123bcdf53e0333e3f416a" # dogood
-    [[users.capabilities]]
-    action = "search"
-    object = "*"
-
-[[users]]
-  name = "readonly"
-  mail = "readonly@example.com"
-  primarygroup = 5507
-  othergroups = [5507]
-  passsha256 = "6478579e37aff45f013e14eeb30b3cc56c72ccdc310123bcdf53e0333e3f416a" # dogood
-    [[users.capabilities]]
-    action = "search"
-    object = "*"
-
-[[groups]]
-  name = "team2-rwcdb"
-  gidnumber = 5506
-
-[[groups]]
-  name = "team2-r"
-  gidnumber = 5507
-`
-
-	cfgPath := filepath.Join(tb.TempDir(), "glauth-integration.cfg")
-	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
-		tb.Fatalf("write glauth config: %v", err)
-	}
-	return cfgPath
+	return testutil.WriteGatewayGlauthConfig(tb)
 }
 
 func StartGlauthWithConfig(ctx context.Context, tb testing.TB, cfg string, scheme string) (string, func()) {
 	tb.Helper()
-
-	cert := pathRelativeHelper(tb, "testldap", "cert.pem")
-	key := pathRelativeHelper(tb, "testldap", "key.pem")
-	waitLog := "LDAPS server listening"
-	if strings.EqualFold(scheme, "ldap") {
-		waitLog = "LDAP server listening"
-	}
-
-	req := testcontainers.ContainerRequest{
-		Image:        "glauth/glauth:latest",
-		ExposedPorts: []string{"389/tcp"},
-		Env: map[string]string{
-			"GLAUTH_CONFIG": "/app/config/config.cfg",
-		},
-		Files: []testcontainers.ContainerFile{
-			{HostFilePath: cfg, ContainerFilePath: "/app/config/config.cfg", FileMode: 0o644},
-			{HostFilePath: cert, ContainerFilePath: "/app/config/cert.pem", FileMode: 0o644},
-			{HostFilePath: key, ContainerFilePath: "/app/config/key.pem", FileMode: 0o600},
-		},
-		Networks:       nil,
-		NetworkAliases: nil,
-		WaitingFor: wait.ForLog(waitLog).
-			WithStartupTimeout(1 * time.Minute).
-			WithPollInterval(2 * time.Second),
-	}
-	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	if err != nil {
-		tb.Fatalf("failed to start glauth container: %v", err)
-	}
-
-	host, err := container.Host(ctx)
-	if err != nil {
-		tb.Fatalf("get host: %v", err)
-	}
-	port, err := container.MappedPort(ctx, "389/tcp")
-	if err != nil {
-		tb.Fatalf("get mapped port: %v", err)
-	}
-
-	url := fmt.Sprintf("%s://%s:%s", scheme, host, port.Port())
-
-	return url, func() {
-		_ = container.Terminate(context.Background())
-	}
+	return testutil.StartGlauthWithConfig(ctx, tb, cfg, scheme)
 }
 
 func StartMinio(ctx context.Context, tb testing.TB, accessKey string, secretKey string) (string, func()) {
 	tb.Helper()
-
-	req := testcontainers.ContainerRequest{
-		Image:        "minio/minio:latest",
-		ExposedPorts: []string{"9000/tcp"},
-		Env: map[string]string{
-			"MINIO_ROOT_USER":     accessKey,
-			"MINIO_ROOT_PASSWORD": secretKey,
-		},
-		Cmd: []string{
-			"server",
-			"/data",
-			"--address",
-			":9000",
-		},
-		WaitingFor: wait.ForHTTP("/minio/health/ready").
-			WithPort("9000/tcp").
-			WithStartupTimeout(1 * time.Minute),
-	}
-
-	container, err := testcontainers.GenericContainer(
-		ctx,
-		testcontainers.GenericContainerRequest{
-			ContainerRequest: req,
-			Started:          true,
-		},
-	)
-	if err != nil {
-		tb.Fatalf("failed to start minio container: %v", err)
-	}
-
-	host, err := container.Host(ctx)
-	if err != nil {
-		tb.Fatalf("get host: %v", err)
-	}
-
-	port, err := container.MappedPort(ctx, "9000/tcp")
-	if err != nil {
-		tb.Fatalf("get mapped port: %v", err)
-	}
-
-	endpoint := fmt.Sprintf("http://%s:%s", host, port.Port())
-
-	return endpoint, func() {
-		_ = container.Terminate(context.Background())
-	}
+	return testutil.StartMinio(ctx, tb, accessKey, secretKey)
 }
 
 func NewS3Client(tb testing.TB, ctx context.Context, endpoint, region, accessKey, secretKey string) *s3.Client {
 	tb.Helper()
-
-	awsCfg, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion(region),
-		config.WithBaseEndpoint(endpoint),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
-		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
-	)
-	if err != nil {
-		tb.Fatalf("load aws config for %s: %v", endpoint, err)
-	}
-
-	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
-		o.UsePathStyle = true
-	})
-}
-
-func pathRelativeHelper(tb testing.TB, elems ...string) string {
-	tb.Helper()
-	p := filepath.Join(elems...)
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		tb.Fatalf("abs path: %v", err)
-	}
-	return abs
+	return testutil.NewS3Client(tb, ctx, endpoint, region, accessKey, secretKey)
 }
