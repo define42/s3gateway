@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -10,35 +10,54 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	adminpage "github.com/define42/s3gateway/internal/adminpage"
 	authz "github.com/define42/s3gateway/internal/authz"
-	"github.com/define42/s3gateway/internal/xmlhelper"
-	"github.com/define42/s3gateway/internal/groupcache"
 	"github.com/define42/s3gateway/internal/config"
+	"github.com/define42/s3gateway/internal/groupcache"
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
-	adminpage "github.com/define42/s3gateway/internal/adminpage"
+	"github.com/define42/s3gateway/internal/xmlhelper"
 	"golang.org/x/sync/singleflight"
 )
 
 const defaultReadyCheckTimeout = 2 * time.Second
+
+func EffectiveShutdownTimeout(cfg config.Config) time.Duration {
+	cfg.ApplyDefaults()
+	return cfg.ShutdownTimeout
+}
+
+func NewHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
+	cfg.ApplyDefaults()
+
+	return &http.Server{
+		Addr:              cfg.ListenAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+		MaxHeaderBytes:    cfg.MaxHeaderBytes,
+	}
+}
 
 // ==================== Gateway ====================
 type ctxKey string
 
 const ctxUploaderKey ctxKey = "uploader-upn"
 
-type server struct {
-	cfg              config.Config
-	up               *s3.Client
-	gcache           *groupcache.GroupCache
-	groupLookupSF    singleflight.Group
-	fetchGroups      func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
+type Server struct {
+	cfg           config.Config
+	up            *s3.Client
+	gcache        *groupcache.GroupCache
+	groupLookupSF singleflight.Group
+	fetchGroups   func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
 }
 
-func newServer(cfg config.Config, up *s3.Client) *server {
+func NewServer(cfg config.Config, up *s3.Client) *Server {
 	cfg.ApplyDefaults()
-	return &server{
+	return &Server{
 		cfg:         cfg,
 		up:          up,
 		gcache:      groupcache.NewGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
@@ -46,7 +65,7 @@ func newServer(cfg config.Config, up *s3.Client) *server {
 	}
 }
 
-func (s *server) groupsForCredentials(upn, pass string) (map[string]struct{}, error) {
+func (s *Server) GroupsForCredentials(upn, pass string) (map[string]struct{}, error) {
 	if upn == "" || pass == "" {
 		return nil, errors.New("missing credentials")
 	}
@@ -82,7 +101,7 @@ func (s *server) groupsForCredentials(upn, pass string) (map[string]struct{}, er
 	return groupcache.CloneGroups(shared), nil
 }
 
-func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Handler {
+func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
 			next.ServeHTTP(w, r)
@@ -114,7 +133,7 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 			return
 		}
 
-		grps, err := s.groupsForCredentials(upn, pass)
+		grps, err := s.GroupsForCredentials(upn, pass)
 		if err != nil {
 			xmlhelper.WriteXMLError(w, http.StatusUnauthorized, "AccessDenied", "Bad credentials")
 			return
@@ -129,7 +148,7 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 	})
 }
 
-func uploaderFromCtx(r *http.Request) string {
+func UploaderFromCtx(r *http.Request) string {
 	v := r.Context().Value(ctxUploaderKey)
 	if v == nil {
 		return ""
@@ -138,7 +157,7 @@ func uploaderFromCtx(r *http.Request) string {
 	return strings.TrimSpace(uploader)
 }
 
-func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Path-style only:
 	//   /                 => ListBuckets
 	//   /bucket           => CreateBucket, ListObjects (v2), ListMultipartUploads, Lifecycle config
@@ -349,7 +368,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // ---------- handlers ----------
 
-func (s *server) checkLDAPReady(ctx context.Context) error {
+func (s *Server) checkLDAPReady(ctx context.Context) error {
 	if strings.TrimSpace(s.cfg.LDAPURL) == "" {
 		return errors.New("url not configured")
 	}
@@ -371,7 +390,7 @@ func (s *server) checkLDAPReady(ctx context.Context) error {
 	return nil
 }
 
-func (s *server) checkS3Ready(ctx context.Context) error {
+func (s *Server) checkS3Ready(ctx context.Context) error {
 	if s.up == nil {
 		return errors.New("client not configured")
 	}
@@ -379,7 +398,7 @@ func (s *server) checkS3Ready(ctx context.Context) error {
 	return err
 }
 
-func (s *server) checkReady(ctx context.Context) error {
+func (s *Server) checkReady(ctx context.Context) error {
 	var errs []string
 	if err := s.checkLDAPReady(ctx); err != nil {
 		errs = append(errs, fmt.Sprintf("ldap: %v", err))
@@ -393,7 +412,7 @@ func (s *server) checkReady(ctx context.Context) error {
 	return errors.New(strings.Join(errs, "; "))
 }
 
-func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
 	ctx, cancel := context.WithTimeout(r.Context(), defaultReadyCheckTimeout)
@@ -411,4 +430,3 @@ func (s *server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok\n"))
 	}
 }
-

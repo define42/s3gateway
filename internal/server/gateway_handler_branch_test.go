@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/define42/s3gateway/internal/config"
 	authz "github.com/define42/s3gateway/internal/authz"
+	"github.com/define42/s3gateway/internal/config"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 )
 
@@ -1225,7 +1225,7 @@ func TestCreateCompleteAndListPartsBranchMatrix(t *testing.T) {
 }
 
 func TestServeHTTPAndAuthBranches(t *testing.T) {
-	gw := newServer(config.Config{SigV4MaxSkew: 15 * time.Minute}, nil)
+	gw := NewServer(config.Config{SigV4MaxSkew: 15 * time.Minute}, nil)
 
 	t.Run("servehttp route not implemented and invalid part number branches", func(t *testing.T) {
 		cases := []struct {
@@ -1260,7 +1260,7 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 	})
 
 	t.Run("withAuth error and success branches", func(t *testing.T) {
-		healthHandler := gw.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		healthHandler := gw.WithAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		}), adminWebpageHandler(gw))
 		rrHealth := httptest.NewRecorder()
@@ -1274,7 +1274,7 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 			t.Fatalf("readyz should bypass auth and reach next handler: got=%d body=%s", rrReady.Code, rrReady.Body.String())
 		}
 
-		handler := gw.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler := gw.WithAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if authz.RulesFromCtx(r) == nil {
 				t.Fatalf("expected rules in request context")
 			}
@@ -1310,13 +1310,13 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 		}
 
 		rrBadCreds := httptest.NewRecorder()
-		gwFetch := newServer(config.Config{
+		gwFetch := NewServer(config.Config{
 			SigV4MaxSkew: 0,
 			LDAPURL:      "ldap://127.0.0.1:1",
 			BaseDN:       "dc=example,dc=com",
 			LDAPDomain:   "example.com",
 		}, nil)
-		handlerFetch := gwFetch.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerFetch := gwFetch.WithAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		}), adminWebpageHandler(gwFetch))
 		handlerFetch.ServeHTTP(rrBadCreds, newSignedReq("dXNlcjpwYXNz", fixedAmzDate, "s3"))
@@ -1380,7 +1380,7 @@ func TestReadyzDependencyChecks(t *testing.T) {
 	})
 
 	t.Run("fails when s3 client is unavailable", func(t *testing.T) {
-		gw := newServer(config.Config{LDAPURL: startLDAPListener(t)}, nil)
+		gw := NewServer(config.Config{LDAPURL: startLDAPListener(t)}, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 		rr := httptest.NewRecorder()

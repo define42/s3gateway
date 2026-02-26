@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	authz "github.com/define42/s3gateway/internal/authz"
-	handler_bucket "github.com/define42/s3gateway/internal/handler_bucket"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	authz "github.com/define42/s3gateway/internal/authz"
+	handler_bucket "github.com/define42/s3gateway/internal/handler_bucket"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 	"github.com/define42/s3gateway/internal/xmlhelper"
 )

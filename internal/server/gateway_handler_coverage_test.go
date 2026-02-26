@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -15,18 +15,19 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/define42/s3gateway/internal/config"
 	authz "github.com/define42/s3gateway/internal/authz"
+	"github.com/define42/s3gateway/internal/config"
 	"github.com/define42/s3gateway/internal/s3credentials"
+	"github.com/define42/s3gateway/internal/testutil"
 )
 
-func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*server, func()) {
+func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func()) {
 	t.Helper()
 
 	upstreamSrv := httptest.NewServer(h)
 	ctx := context.Background()
-	upstreamClient := NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := newServer(config.Config{}, upstreamClient)
+	upstreamClient := testutil.NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
+	gw := NewServer(config.Config{}, upstreamClient)
 
 	return gw, func() {
 		upstreamSrv.Close()
@@ -65,14 +66,14 @@ func TestS3ClientUpload100MBThroughGateway(t *testing.T) {
 		"team2-rw": {},
 	})
 
-	gwSrv := httptest.NewServer(gw.withAuth(gw, adminWebpageHandler(gw)))
+	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	accessKey, secretKey, err := s3credentials.GenerateKeysBase64Encoded("testuser", "dogood")
 	if err != nil {
 		t.Fatalf("generate keys: %v", err)
 	}
-	client := NewS3Client(t, context.Background(), gwSrv.URL, "us-east-1", accessKey, secretKey)
+	client := testutil.NewS3Client(t, context.Background(), gwSrv.URL, "us-east-1", accessKey, secretKey)
 
 	tmpFile, err := os.CreateTemp(t.TempDir(), "gateway-upload-100mb-*")
 	if err != nil {
@@ -549,7 +550,7 @@ func TestCoverageHelpersLifecycleAndShutdown(t *testing.T) {
 		t.Fatalf("lifecycleRuleLegacyPrefix(zero) = %v, want nil", got)
 	}
 
-	if got := effectiveShutdownTimeout(config.Config{}); got <= 0 {
-		t.Fatalf("effectiveShutdownTimeout() should apply defaults, got=%s", got)
+	if got := EffectiveShutdownTimeout(config.Config{}); got <= 0 {
+		t.Fatalf("EffectiveShutdownTimeout() should apply defaults, got=%s", got)
 	}
 }

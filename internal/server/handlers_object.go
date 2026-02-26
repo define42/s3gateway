@@ -1,24 +1,24 @@
-package main
+package server
 
 import (
-"encoding/xml"
-"errors"
-"fmt"
-"io"
-"net/http"
-"strconv"
-"strings"
-"time"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
-authz "github.com/define42/s3gateway/internal/authz"
-handler_bucket "github.com/define42/s3gateway/internal/handler_bucket"
-"github.com/define42/s3gateway/internal/xmlhelper"
-"github.com/aws/aws-sdk-go-v2/aws"
-v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
-"github.com/aws/aws-sdk-go-v2/service/s3"
-"github.com/aws/aws-sdk-go-v2/service/s3/types"
-"github.com/define42/s3gateway/internal/config"
-sigv4 "github.com/define42/s3gateway/internal/sigv4"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	authz "github.com/define42/s3gateway/internal/authz"
+	"github.com/define42/s3gateway/internal/config"
+	handler_bucket "github.com/define42/s3gateway/internal/handler_bucket"
+	sigv4 "github.com/define42/s3gateway/internal/sigv4"
+	"github.com/define42/s3gateway/internal/xmlhelper"
 )
 
 const maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
@@ -35,8 +35,7 @@ type deleteObjectReqItemXML struct {
 	ETag      *string `xml:"ETag,omitempty"`
 }
 
-
-func (s *server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
+func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
@@ -91,7 +90,7 @@ func (s *server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, 
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *server) handleGetObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
+func (s *Server) handleGetObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
@@ -128,7 +127,7 @@ func (s *server) handleGetObjectTagging(w http.ResponseWriter, r *http.Request, 
 	handler_bucket.WriteTaggingXMLResponse(w, http.StatusOK, out.TagSet)
 }
 
-func (s *server) handleDeleteObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
+func (s *Server) handleDeleteObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
@@ -157,7 +156,7 @@ func (s *server) handleDeleteObjectTagging(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, bucket string) {
+func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanDeleteObject(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
@@ -271,7 +270,7 @@ func (s *server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 	xw.End("DeleteResult")
 }
 
-func (s *server) handleListObjectVersions(w http.ResponseWriter, r *http.Request, bucket string) {
+func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
@@ -415,7 +414,7 @@ func (s *server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 	xw.End("ListVersionsResult")
 }
 
-func (s *server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) {
+func (s *Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
@@ -551,8 +550,7 @@ func (s *server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 	xw.End("ListBucketResult")
 }
 
-
-func (s *server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
@@ -760,7 +758,7 @@ func (s *server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 	_, _ = io.Copy(w, out.Body)
 }
 
-func (s *server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+func (s *Server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
@@ -1012,7 +1010,7 @@ func parseObjectAttributesHeader(h http.Header) ([]types.ObjectAttributes, error
 	return out, nil
 }
 
-func (s *server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Request, bucket, key string) {
+func (s *Server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
@@ -1145,7 +1143,7 @@ func (s *server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Reques
 	xw.End("GetObjectAttributesOutput")
 }
 
-func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
@@ -1175,7 +1173,7 @@ func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 
 	ct := r.Header.Get("Content-Type")
 	meta := extractAmzMeta(r.Header)
-	meta = ensureUploadedByMetadata(meta, uploaderFromCtx(r))
+	meta = ensureUploadedByMetadata(meta, UploaderFromCtx(r))
 	if missing := missingRequiredUploadMetadata(meta, s.cfg.RequiredUploadMetadataKeys); len(missing) > 0 {
 		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
 		return
@@ -1322,7 +1320,7 @@ func (s *server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
@@ -1558,7 +1556,7 @@ func (s *server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 	xw.End("CopyObjectResult")
 }
 
-func (s *server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string, partNumber int32) {
+func (s *Server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string, partNumber int32) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
@@ -1701,7 +1699,7 @@ func (s *server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bu
 	xw.End("CopyPartResult")
 }
 
-func (s *server) handleDeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
+func (s *Server) handleDeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanDeleteObject(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
@@ -1809,5 +1807,3 @@ func parseExpiresHeader(h http.Header) (*time.Time, error) {
 	utc := t.UTC()
 	return &utc, nil
 }
-
-
