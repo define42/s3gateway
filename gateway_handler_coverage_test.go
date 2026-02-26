@@ -182,7 +182,7 @@ func TestGatewayGetAndHeadObjectRichHeaderMatrix(t *testing.T) {
 	for k, v := range commonHeaders {
 		getReq.Header.Set(k, v)
 	}
-	getReq = getReq.WithContext(context.WithValue(getReq.Context(), ctxRulesKey, fullTeam2Rule()))
+	getReq = getReq.WithContext(authz.WithRules(getReq.Context(), fullTeam2Rule()))
 	getRR := httptest.NewRecorder()
 	gw.ServeHTTP(getRR, getReq)
 	if getRR.Code != http.StatusPartialContent {
@@ -202,7 +202,7 @@ func TestGatewayGetAndHeadObjectRichHeaderMatrix(t *testing.T) {
 	for k, v := range commonHeaders {
 		headReq.Header.Set(k, v)
 	}
-	headReq = headReq.WithContext(context.WithValue(headReq.Context(), ctxRulesKey, fullTeam2Rule()))
+	headReq = headReq.WithContext(authz.WithRules(headReq.Context(), fullTeam2Rule()))
 	headRR := httptest.NewRecorder()
 	gw.ServeHTTP(headRR, headReq)
 	if headRR.Code != http.StatusOK {
@@ -269,7 +269,7 @@ func TestGatewayWriteCopyAndDeleteHandlerMatrix(t *testing.T) {
 	})
 	defer cleanup()
 
-	permCtx := context.WithValue(context.Background(), ctxRulesKey, fullTeam2Rule())
+	permCtx := authz.WithRules(context.Background(), fullTeam2Rule())
 
 	putReq := httptest.NewRequest(http.MethodPut, "/team2-rich/object-put.txt", bytes.NewReader([]byte("payload")))
 	putReq = putReq.WithContext(permCtx)
@@ -397,7 +397,7 @@ func TestGatewayBucketHeadVersioningAndCreateDelete(t *testing.T) {
 	})
 	defer cleanup()
 
-	fullPerm := context.WithValue(context.Background(), ctxRulesKey, fullTeam2Rule())
+	fullPerm := authz.WithRules(context.Background(), fullTeam2Rule())
 
 	createReq := httptest.NewRequest(http.MethodPut, "/team2-bucket", nil).WithContext(fullPerm)
 	createRR := httptest.NewRecorder()
@@ -472,7 +472,7 @@ func TestGatewayBucketAndObjectTaggingRoutes(t *testing.T) {
 	})
 	defer cleanup()
 
-	fullPerm := context.WithValue(context.Background(), ctxRulesKey, fullTeam2Rule())
+	fullPerm := authz.WithRules(context.Background(), fullTeam2Rule())
 	bucketTaggingPayload := `<?xml version="1.0" encoding="UTF-8"?><Tagging><TagSet><Tag><Key>bk</Key><Value>bv</Value></Tag></TagSet></Tagging>`
 	objectTaggingPayload := `<?xml version="1.0" encoding="UTF-8"?><Tagging><TagSet><Tag><Key>ok</Key><Value>ov</Value></Tag></TagSet></Tagging>`
 

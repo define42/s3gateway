@@ -18,11 +18,11 @@ import (
 )
 
 func reqWithRules(req *http.Request, rules []authz.Rule) *http.Request {
-	return req.WithContext(context.WithValue(req.Context(), ctxRulesKey, rules))
+	return req.WithContext(authz.WithRules(req.Context(), rules))
 }
 
 func reqWithRulesAndSigV4(req *http.Request, rules []authz.Rule, auth *sigv4.SigV4Auth) *http.Request {
-	ctx := context.WithValue(req.Context(), ctxRulesKey, rules)
+	ctx := authz.WithRules(req.Context(), rules)
 	ctx = context.WithValue(ctx, sigv4.CtxSigV4AuthKey, auth)
 	ctx = context.WithValue(ctx, sigv4.CtxSigV4SecretKey, "secret")
 	return req.WithContext(ctx)
@@ -1250,7 +1250,7 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 		}
 		for _, tc := range cases {
 			req := httptest.NewRequest(tc.method, tc.target, nil)
-			req = req.WithContext(context.WithValue(req.Context(), ctxRulesKey, fullTeam2Rule()))
+			req = req.WithContext(authz.WithRules(req.Context(), fullTeam2Rule()))
 			rr := httptest.NewRecorder()
 			gw.ServeHTTP(rr, req)
 			if rr.Code != tc.want {
@@ -1275,7 +1275,7 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 		}
 
 		handler := gw.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if rulesFromCtx(r) == nil {
+			if authz.RulesFromCtx(r) == nil {
 				t.Fatalf("expected rules in request context")
 			}
 			w.WriteHeader(http.StatusNoContent)

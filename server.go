@@ -26,7 +26,6 @@ const defaultReadyCheckTimeout = 2 * time.Second
 // ==================== Gateway ====================
 type ctxKey string
 
-const ctxRulesKey ctxKey = "rules"
 const ctxUploaderKey ctxKey = "uploader-upn"
 
 type server struct {
@@ -122,21 +121,12 @@ func (s *server) withAuth(next http.Handler, adminHandler http.Handler) http.Han
 		}
 
 		rules := authz.RulesFromGroups(grps)
-		ctx := context.WithValue(r.Context(), ctxRulesKey, rules)
+		ctx := authz.WithRules(r.Context(), rules)
 		ctx = sigv4.WithSigV4Auth(ctx, auth)
 		ctx = sigv4.WithSigV4Secret(ctx, secretKey)
 		ctx = context.WithValue(ctx, ctxUploaderKey, upn)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
-}
-
-func rulesFromCtx(r *http.Request) []authz.Rule {
-	v := r.Context().Value(ctxRulesKey)
-	if v == nil {
-		return nil
-	}
-	rules, _ := v.([]authz.Rule)
-	return rules
 }
 
 func uploaderFromCtx(r *http.Request) string {

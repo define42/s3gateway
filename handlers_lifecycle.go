@@ -640,7 +640,7 @@ func lifecycleRuleLegacyPrefix(r types.LifecycleRule) *string {
 }
 
 func (s *server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanCreateBucket(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -664,7 +664,7 @@ func (s *server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r 
 }
 
 func (s *server) handleGetBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -690,7 +690,7 @@ func (s *server) handleGetBucketLifecycleConfiguration(w http.ResponseWriter, r 
 }
 
 func (s *server) handleDeleteBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanDeleteBucket(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return

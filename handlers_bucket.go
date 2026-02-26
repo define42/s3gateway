@@ -12,7 +12,7 @@ import (
 )
 
 func (s *server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 
 	out, err := s.up.ListBuckets(r.Context(), &s3.ListBucketsInput{})
 	if err != nil {
@@ -40,7 +40,7 @@ func (s *server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleCreateBucket(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanCreateBucket(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -54,7 +54,7 @@ func (s *server) handleCreateBucket(w http.ResponseWriter, r *http.Request, buck
 }
 
 func (s *server) handleHeadBucket(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -89,7 +89,7 @@ func (s *server) handleHeadBucket(w http.ResponseWriter, r *http.Request, bucket
 }
 
 func (s *server) handleDeleteBucket(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanDeleteBucket(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -108,7 +108,7 @@ func (s *server) handleDeleteBucket(w http.ResponseWriter, r *http.Request, buck
 }
 
 func (s *server) handlePutBucketVersioning(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -141,7 +141,7 @@ func (s *server) handlePutBucketVersioning(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *server) handleGetBucketVersioning(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -168,7 +168,7 @@ func (s *server) handleGetBucketVersioning(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *server) handlePutBucketTagging(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -207,7 +207,7 @@ func (s *server) handlePutBucketTagging(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *server) handleGetBucketTagging(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -229,7 +229,7 @@ func (s *server) handleGetBucketTagging(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *server) handleDeleteBucketTagging(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
