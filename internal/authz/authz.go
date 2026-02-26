@@ -1,6 +1,29 @@
 package authz
 
-import "strings"
+import (
+	"context"
+	"net/http"
+	"strings"
+)
+
+type ctxKey string
+
+const ctxRulesKey ctxKey = "rules"
+
+// WithRules stores rules in the context.
+func WithRules(ctx context.Context, rules []Rule) context.Context {
+	return context.WithValue(ctx, ctxRulesKey, rules)
+}
+
+// RulesFromCtx retrieves the authorization rules stored in the request context.
+func RulesFromCtx(r *http.Request) []Rule {
+	v := r.Context().Value(ctxRulesKey)
+	if v == nil {
+		return nil
+	}
+	rules, _ := v.([]Rule)
+	return rules
+}
 
 // ==================== AuthZ: <prefix>-<letters> => bucket prefix "<prefix>-" ====================
 // Permission letters:

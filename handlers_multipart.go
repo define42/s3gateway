@@ -18,7 +18,7 @@ sigv4 "github.com/define42/s3gateway/internal/sigv4"
 )
 
 func (s *server) handleListMultipartUploads(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -121,7 +121,7 @@ type completeMultipartUpload struct {
 }
 
 func (s *server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -188,7 +188,7 @@ func (s *server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 }
 
 func (s *server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string, partNumber int32) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -271,7 +271,7 @@ func (s *server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 }
 
 func (s *server) handleListParts(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -334,7 +334,7 @@ func (s *server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 
 // CompleteMultipartUpload requires PartNumber + ETag for each part.
 func (s *server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -402,7 +402,7 @@ func (s *server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *server) handleAbortMultipart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
-	rules := rulesFromCtx(r)
+	rules := authz.RulesFromCtx(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
