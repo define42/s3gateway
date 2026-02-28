@@ -108,8 +108,8 @@ func (cfg Config) Validate() error {
 	if cfg.MaxHeaderBytes <= 0 {
 		return errors.New("HTTP_MAX_HEADER_BYTES must be > 0")
 	}
-	if cfg.CookieSecret != "" && len(cfg.CookieSecret) < 16 {
-		return errors.New("COOKIE_SECRET must be at least 16 characters when set")
+	if cfg.CookieSecret != "" && len(cfg.CookieSecret) < 32 {
+		return errors.New("COOKIE_SECRET must be at least 32 characters when set")
 	}
 	return nil
 }

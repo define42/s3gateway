@@ -5,7 +5,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -42,7 +42,7 @@ func ReadCertificates(caFolder string) (*x509.CertPool, error) {
 		}
 		loaded++
 	}
-	log.Printf("loaded %d CA file(s) from %s", loaded, caFolder)
+	slog.Info("loaded CA files", "count", loaded, "dir", caFolder)
 
 	// Read system default Root CA
 	defaultCaFile := "/etc/ssl/certs/ca-certificates.crt"
@@ -51,9 +51,9 @@ func ReadCertificates(caFolder string) (*x509.CertPool, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("load default root CA file %s: %w", defaultCaFile, err)
 		}
-		log.Printf("default CA file %s not found, skipping", defaultCaFile)
+		slog.Info("default CA file not found, skipping", "path", defaultCaFile)
 	} else {
-		log.Printf("adding default CA Root certificate from: %s", defaultCaFile)
+		slog.Info("adding default CA root certificate", "path", defaultCaFile)
 		for _, cert := range certs {
 			certpool.AddCert(cert)
 		}

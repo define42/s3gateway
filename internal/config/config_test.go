@@ -147,14 +147,14 @@ func TestCookieSecretValidation(t *testing.T) {
 		t.Fatalf("empty CookieSecret should pass validation, got: %v", err)
 	}
 
-	// exactly 16 characters is allowed
+	// exactly 32 characters is allowed
 	cfg = base
-	cfg.CookieSecret = "1234567890abcdef"
+	cfg.CookieSecret = "1234567890abcdef1234567890abcdef"
 	if err := cfg.Validate(); err != nil {
-		t.Fatalf("16-char CookieSecret should pass validation, got: %v", err)
+		t.Fatalf("32-char CookieSecret should pass validation, got: %v", err)
 	}
 
-	// more than 16 characters is allowed
+	// more than 32 characters is allowed
 	cfg = base
 	cfg.CookieSecret = "a-very-long-secret-key-for-production"
 	if err := cfg.Validate(); err != nil {
