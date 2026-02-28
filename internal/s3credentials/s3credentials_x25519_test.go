@@ -357,7 +357,7 @@ func TestDecryptPublicKeyParseError(t *testing.T) {
 	}
 
 	// decrypt still slices a fixed 32-byte ephemeral public key for v1.
-	payload := append([]byte(s3credentials_x25519_v1), make([]byte, x25519KeySize+12)...)
+	payload := append([]byte(s3CredentialsX25519V1), make([]byte, x25519KeySize+12)...)
 	encoded := base64.RawURLEncoding.EncodeToString(payload)
 
 	_, err = decrypt(receiverPriv, encoded)

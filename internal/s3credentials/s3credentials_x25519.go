@@ -14,7 +14,7 @@ import (
 
 var x25519Curve = ecdh.X25519()
 
-const s3credentials_x25519_v1 = "X1"
+const s3CredentialsX25519V1 = "X1"
 const x25519KeySize = 32
 
 func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
@@ -119,11 +119,11 @@ func encrypt(receiverPub *ecdh.PublicKey, plaintext []byte) (string, error) {
 	payload = append(payload, nonce...)
 	payload = append(payload, ciphertext...)
 
-	return s3credentials_x25519_v1 + base64.RawURLEncoding.EncodeToString(payload), nil
+	return s3CredentialsX25519V1 + base64.RawURLEncoding.EncodeToString(payload), nil
 }
 
 func GetDecryptedToken(encoded string, privateKey *ecdh.PrivateKey) (ldapUsername, ldapPassword, secretKey string, err error) {
-	if !strings.HasPrefix(encoded, s3credentials_x25519_v1) {
+	if !strings.HasPrefix(encoded, s3CredentialsX25519V1) {
 		return "", "", "", errors.New("invalid token version")
 	}
 	decrypted, err := decrypt(privateKey, encoded[2:])

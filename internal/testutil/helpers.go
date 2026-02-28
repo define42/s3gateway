@@ -88,7 +88,7 @@ debug = true
 `
 
 	cfgPath := filepath.Join(tb.TempDir(), "glauth-integration.cfg")
-	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		tb.Fatalf("write glauth config: %v", err)
 	}
 	return cfgPath

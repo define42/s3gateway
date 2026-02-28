@@ -31,11 +31,12 @@ import (
 )
 
 const (
-	adminSessionCookieName = "s3gateway_admin_session"
-	defaultAdminSessionTTL = 30 * time.Minute
-	adminSessionValueUser  = "username"
-	adminSessionValueGrps  = "groups"
-	adminPreviewMaxKeys    = int32(25)
+	adminSessionCookieName  = "s3gateway_admin_session"
+	defaultAdminSessionTTL  = 30 * time.Minute
+	adminSessionValueUser   = "username"
+	adminSessionValueGrps   = "groups"
+	adminPreviewMaxKeys     = int32(25)
+	maxAdminFormBodySize    = 64 * 1024 // 64 KiB is more than enough for any admin form
 )
 
 func IsBrowser(r *http.Request) bool {
@@ -1021,6 +1022,7 @@ func (h *handler) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminFormBodySize)
 	if err := r.ParseForm(); err != nil {
 		writeAdminLoginPage(w, r, http.StatusBadRequest, adminLoginPageData{
 			Error: "Invalid form payload.",
@@ -1160,6 +1162,7 @@ func (h *handler) handleAdminCreateBucket(w http.ResponseWriter, r *http.Request
 		http.Redirect(w, r, adminDashboardURL("", "Invalid form origin.", "", ""), http.StatusSeeOther)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminFormBodySize)
 	if err := r.ParseForm(); err != nil {
 		http.Redirect(w, r, adminDashboardURL("", "Invalid form payload.", "", ""), http.StatusSeeOther)
 		return
@@ -1687,6 +1690,7 @@ func (h *handler) handleAdminBucketDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminFormBodySize)
 	if err := r.ParseForm(); err != nil {
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
