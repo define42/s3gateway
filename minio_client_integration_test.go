@@ -169,6 +169,16 @@ func TestMinioClientIntegration(t *testing.T) {
 				Days: lifecycle.ExpirationDays(30),
 			},
 		},
+		{
+			ID:     "disabled-rule",
+			Status: "Disabled",
+			RuleFilter: lifecycle.Filter{
+				Prefix: "tmp/",
+			},
+			Expiration: lifecycle.Expiration{
+				Days: lifecycle.ExpirationDays(90),
+			},
+		},
 	}
 	if err := minioClient.SetBucketLifecycle(ctx, bucket, lcConfig); err != nil {
 		t.Fatalf("minio SetBucketLifecycle via gateway: %v", err)
@@ -177,14 +187,48 @@ func TestMinioClientIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("minio GetBucketLifecycle via gateway: %v", err)
 	}
-	if len(gotLC.Rules) != 1 {
-		t.Fatalf("expected 1 lifecycle rule, got %d", len(gotLC.Rules))
+	if len(gotLC.Rules) < 1 {
+		t.Fatalf("expected at least 1 lifecycle rule, got %d", len(gotLC.Rules))
 	}
-	if gotLC.Rules[0].ID != "expire-old-objects" {
-		t.Fatalf("lifecycle rule ID mismatch: got=%q want=%q", gotLC.Rules[0].ID, "expire-old-objects")
+	var foundEnabledRule, foundDisabledRule bool
+	for _, r := range gotLC.Rules {
+		switch r.ID {
+		case "expire-old-objects":
+			foundEnabledRule = true
+			if r.Expiration.Days != lifecycle.ExpirationDays(30) {
+				t.Fatalf("lifecycle expiration days mismatch: got=%d want=30", r.Expiration.Days)
+			}
+		case "disabled-rule":
+			foundDisabledRule = true
+			if r.Status != "Disabled" {
+				t.Fatalf("disabled lifecycle rule status mismatch: got=%q want=Disabled", r.Status)
+			}
+			if r.Expiration.Days != lifecycle.ExpirationDays(90) {
+				t.Fatalf("disabled lifecycle rule expiration days mismatch: got=%d want=90", r.Expiration.Days)
+			}
+		}
 	}
-	if gotLC.Rules[0].Expiration.Days != lifecycle.ExpirationDays(30) {
-		t.Fatalf("lifecycle expiration days mismatch: got=%d want=30", gotLC.Rules[0].Expiration.Days)
+	if !foundEnabledRule {
+		t.Fatalf("lifecycle rule %q not found in GET response", "expire-old-objects")
+	}
+	// Some S3-compatible backends may not return disabled rules; log if missing rather than failing.
+	if !foundDisabledRule {
+		t.Logf("disabled lifecycle rule %q was not returned by backend (backend may not support disabled rules)", "disabled-rule")
+	}
+
+	// Test delete lifecycle configuration (SetBucketLifecycle with empty config triggers DELETE).
+	if err := minioClient.SetBucketLifecycle(ctx, bucket, lifecycle.NewConfiguration()); err != nil {
+		t.Fatalf("minio delete lifecycle via gateway: %v", err)
+	}
+	// Verify lifecycle is deleted: GetBucketLifecycle should return no rules or an error.
+	afterDeleteLC, afterDeleteErr := minioClient.GetBucketLifecycle(ctx, bucket)
+	if afterDeleteErr != nil {
+		lcErrResp := minio.ToErrorResponse(afterDeleteErr)
+		if lcErrResp.Code != "NoSuchLifecycleConfiguration" {
+			t.Fatalf("GetBucketLifecycle after delete: unexpected error code=%q: %v", lcErrResp.Code, afterDeleteErr)
+		}
+	} else if len(afterDeleteLC.Rules) != 0 {
+		t.Fatalf("expected 0 lifecycle rules after delete, got %d", len(afterDeleteLC.Rules))
 	}
 
 	// Test SetBucketTagging, GetBucketTagging, and RemoveBucketTagging
