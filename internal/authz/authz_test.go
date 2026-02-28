@@ -84,6 +84,29 @@ func TestBucketPerm_EmptyRules(t *testing.T) {
 	}
 }
 
+func TestHelloGroupReadAccess(t *testing.T) {
+	// Group "hello-r": first '-' separates namespace "hello" from letter "r".
+	rules := RulesFromGroups(map[string]struct{}{"hello-r": {}})
+
+	buckets := []struct {
+		name string
+		want bool
+	}{
+		{"hello-data-2024", true},  // namespace "hello" → match
+		{"hello", true},            // no dash → whole name is namespace "hello" → match
+		{"hello-2024", true},       // namespace "hello" → match
+		{"hello2-data", false},     // namespace "hello2" → no match
+		{"other-bucket", false},    // namespace "other" → no match
+	}
+
+	for _, tt := range buckets {
+		got := CanRead(rules, tt.name)
+		if got != tt.want {
+			t.Errorf("CanRead(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestBucketPerm_CaseInsensitive(t *testing.T) {
 	rules := []Rule{
 		{BucketPrefix: "team", Perm: PermRead},
