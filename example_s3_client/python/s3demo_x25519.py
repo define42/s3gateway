@@ -54,7 +54,8 @@ def generate_keys_x25519(user_upn, user_password, public_key_hex):
     key = derive_key(shared_secret, salt)
     aead = ChaCha20Poly1305(key)
     nonce = os.urandom(12)
-    ciphertext = aead.encrypt(nonce, token_bytes, None)
+    aad = b"X1" + ephemeral_pub_bytes + salt
+    ciphertext = aead.encrypt(nonce, token_bytes, aad)
 
     payload = ephemeral_pub_bytes + salt + nonce + ciphertext
     access_key = "X1" + base64.urlsafe_b64encode(payload).decode("utf-8").rstrip("=")
@@ -69,7 +70,7 @@ def get_s3_client(user_upn, user_password):
     )
     return boto3.client(
         "s3",
-        aws_access_key_id=access_key,  # X1 + base64url(ephemeralPub || nonce || chacha20poly1305(token))
+        aws_access_key_id=access_key,  # X1 + base64url(ephemeralPub || salt || nonce || chacha20poly1305_aad(token, aad=X1||ephemeralPub||salt))
         aws_secret_access_key=secret_key,  # sha256("user:ldap-password"), base64url-encoded
         region_name=S3_REGION,
         endpoint_url=S3_ENDPOINT_URL,

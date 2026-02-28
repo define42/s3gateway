@@ -70,7 +70,12 @@ func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
 		return nil, err
 	}
 
-	return aead.Open(nil, nonce, ciphertext, nil)
+	// Bind the unauthenticated header fields to the ciphertext via AAD.
+	aad := make([]byte, 0, len(s3CredentialsX25519V1)+len(ephemeralPubBytes)+len(salt))
+	aad = append(aad, []byte(s3CredentialsX25519V1)...)
+	aad = append(aad, ephemeralPubBytes...)
+	aad = append(aad, salt...)
+	return aead.Open(nil, nonce, ciphertext, aad)
 
 }
 
@@ -140,7 +145,12 @@ func encrypt(receiverPub *ecdh.PublicKey, plaintext []byte) (string, error) {
 		return "", err
 	}
 
-	ciphertext := aead.Seal(nil, nonce, plaintext, nil)
+	// Bind the unauthenticated header fields to the ciphertext via AAD.
+	aad := make([]byte, 0, len(s3CredentialsX25519V1)+len(epub)+len(salt))
+	aad = append(aad, []byte(s3CredentialsX25519V1)...)
+	aad = append(aad, epub...)
+	aad = append(aad, salt...)
+	ciphertext := aead.Seal(nil, nonce, plaintext, aad)
 
 	// epub (32) + salt (32) + nonce (12) + ciphertext
 	payload := make([]byte, 0, len(epub)+len(salt)+len(nonce)+len(ciphertext))

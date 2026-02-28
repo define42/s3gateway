@@ -91,6 +91,46 @@ func TestDecryptErrors(t *testing.T) {
 	}
 }
 
+func TestDecryptTamperedHeader(t *testing.T) {
+	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate receiver key: %v", err)
+	}
+
+	encoded, err := encrypt(receiverPriv.PublicKey(), []byte("user:pass"))
+	if err != nil {
+		t.Fatalf("failed to encrypt test payload: %v", err)
+	}
+
+	rawPayload, err := base64.RawURLEncoding.DecodeString(encoded[len(s3CredentialsX25519V1):])
+	if err != nil {
+		t.Fatalf("failed to decode encrypted test payload: %v", err)
+	}
+
+	// Tamper with ephemeral public key byte — AAD mismatch must cause auth failure.
+	tamperedEpub := bytes.Clone(rawPayload)
+	tamperedEpub[0] ^= 0x01
+	_, err = decrypt(receiverPriv, base64.RawURLEncoding.EncodeToString(tamperedEpub))
+	if err == nil {
+		t.Fatalf("expected authentication error for tampered ephemeral public key")
+	}
+	if !strings.Contains(err.Error(), "message authentication failed") {
+		t.Fatalf("expected message authentication failed error for tampered epub, got %v", err)
+	}
+
+	// Tamper with salt byte — AAD mismatch must cause auth failure.
+	tamperedSalt := bytes.Clone(rawPayload)
+	tamperedSalt[x25519KeySize] ^= 0x01
+	_, err = decrypt(receiverPriv, base64.RawURLEncoding.EncodeToString(tamperedSalt))
+	if err == nil {
+		t.Fatalf("expected authentication error for tampered salt")
+	}
+	if !strings.Contains(err.Error(), "message authentication failed") {
+		t.Fatalf("expected message authentication failed error for tampered salt, got %v", err)
+	}
+}
+
+
 func TestDecryptTamperedCiphertext(t *testing.T) {
 	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
 	if err != nil {
