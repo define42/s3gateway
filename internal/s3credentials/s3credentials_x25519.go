@@ -18,6 +18,7 @@ var x25519Curve = ecdh.X25519()
 
 const s3CredentialsX25519V1 = "X1"
 const x25519KeySize = 32
+const hkdfSaltSize = 32
 const hkdfInfo = "s3gateway-x25519-v1"
 
 func deriveKey(sharedSecret, salt []byte) ([]byte, error) {
@@ -40,13 +41,14 @@ func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
 	}
 
 	// fixed framing for v1
-	if len(data) < x25519KeySize+chacha20poly1305.NonceSize {
+	if len(data) < x25519KeySize+hkdfSaltSize+chacha20poly1305.NonceSize {
 		return nil, errors.New("ciphertext too short")
 	}
 
 	ephemeralPubBytes := data[:x25519KeySize]
-	nonce := data[x25519KeySize : x25519KeySize+chacha20poly1305.NonceSize]
-	ciphertext := data[x25519KeySize+chacha20poly1305.NonceSize:]
+	salt := data[x25519KeySize : x25519KeySize+hkdfSaltSize]
+	nonce := data[x25519KeySize+hkdfSaltSize : x25519KeySize+hkdfSaltSize+chacha20poly1305.NonceSize]
+	ciphertext := data[x25519KeySize+hkdfSaltSize+chacha20poly1305.NonceSize:]
 
 	ephemeralPub, err := x25519Curve.NewPublicKey(ephemeralPubBytes)
 	if err != nil {
@@ -58,7 +60,7 @@ func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
 		return nil, err
 	}
 
-	key, err := deriveKey(sharedSecret, ephemeralPubBytes)
+	key, err := deriveKey(sharedSecret, salt)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +120,12 @@ func encrypt(receiverPub *ecdh.PublicKey, plaintext []byte) (string, error) {
 
 	epub := ephemeralPriv.PublicKey().Bytes()
 
-	key, err := deriveKey(sharedSecret, epub)
+	salt := make([]byte, hkdfSaltSize)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return "", err
+	}
+
+	key, err := deriveKey(sharedSecret, salt)
 	if err != nil {
 		return "", err
 	}
@@ -135,9 +142,10 @@ func encrypt(receiverPub *ecdh.PublicKey, plaintext []byte) (string, error) {
 
 	ciphertext := aead.Seal(nil, nonce, plaintext, nil)
 
-	// version (1) + epub (32) + nonce (12) + ciphertext
-	payload := make([]byte, 0, len(epub)+len(nonce)+len(ciphertext))
+	// epub (32) + salt (32) + nonce (12) + ciphertext
+	payload := make([]byte, 0, len(epub)+len(salt)+len(nonce)+len(ciphertext))
 	payload = append(payload, epub...)
+	payload = append(payload, salt...)
 	payload = append(payload, nonce...)
 	payload = append(payload, ciphertext...)
 

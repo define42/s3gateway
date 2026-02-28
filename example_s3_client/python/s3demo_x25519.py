@@ -20,6 +20,7 @@ S3_ENDPOINT_URL = "http://localhost:8080"
 S3GATEWAY_PUBLIC_X25519_KEY = "b0b5d6c181c25c6d8d49aa68ecc85a9f8a0ab0f776680eca733ded24dd95ea31"
 
 HKDF_INFO = b"s3gateway-x25519-v1"
+HKDF_SALT_SIZE = 32
 
 
 def derive_key(shared_secret: bytes, salt: bytes) -> bytes:
@@ -49,12 +50,13 @@ def generate_keys_x25519(user_upn, user_password, public_key_hex):
         encoding=Encoding.Raw,
         format=PublicFormat.Raw,
     )
-    key = derive_key(shared_secret, ephemeral_pub_bytes)
+    salt = os.urandom(HKDF_SALT_SIZE)
+    key = derive_key(shared_secret, salt)
     aead = ChaCha20Poly1305(key)
     nonce = os.urandom(12)
     ciphertext = aead.encrypt(nonce, token_bytes, None)
 
-    payload = ephemeral_pub_bytes + nonce + ciphertext
+    payload = ephemeral_pub_bytes + salt + nonce + ciphertext
     access_key = "X1" + base64.urlsafe_b64encode(payload).decode("utf-8").rstrip("=")
     secret_key = base64.urlsafe_b64encode(
         hashlib.sha256(token_bytes).digest()

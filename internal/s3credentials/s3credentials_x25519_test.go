@@ -10,6 +10,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 func TestGenerateKeys(t *testing.T) {
@@ -100,7 +102,7 @@ func TestDecryptTamperedCiphertext(t *testing.T) {
 		t.Fatalf("failed to encrypt test payload: %v", err)
 	}
 
-	data, err := base64.RawURLEncoding.DecodeString(encoded)
+	data, err := base64.RawURLEncoding.DecodeString(encoded[len(s3CredentialsX25519V1):])
 	if err != nil {
 		t.Fatalf("failed to decode encrypted test payload: %v", err)
 	}
@@ -313,14 +315,32 @@ func TestEncryptECDHError(t *testing.T) {
 	}
 }
 
+func TestEncryptSaltRandomReadError(t *testing.T) {
+	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate receiver key: %v", err)
+	}
+
+	// Enough bytes for GenerateKey (32 bytes), but not enough for the salt read (needs another 32 bytes) — simulates EOF during salt generation.
+	withRandReader(t, bytes.NewReader(make([]byte, 32)))
+
+	_, err = encrypt(receiverPriv.PublicKey(), []byte("user:pass"))
+	if err == nil {
+		t.Fatalf("expected salt rand.Read error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "eof") {
+		t.Fatalf("expected EOF-like salt read error, got %v", err)
+	}
+}
+
 func TestEncryptNonceRandomReadError(t *testing.T) {
 	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("failed to generate receiver key: %v", err)
 	}
 
-	// Enough bytes for GenerateKey (32-33 bytes), but not enough for the nonce read.
-	withRandReader(t, bytes.NewReader(make([]byte, 40)))
+	// Enough bytes for GenerateKey (32 bytes) and salt (32 bytes), but not enough for the nonce read.
+	withRandReader(t, bytes.NewReader(make([]byte, 64)))
 
 	_, err = encrypt(receiverPriv.PublicKey(), []byte("user:pass"))
 	if err == nil {
@@ -383,7 +403,7 @@ func TestDecryptPublicKeyParseError(t *testing.T) {
 	}
 
 	// decrypt still slices a fixed 32-byte ephemeral public key for v1.
-	payload := append([]byte(s3CredentialsX25519V1), make([]byte, x25519KeySize+12)...)
+	payload := make([]byte, x25519KeySize+hkdfSaltSize+chacha20poly1305.NonceSize)
 	encoded := base64.RawURLEncoding.EncodeToString(payload)
 
 	_, err = decrypt(receiverPriv, encoded)
