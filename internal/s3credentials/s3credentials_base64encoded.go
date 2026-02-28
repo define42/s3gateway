@@ -10,7 +10,7 @@ import (
 // ==================== Credential hack ====================
 // accessKey = "AD" + 'AD'base64("username:password")
 // secretKey = constant "password"
-func S3credentials_base64encoded(accessKey string) (username, password, secretKey string, err error) {
+func S3CredentialsBase64Encoded(accessKey string) (username, password, secretKey string, err error) {
 
 	if !strings.HasPrefix(accessKey, "AD") {
 		return "", "", "", fmt.Errorf("accessKey must start with 'AD' prefix")
