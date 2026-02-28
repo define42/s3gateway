@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -269,4 +270,123 @@ func TestParseOptionalHTTPTime(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDecodeLifecycleConfigXMLBranches(t *testing.T) {
+	t.Run("empty rules", func(t *testing.T) {
+		_, err := decodeLifecycleConfigXML(strings.NewReader(`<LifecycleConfiguration></LifecycleConfiguration>`))
+		if err == nil {
+			t.Fatal("expected error for missing lifecycle rules")
+		}
+	})
+
+	t.Run("disabled status", func(t *testing.T) {
+		cfg, err := decodeLifecycleConfigXML(strings.NewReader(`<LifecycleConfiguration><Rule><Status>Disabled</Status><Filter><Prefix>x</Prefix></Filter><Expiration><Days>1</Days></Expiration></Rule></LifecycleConfiguration>`))
+		if err != nil {
+			t.Fatalf("decodeLifecycleConfigXML(disabled) error = %v", err)
+		}
+		if cfg.Rules[0].Status != types.ExpirationStatusDisabled {
+			t.Fatalf("expected Disabled status, got %q", cfg.Rules[0].Status)
+		}
+	})
+
+	t.Run("invalid status", func(t *testing.T) {
+		_, err := decodeLifecycleConfigXML(strings.NewReader(`<LifecycleConfiguration><Rule><Status>Invalid</Status><Expiration><Days>1</Days></Expiration></Rule></LifecycleConfiguration>`))
+		if err == nil {
+			t.Fatal("expected error for invalid status")
+		}
+	})
+
+	t.Run("both prefix and filter", func(t *testing.T) {
+		_, err := decodeLifecycleConfigXML(strings.NewReader(`<LifecycleConfiguration><Rule><Status>Enabled</Status><Prefix>p</Prefix><Filter><Prefix>q</Prefix></Filter><Expiration><Days>1</Days></Expiration></Rule></LifecycleConfiguration>`))
+		if err == nil {
+			t.Fatal("expected error for rule with both Prefix and Filter")
+		}
+	})
+
+	t.Run("invalid filter tag empty key", func(t *testing.T) {
+		_, err := decodeLifecycleConfigXML(strings.NewReader(`<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Tag><Key></Key><Value>v</Value></Tag></Filter><Expiration><Days>1</Days></Expiration></Rule></LifecycleConfiguration>`))
+		if err == nil {
+			t.Fatal("expected error for filter with empty tag key")
+		}
+	})
+
+	t.Run("top-level prefix legacy", func(t *testing.T) {
+		cfg, err := decodeLifecycleConfigXML(strings.NewReader(`<LifecycleConfiguration><Rule><Status>Enabled</Status><Prefix>logs/</Prefix><Expiration><Days>1</Days></Expiration></Rule></LifecycleConfiguration>`))
+		if err != nil {
+			t.Fatalf("decodeLifecycleConfigXML(legacy prefix) error = %v", err)
+		}
+		if cfg.Rules[0].Filter == nil || aws.ToString(cfg.Rules[0].Filter.Prefix) != "logs/" {
+			t.Fatalf("expected filter with prefix logs/, got %+v", cfg.Rules[0].Filter)
+		}
+	})
+
+	t.Run("invalid expiration days zero", func(t *testing.T) {
+		_, err := decodeLifecycleConfigXML(strings.NewReader(`<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Prefix>x</Prefix></Filter><Expiration><Days>0</Days></Expiration></Rule></LifecycleConfiguration>`))
+		if err == nil {
+			t.Fatal("expected error for expiration with Days=0")
+		}
+	})
+
+	t.Run("invalid transition negative days", func(t *testing.T) {
+		_, err := decodeLifecycleConfigXML(strings.NewReader(`<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Prefix>x</Prefix></Filter><Transition><Days>-1</Days><StorageClass>GLACIER</StorageClass></Transition></Rule></LifecycleConfiguration>`))
+		if err == nil {
+			t.Fatal("expected error for transition with negative days")
+		}
+	})
+
+	t.Run("invalid noncurrent transition missing storage class", func(t *testing.T) {
+		_, err := decodeLifecycleConfigXML(strings.NewReader(`<LifecycleConfiguration><Rule><Status>Enabled</Status><NoncurrentVersionTransition><NoncurrentDays>30</NoncurrentDays></NoncurrentVersionTransition></Rule></LifecycleConfiguration>`))
+		if err == nil {
+			t.Fatal("expected error for noncurrent transition with missing storage class")
+		}
+	})
+
+	t.Run("invalid noncurrent expiration days zero", func(t *testing.T) {
+		_, err := decodeLifecycleConfigXML(strings.NewReader(`<LifecycleConfiguration><Rule><Status>Enabled</Status><NoncurrentVersionExpiration><NoncurrentDays>0</NoncurrentDays></NoncurrentVersionExpiration></Rule></LifecycleConfiguration>`))
+		if err == nil {
+			t.Fatal("expected error for noncurrent expiration with NoncurrentDays=0")
+		}
+	})
+
+	t.Run("invalid abort incomplete multipart upload days zero", func(t *testing.T) {
+		_, err := decodeLifecycleConfigXML(strings.NewReader(`<LifecycleConfiguration><Rule><Status>Enabled</Status><AbortIncompleteMultipartUpload><DaysAfterInitiation>0</DaysAfterInitiation></AbortIncompleteMultipartUpload></Rule></LifecycleConfiguration>`))
+		if err == nil {
+			t.Fatal("expected error for abort multipart with DaysAfterInitiation=0")
+		}
+	})
+}
+
+func TestEncodeLifecycleFilterBranches(t *testing.T) {
+	t.Run("nil filter", func(t *testing.T) {
+		if got := encodeLifecycleFilter(nil); got != nil {
+			t.Fatalf("encodeLifecycleFilter(nil) = %+v, want nil", got)
+		}
+	})
+
+	t.Run("tag filter", func(t *testing.T) {
+		f := &types.LifecycleRuleFilter{Tag: &types.Tag{Key: aws.String("k"), Value: aws.String("v")}}
+		got := encodeLifecycleFilter(f)
+		if got == nil || got.Tag == nil || got.Tag.Key != "k" {
+			t.Fatalf("encodeLifecycleFilter(tag) mismatch: %+v", got)
+		}
+	})
+
+	t.Run("object size greater than", func(t *testing.T) {
+		gt := int64(100)
+		f := &types.LifecycleRuleFilter{ObjectSizeGreaterThan: &gt}
+		got := encodeLifecycleFilter(f)
+		if got == nil || got.ObjectSizeGreaterThan == nil || *got.ObjectSizeGreaterThan != 100 {
+			t.Fatalf("encodeLifecycleFilter(objectSizeGreaterThan) mismatch: %+v", got)
+		}
+	})
+
+	t.Run("object size less than", func(t *testing.T) {
+		lt := int64(200)
+		f := &types.LifecycleRuleFilter{ObjectSizeLessThan: &lt}
+		got := encodeLifecycleFilter(f)
+		if got == nil || got.ObjectSizeLessThan == nil || *got.ObjectSizeLessThan != 200 {
+			t.Fatalf("encodeLifecycleFilter(objectSizeLessThan) mismatch: %+v", got)
+		}
+	})
 }
