@@ -175,6 +175,9 @@ func GetDecryptedToken(encoded string, privateKey *ecdh.PrivateKey) (ldapUsernam
 	if !ok {
 		return "", "", "", errors.New("invalid token format")
 	}
+	if strings.TrimSpace(ldapUsername) == "" || ldapPassword == "" {
+		return "", "", "", errors.New("invalid token format")
+	}
 
 	secretKey = EncodeSecretKey(string(decrypted))
 

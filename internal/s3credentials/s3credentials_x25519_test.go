@@ -174,6 +174,39 @@ func TestGetDecryptedTokenInvalidFormat(t *testing.T) {
 	}
 }
 
+func TestGetDecryptedTokenRejectsEmptyCredentials(t *testing.T) {
+	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate receiver key: %v", err)
+	}
+
+	tests := []struct {
+		name  string
+		token string
+	}{
+		{name: "empty username", token: ":pass"},
+		{name: "whitespace username", token: "  :pass"},
+		{name: "empty password", token: "user:"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := encrypt(receiverPriv.PublicKey(), []byte(tc.token))
+			if err != nil {
+				t.Fatalf("failed to encrypt test payload: %v", err)
+			}
+			_, _, _, err = GetDecryptedToken(encoded, receiverPriv)
+			if err == nil {
+				t.Fatalf("expected invalid token format error")
+			}
+			if !strings.Contains(err.Error(), "invalid token format") {
+				t.Fatalf("expected invalid token format error, got %v", err)
+			}
+		})
+	}
+}
+
 func TestGenerateAccessSecretKeyValidationErrors(t *testing.T) {
 	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
 	if err != nil {
