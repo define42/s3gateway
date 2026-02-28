@@ -1636,3 +1636,22 @@ func TestNewAdminGorillaStoreSetCookieSecretNoWarning(t *testing.T) {
 		t.Fatalf("expected no log output when COOKIE_SECRET is set, got: %q", buf.String())
 	}
 }
+
+func TestAdminSecurityHeaders(t *testing.T) {
+	h := newHandlerWithNilS3(nil)
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if got := rr.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options: got=%q want=%q", got, "nosniff")
+	}
+	if got := rr.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Errorf("X-Frame-Options: got=%q want=%q", got, "DENY")
+	}
+	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control: got=%q want=%q", got, "no-store")
+	}
+}
