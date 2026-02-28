@@ -106,10 +106,12 @@ func ParseGroup(g string) (prefix string, perm Perm, ok bool) {
 
 func BucketPerm(rules []Rule, bucket string) Perm {
 	b := strings.ToLower(bucket)
+	bestLen := -1
 	best := PermNone
 	for _, r := range rules {
-		if strings.HasPrefix(b, r.BucketPrefix) {
-			best |= r.Perm
+		if strings.HasPrefix(b, r.BucketPrefix) && len(r.BucketPrefix) > bestLen {
+			bestLen = len(r.BucketPrefix)
+			best = r.Perm
 		}
 	}
 	return best
