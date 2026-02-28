@@ -10,6 +10,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 func TestGenerateKeys(t *testing.T) {
@@ -89,6 +91,46 @@ func TestDecryptErrors(t *testing.T) {
 	}
 }
 
+func TestDecryptTamperedHeader(t *testing.T) {
+	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate receiver key: %v", err)
+	}
+
+	encoded, err := encrypt(receiverPriv.PublicKey(), []byte("user:pass"))
+	if err != nil {
+		t.Fatalf("failed to encrypt test payload: %v", err)
+	}
+
+	rawPayload, err := base64.RawURLEncoding.DecodeString(encoded[len(s3CredentialsX25519V1):])
+	if err != nil {
+		t.Fatalf("failed to decode encrypted test payload: %v", err)
+	}
+
+	// Tamper with ephemeral public key byte — AAD mismatch must cause auth failure.
+	tamperedEpub := bytes.Clone(rawPayload)
+	tamperedEpub[0] ^= 0x01
+	_, err = decrypt(receiverPriv, base64.RawURLEncoding.EncodeToString(tamperedEpub))
+	if err == nil {
+		t.Fatalf("expected authentication error for tampered ephemeral public key")
+	}
+	if !strings.Contains(err.Error(), "message authentication failed") {
+		t.Fatalf("expected message authentication failed error for tampered epub, got %v", err)
+	}
+
+	// Tamper with salt byte — AAD mismatch must cause auth failure.
+	tamperedSalt := bytes.Clone(rawPayload)
+	tamperedSalt[x25519KeySize] ^= 0x01
+	_, err = decrypt(receiverPriv, base64.RawURLEncoding.EncodeToString(tamperedSalt))
+	if err == nil {
+		t.Fatalf("expected authentication error for tampered salt")
+	}
+	if !strings.Contains(err.Error(), "message authentication failed") {
+		t.Fatalf("expected message authentication failed error for tampered salt, got %v", err)
+	}
+}
+
+
 func TestDecryptTamperedCiphertext(t *testing.T) {
 	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
 	if err != nil {
@@ -100,7 +142,7 @@ func TestDecryptTamperedCiphertext(t *testing.T) {
 		t.Fatalf("failed to encrypt test payload: %v", err)
 	}
 
-	data, err := base64.RawURLEncoding.DecodeString(encoded)
+	data, err := base64.RawURLEncoding.DecodeString(encoded[len(s3CredentialsX25519V1):])
 	if err != nil {
 		t.Fatalf("failed to decode encrypted test payload: %v", err)
 	}
@@ -313,14 +355,32 @@ func TestEncryptECDHError(t *testing.T) {
 	}
 }
 
+func TestEncryptSaltRandomReadError(t *testing.T) {
+	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("failed to generate receiver key: %v", err)
+	}
+
+	// Enough bytes for GenerateKey (32 bytes), but not enough for the salt read (needs another 32 bytes) — simulates EOF during salt generation.
+	withRandReader(t, bytes.NewReader(make([]byte, 32)))
+
+	_, err = encrypt(receiverPriv.PublicKey(), []byte("user:pass"))
+	if err == nil {
+		t.Fatalf("expected salt rand.Read error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "eof") {
+		t.Fatalf("expected EOF-like salt read error, got %v", err)
+	}
+}
+
 func TestEncryptNonceRandomReadError(t *testing.T) {
 	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("failed to generate receiver key: %v", err)
 	}
 
-	// Enough bytes for GenerateKey (32-33 bytes), but not enough for the nonce read.
-	withRandReader(t, bytes.NewReader(make([]byte, 40)))
+	// Enough bytes for GenerateKey (32 bytes) and salt (32 bytes), but not enough for the nonce read.
+	withRandReader(t, bytes.NewReader(make([]byte, 64)))
 
 	_, err = encrypt(receiverPriv.PublicKey(), []byte("user:pass"))
 	if err == nil {
@@ -331,20 +391,46 @@ func TestEncryptNonceRandomReadError(t *testing.T) {
 	}
 }
 
-func TestEncryptAEADInitError(t *testing.T) {
-	withCurve(t, ecdh.P384())
-
-	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
+func TestDeriveKey(t *testing.T) {
+	secret := make([]byte, 32)
+	salt := make([]byte, 32)
+	key1, err := deriveKey(secret, salt)
 	if err != nil {
-		t.Fatalf("failed to generate receiver key: %v", err)
+		t.Fatalf("deriveKey failed: %v", err)
+	}
+	if len(key1) != 32 {
+		t.Fatalf("expected 32-byte key, got %d bytes", len(key1))
 	}
 
-	_, err = encrypt(receiverPriv.PublicKey(), []byte("user:pass"))
-	if err == nil {
-		t.Fatalf("expected AEAD key size error")
+	// Same input must always produce the same output (deterministic).
+	key2, err := deriveKey(secret, salt)
+	if err != nil {
+		t.Fatalf("deriveKey failed on second call: %v", err)
 	}
-	if !strings.Contains(err.Error(), "bad key length") {
-		t.Fatalf("expected AEAD key length error, got %v", err)
+	if !bytes.Equal(key1, key2) {
+		t.Fatalf("deriveKey is not deterministic")
+	}
+
+	// Different secret must produce a different key.
+	otherSecret := make([]byte, 32)
+	otherSecret[0] = 0xff
+	keyOtherSecret, err := deriveKey(otherSecret, salt)
+	if err != nil {
+		t.Fatalf("deriveKey failed for other secret: %v", err)
+	}
+	if bytes.Equal(key1, keyOtherSecret) {
+		t.Fatalf("deriveKey returned same key for different secrets")
+	}
+
+	// Different salt must produce a different key.
+	otherSalt := make([]byte, 32)
+	otherSalt[0] = 0xff
+	keyOtherSalt, err := deriveKey(secret, otherSalt)
+	if err != nil {
+		t.Fatalf("deriveKey failed for other salt: %v", err)
+	}
+	if bytes.Equal(key1, keyOtherSalt) {
+		t.Fatalf("deriveKey returned same key for different salts")
 	}
 }
 
@@ -357,7 +443,7 @@ func TestDecryptPublicKeyParseError(t *testing.T) {
 	}
 
 	// decrypt still slices a fixed 32-byte ephemeral public key for v1.
-	payload := append([]byte(s3CredentialsX25519V1), make([]byte, x25519KeySize+12)...)
+	payload := make([]byte, x25519KeySize+hkdfSaltSize+chacha20poly1305.NonceSize)
 	encoded := base64.RawURLEncoding.EncodeToString(payload)
 
 	_, err = decrypt(receiverPriv, encoded)

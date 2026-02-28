@@ -3,6 +3,7 @@ package s3credentials
 import (
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -10,12 +11,24 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/hkdf"
 )
 
 var x25519Curve = ecdh.X25519()
 
 const s3CredentialsX25519V1 = "X1"
 const x25519KeySize = 32
+const hkdfSaltSize = 32
+const hkdfInfo = "s3gateway-x25519-v1"
+
+func deriveKey(sharedSecret, salt []byte) ([]byte, error) {
+	reader := hkdf.New(sha256.New, sharedSecret, salt, []byte(hkdfInfo))
+	key := make([]byte, chacha20poly1305.KeySize)
+	if _, err := io.ReadFull(reader, key); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
 
 func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
 
@@ -28,13 +41,14 @@ func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
 	}
 
 	// fixed framing for v1
-	if len(data) < x25519KeySize+chacha20poly1305.NonceSize {
+	if len(data) < x25519KeySize+hkdfSaltSize+chacha20poly1305.NonceSize {
 		return nil, errors.New("ciphertext too short")
 	}
 
 	ephemeralPubBytes := data[:x25519KeySize]
-	nonce := data[x25519KeySize : x25519KeySize+chacha20poly1305.NonceSize]
-	ciphertext := data[x25519KeySize+chacha20poly1305.NonceSize:]
+	salt := data[x25519KeySize : x25519KeySize+hkdfSaltSize]
+	nonce := data[x25519KeySize+hkdfSaltSize : x25519KeySize+hkdfSaltSize+chacha20poly1305.NonceSize]
+	ciphertext := data[x25519KeySize+hkdfSaltSize+chacha20poly1305.NonceSize:]
 
 	ephemeralPub, err := x25519Curve.NewPublicKey(ephemeralPubBytes)
 	if err != nil {
@@ -46,12 +60,22 @@ func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
 		return nil, err
 	}
 
-	aead, err := chacha20poly1305.New(sharedSecret)
+	key, err := deriveKey(sharedSecret, salt)
 	if err != nil {
 		return nil, err
 	}
 
-	return aead.Open(nil, nonce, ciphertext, nil)
+	aead, err := chacha20poly1305.New(key)
+	if err != nil {
+		return nil, err
+	}
+
+	// Bind the unauthenticated header fields to the ciphertext via AAD.
+	aad := make([]byte, 0, len(s3CredentialsX25519V1)+len(ephemeralPubBytes)+len(salt))
+	aad = append(aad, []byte(s3CredentialsX25519V1)...)
+	aad = append(aad, ephemeralPubBytes...)
+	aad = append(aad, salt...)
+	return aead.Open(nil, nonce, ciphertext, aad)
 
 }
 
@@ -99,7 +123,19 @@ func encrypt(receiverPub *ecdh.PublicKey, plaintext []byte) (string, error) {
 		return "", err
 	}
 
-	aead, err := chacha20poly1305.New(sharedSecret)
+	epub := ephemeralPriv.PublicKey().Bytes()
+
+	salt := make([]byte, hkdfSaltSize)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return "", err
+	}
+
+	key, err := deriveKey(sharedSecret, salt)
+	if err != nil {
+		return "", err
+	}
+
+	aead, err := chacha20poly1305.New(key)
 	if err != nil {
 		return "", err
 	}
@@ -109,13 +145,17 @@ func encrypt(receiverPub *ecdh.PublicKey, plaintext []byte) (string, error) {
 		return "", err
 	}
 
-	ciphertext := aead.Seal(nil, nonce, plaintext, nil)
+	// Bind the unauthenticated header fields to the ciphertext via AAD.
+	aad := make([]byte, 0, len(s3CredentialsX25519V1)+len(epub)+len(salt))
+	aad = append(aad, []byte(s3CredentialsX25519V1)...)
+	aad = append(aad, epub...)
+	aad = append(aad, salt...)
+	ciphertext := aead.Seal(nil, nonce, plaintext, aad)
 
-	epub := ephemeralPriv.PublicKey().Bytes()
-
-	// version (1) + epub (32) + nonce (12) + ciphertext
-	payload := make([]byte, 0, len(epub)+len(nonce)+len(ciphertext))
+	// epub (32) + salt (32) + nonce (12) + ciphertext
+	payload := make([]byte, 0, len(epub)+len(salt)+len(nonce)+len(ciphertext))
 	payload = append(payload, epub...)
+	payload = append(payload, salt...)
 	payload = append(payload, nonce...)
 	payload = append(payload, ciphertext...)
 
