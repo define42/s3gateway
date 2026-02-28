@@ -331,20 +331,34 @@ func TestEncryptNonceRandomReadError(t *testing.T) {
 	}
 }
 
-func TestEncryptAEADInitError(t *testing.T) {
-	withCurve(t, ecdh.P384())
-
-	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
+func TestDeriveKey(t *testing.T) {
+	secret := make([]byte, 32)
+	key1, err := deriveKey(secret)
 	if err != nil {
-		t.Fatalf("failed to generate receiver key: %v", err)
+		t.Fatalf("deriveKey failed: %v", err)
+	}
+	if len(key1) != 32 {
+		t.Fatalf("expected 32-byte key, got %d bytes", len(key1))
 	}
 
-	_, err = encrypt(receiverPriv.PublicKey(), []byte("user:pass"))
-	if err == nil {
-		t.Fatalf("expected AEAD key size error")
+	// Same input must always produce the same output (deterministic).
+	key2, err := deriveKey(secret)
+	if err != nil {
+		t.Fatalf("deriveKey failed on second call: %v", err)
 	}
-	if !strings.Contains(err.Error(), "bad key length") {
-		t.Fatalf("expected AEAD key length error, got %v", err)
+	if !bytes.Equal(key1, key2) {
+		t.Fatalf("deriveKey is not deterministic")
+	}
+
+	// Different input must produce a different key.
+	otherSecret := make([]byte, 32)
+	otherSecret[0] = 0xff
+	keyOther, err := deriveKey(otherSecret)
+	if err != nil {
+		t.Fatalf("deriveKey failed for other secret: %v", err)
+	}
+	if bytes.Equal(key1, keyOther) {
+		t.Fatalf("deriveKey returned same key for different inputs")
 	}
 }
 

@@ -11,11 +11,24 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
     X25519PublicKey,
 )
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 S3_REGION = "eu-west-1"
 S3_ENDPOINT_URL = "http://localhost:8080"
 S3GATEWAY_PUBLIC_X25519_KEY = "b0b5d6c181c25c6d8d49aa68ecc85a9f8a0ab0f776680eca733ded24dd95ea31"
+
+HKDF_INFO = b"s3gateway-x25519-v1"
+
+
+def derive_key(shared_secret: bytes) -> bytes:
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=HKDF_INFO,
+    ).derive(shared_secret)
 
 
 def generate_keys_x25519(user_upn, user_password, public_key_hex):
@@ -32,7 +45,8 @@ def generate_keys_x25519(user_upn, user_password, public_key_hex):
 
     ephemeral_priv = X25519PrivateKey.generate()
     shared_secret = ephemeral_priv.exchange(receiver_pub)
-    aead = ChaCha20Poly1305(shared_secret)
+    key = derive_key(shared_secret)
+    aead = ChaCha20Poly1305(key)
     nonce = os.urandom(12)
     ciphertext = aead.encrypt(nonce, token_bytes, None)
 

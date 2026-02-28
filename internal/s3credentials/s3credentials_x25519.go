@@ -3,6 +3,7 @@ package s3credentials
 import (
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -10,12 +11,23 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/hkdf"
 )
 
 var x25519Curve = ecdh.X25519()
 
 const s3CredentialsX25519V1 = "X1"
 const x25519KeySize = 32
+const hkdfInfo = "s3gateway-x25519-v1"
+
+func deriveKey(sharedSecret []byte) ([]byte, error) {
+	reader := hkdf.New(sha256.New, sharedSecret, nil, []byte(hkdfInfo))
+	key := make([]byte, chacha20poly1305.KeySize)
+	if _, err := io.ReadFull(reader, key); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
 
 func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
 
@@ -46,7 +58,12 @@ func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
 		return nil, err
 	}
 
-	aead, err := chacha20poly1305.New(sharedSecret)
+	key, err := deriveKey(sharedSecret)
+	if err != nil {
+		return nil, err
+	}
+
+	aead, err := chacha20poly1305.New(key)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +116,12 @@ func encrypt(receiverPub *ecdh.PublicKey, plaintext []byte) (string, error) {
 		return "", err
 	}
 
-	aead, err := chacha20poly1305.New(sharedSecret)
+	key, err := deriveKey(sharedSecret)
+	if err != nil {
+		return "", err
+	}
+
+	aead, err := chacha20poly1305.New(key)
 	if err != nil {
 		return "", err
 	}
