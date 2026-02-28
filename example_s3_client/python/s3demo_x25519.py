@@ -22,11 +22,11 @@ S3GATEWAY_PUBLIC_X25519_KEY = "b0b5d6c181c25c6d8d49aa68ecc85a9f8a0ab0f776680eca7
 HKDF_INFO = b"s3gateway-x25519-v1"
 
 
-def derive_key(shared_secret: bytes) -> bytes:
+def derive_key(shared_secret: bytes, salt: bytes) -> bytes:
     return HKDF(
         algorithm=hashes.SHA256(),
         length=32,
-        salt=None,
+        salt=salt,
         info=HKDF_INFO,
     ).derive(shared_secret)
 
@@ -45,15 +45,15 @@ def generate_keys_x25519(user_upn, user_password, public_key_hex):
 
     ephemeral_priv = X25519PrivateKey.generate()
     shared_secret = ephemeral_priv.exchange(receiver_pub)
-    key = derive_key(shared_secret)
-    aead = ChaCha20Poly1305(key)
-    nonce = os.urandom(12)
-    ciphertext = aead.encrypt(nonce, token_bytes, None)
-
     ephemeral_pub_bytes = ephemeral_priv.public_key().public_bytes(
         encoding=Encoding.Raw,
         format=PublicFormat.Raw,
     )
+    key = derive_key(shared_secret, ephemeral_pub_bytes)
+    aead = ChaCha20Poly1305(key)
+    nonce = os.urandom(12)
+    ciphertext = aead.encrypt(nonce, token_bytes, None)
+
     payload = ephemeral_pub_bytes + nonce + ciphertext
     access_key = "X1" + base64.urlsafe_b64encode(payload).decode("utf-8").rstrip("=")
     secret_key = base64.urlsafe_b64encode(

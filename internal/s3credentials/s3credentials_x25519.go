@@ -20,8 +20,8 @@ const s3CredentialsX25519V1 = "X1"
 const x25519KeySize = 32
 const hkdfInfo = "s3gateway-x25519-v1"
 
-func deriveKey(sharedSecret []byte) ([]byte, error) {
-	reader := hkdf.New(sha256.New, sharedSecret, nil, []byte(hkdfInfo))
+func deriveKey(sharedSecret, salt []byte) ([]byte, error) {
+	reader := hkdf.New(sha256.New, sharedSecret, salt, []byte(hkdfInfo))
 	key := make([]byte, chacha20poly1305.KeySize)
 	if _, err := io.ReadFull(reader, key); err != nil {
 		return nil, err
@@ -58,7 +58,7 @@ func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
 		return nil, err
 	}
 
-	key, err := deriveKey(sharedSecret)
+	key, err := deriveKey(sharedSecret, ephemeralPubBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,9 @@ func encrypt(receiverPub *ecdh.PublicKey, plaintext []byte) (string, error) {
 		return "", err
 	}
 
-	key, err := deriveKey(sharedSecret)
+	epub := ephemeralPriv.PublicKey().Bytes()
+
+	key, err := deriveKey(sharedSecret, epub)
 	if err != nil {
 		return "", err
 	}
@@ -132,8 +134,6 @@ func encrypt(receiverPub *ecdh.PublicKey, plaintext []byte) (string, error) {
 	}
 
 	ciphertext := aead.Seal(nil, nonce, plaintext, nil)
-
-	epub := ephemeralPriv.PublicKey().Bytes()
 
 	// version (1) + epub (32) + nonce (12) + ciphertext
 	payload := make([]byte, 0, len(epub)+len(nonce)+len(ciphertext))

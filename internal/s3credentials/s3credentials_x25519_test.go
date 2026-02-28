@@ -333,7 +333,8 @@ func TestEncryptNonceRandomReadError(t *testing.T) {
 
 func TestDeriveKey(t *testing.T) {
 	secret := make([]byte, 32)
-	key1, err := deriveKey(secret)
+	salt := make([]byte, 32)
+	key1, err := deriveKey(secret, salt)
 	if err != nil {
 		t.Fatalf("deriveKey failed: %v", err)
 	}
@@ -342,7 +343,7 @@ func TestDeriveKey(t *testing.T) {
 	}
 
 	// Same input must always produce the same output (deterministic).
-	key2, err := deriveKey(secret)
+	key2, err := deriveKey(secret, salt)
 	if err != nil {
 		t.Fatalf("deriveKey failed on second call: %v", err)
 	}
@@ -350,15 +351,26 @@ func TestDeriveKey(t *testing.T) {
 		t.Fatalf("deriveKey is not deterministic")
 	}
 
-	// Different input must produce a different key.
+	// Different secret must produce a different key.
 	otherSecret := make([]byte, 32)
 	otherSecret[0] = 0xff
-	keyOther, err := deriveKey(otherSecret)
+	keyOtherSecret, err := deriveKey(otherSecret, salt)
 	if err != nil {
 		t.Fatalf("deriveKey failed for other secret: %v", err)
 	}
-	if bytes.Equal(key1, keyOther) {
-		t.Fatalf("deriveKey returned same key for different inputs")
+	if bytes.Equal(key1, keyOtherSecret) {
+		t.Fatalf("deriveKey returned same key for different secrets")
+	}
+
+	// Different salt must produce a different key.
+	otherSalt := make([]byte, 32)
+	otherSalt[0] = 0xff
+	keyOtherSalt, err := deriveKey(secret, otherSalt)
+	if err != nil {
+		t.Fatalf("deriveKey failed for other salt: %v", err)
+	}
+	if bytes.Equal(key1, keyOtherSalt) {
+		t.Fatalf("deriveKey returned same key for different salts")
 	}
 }
 
