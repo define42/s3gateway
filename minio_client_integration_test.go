@@ -15,6 +15,8 @@ import (
 
 	minio "github.com/minio/minio-go/v7"
 	minioCredentials "github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/minio/minio-go/v7/pkg/lifecycle"
+	"github.com/minio/minio-go/v7/pkg/tags"
 
 	s3gateway "github.com/define42/s3gateway"
 	"github.com/define42/s3gateway/internal/s3credentials"
@@ -155,6 +157,245 @@ func TestMinioClientIntegration(t *testing.T) {
 	}
 	if !bytes.Equal(gotBody, payload) {
 		t.Fatalf("GetObject body mismatch: got=%q want=%q", string(gotBody), string(payload))
+	}
+
+	// Test SetBucketLifecycle and GetBucketLifecycle
+	lcConfig := lifecycle.NewConfiguration()
+	lcConfig.Rules = []lifecycle.Rule{
+		{
+			ID:     "expire-old-objects",
+			Status: "Enabled",
+			Expiration: lifecycle.Expiration{
+				Days: lifecycle.ExpirationDays(30),
+			},
+		},
+	}
+	if err := minioClient.SetBucketLifecycle(ctx, bucket, lcConfig); err != nil {
+		t.Fatalf("minio SetBucketLifecycle via gateway: %v", err)
+	}
+	gotLC, err := minioClient.GetBucketLifecycle(ctx, bucket)
+	if err != nil {
+		t.Fatalf("minio GetBucketLifecycle via gateway: %v", err)
+	}
+	if len(gotLC.Rules) != 1 {
+		t.Fatalf("expected 1 lifecycle rule, got %d", len(gotLC.Rules))
+	}
+	if gotLC.Rules[0].ID != "expire-old-objects" {
+		t.Fatalf("lifecycle rule ID mismatch: got=%q want=%q", gotLC.Rules[0].ID, "expire-old-objects")
+	}
+	if gotLC.Rules[0].Expiration.Days != lifecycle.ExpirationDays(30) {
+		t.Fatalf("lifecycle expiration days mismatch: got=%d want=30", gotLC.Rules[0].Expiration.Days)
+	}
+
+	// Test SetBucketTagging, GetBucketTagging, and RemoveBucketTagging
+	bucketTags, err := tags.NewTags(map[string]string{
+		"scope": "integration",
+		"suite": "minio-client",
+	}, false)
+	if err != nil {
+		t.Fatalf("create bucket tags: %v", err)
+	}
+	if err := minioClient.SetBucketTagging(ctx, bucket, bucketTags); err != nil {
+		t.Fatalf("minio SetBucketTagging via gateway: %v", err)
+	}
+	gotBucketTags, err := minioClient.GetBucketTagging(ctx, bucket)
+	if err != nil {
+		t.Fatalf("minio GetBucketTagging via gateway: %v", err)
+	}
+	for k, v := range map[string]string{"scope": "integration", "suite": "minio-client"} {
+		if gotBucketTags.ToMap()[k] != v {
+			t.Fatalf("GetBucketTagging[%q] mismatch: got=%q want=%q", k, gotBucketTags.ToMap()[k], v)
+		}
+	}
+	if err := minioClient.RemoveBucketTagging(ctx, bucket); err != nil {
+		t.Fatalf("minio RemoveBucketTagging via gateway: %v", err)
+	}
+	gotBucketTagsAfterRemove, err := minioClient.GetBucketTagging(ctx, bucket)
+	if err != nil {
+		bucketTagErrResp := minio.ToErrorResponse(err)
+		if bucketTagErrResp.Code != "NoSuchTagSet" {
+			t.Fatalf("minio GetBucketTagging after remove via gateway: %v", err)
+		}
+	} else if len(gotBucketTagsAfterRemove.ToMap()) != 0 {
+		t.Fatalf("expected no bucket tags after RemoveBucketTagging, got: %v", gotBucketTagsAfterRemove.ToMap())
+	}
+
+	// Test object update: overwrite existing key with new content
+	updatedPayload := []byte("updated content via minio client")
+	updInfo, err := minioClient.PutObject(ctx, bucket, objectKey, bytes.NewReader(updatedPayload), int64(len(updatedPayload)), minio.PutObjectOptions{
+		ContentType: "text/plain",
+	})
+	if err != nil {
+		t.Fatalf("minio PutObject overwrite via gateway: %v", err)
+	}
+	if updInfo.Key != objectKey {
+		t.Fatalf("overwrite PutObject key mismatch: got=%q want=%q", updInfo.Key, objectKey)
+	}
+	updObj, err := minioClient.GetObject(ctx, bucket, objectKey, minio.GetObjectOptions{})
+	if err != nil {
+		t.Fatalf("minio GetObject after overwrite via gateway: %v", err)
+	}
+	updBody, err := io.ReadAll(updObj)
+	_ = updObj.Close()
+	if err != nil {
+		t.Fatalf("read updated object body: %v", err)
+	}
+	if !bytes.Equal(updBody, updatedPayload) {
+		t.Fatalf("updated object body mismatch: got=%q want=%q", string(updBody), string(updatedPayload))
+	}
+
+	// Test PutObjectTagging, GetObjectTagging, RemoveObjectTagging
+	objTags, err := tags.NewTags(map[string]string{
+		"env":   "test",
+		"owner": "testuser",
+	}, true)
+	if err != nil {
+		t.Fatalf("create object tags: %v", err)
+	}
+	if err := minioClient.PutObjectTagging(ctx, bucket, objectKey, objTags, minio.PutObjectTaggingOptions{}); err != nil {
+		t.Fatalf("minio PutObjectTagging via gateway: %v", err)
+	}
+	gotObjTags, err := minioClient.GetObjectTagging(ctx, bucket, objectKey, minio.GetObjectTaggingOptions{})
+	if err != nil {
+		t.Fatalf("minio GetObjectTagging via gateway: %v", err)
+	}
+	for k, v := range map[string]string{"env": "test", "owner": "testuser"} {
+		if gotObjTags.ToMap()[k] != v {
+			t.Fatalf("GetObjectTagging[%q] mismatch: got=%q want=%q", k, gotObjTags.ToMap()[k], v)
+		}
+	}
+	if err := minioClient.RemoveObjectTagging(ctx, bucket, objectKey, minio.RemoveObjectTaggingOptions{}); err != nil {
+		t.Fatalf("minio RemoveObjectTagging via gateway: %v", err)
+	}
+	gotObjTagsAfterRemove, err := minioClient.GetObjectTagging(ctx, bucket, objectKey, minio.GetObjectTaggingOptions{})
+	if err != nil {
+		t.Fatalf("minio GetObjectTagging after remove via gateway: %v", err)
+	}
+	if len(gotObjTagsAfterRemove.ToMap()) != 0 {
+		t.Fatalf("expected no object tags after RemoveObjectTagging, got: %v", gotObjTagsAfterRemove.ToMap())
+	}
+
+	// Test PutObject with user metadata and StatObject to verify metadata is preserved
+	metaKey := "minioclient/meta-object.txt"
+	metaPayload := []byte("object with user metadata")
+	t.Cleanup(func() {
+		_ = minioClient.RemoveObject(ctx, bucket, metaKey, minio.RemoveObjectOptions{})
+	})
+	if _, err := minioClient.PutObject(ctx, bucket, metaKey, bytes.NewReader(metaPayload), int64(len(metaPayload)), minio.PutObjectOptions{
+		ContentType: "text/plain",
+		UserMetadata: map[string]string{
+			"Author":  "testuser",
+			"Project": "s3gateway",
+		},
+	}); err != nil {
+		t.Fatalf("minio PutObject with metadata via gateway: %v", err)
+	}
+	metaStat, err := minioClient.StatObject(ctx, bucket, metaKey, minio.StatObjectOptions{})
+	if err != nil {
+		t.Fatalf("minio StatObject metadata object via gateway: %v", err)
+	}
+	if metaStat.Size != int64(len(metaPayload)) {
+		t.Fatalf("metadata object size mismatch: got=%d want=%d", metaStat.Size, len(metaPayload))
+	}
+	if metaStat.ContentType != "text/plain" {
+		t.Fatalf("metadata object content type mismatch: got=%q want=%q", metaStat.ContentType, "text/plain")
+	}
+	// HTTP headers are case-insensitive; verify user metadata is proxied via the
+	// canonical X-Amz-Meta-* header form in the full Metadata response map.
+	for _, wantKey := range []string{"X-Amz-Meta-Author", "X-Amz-Meta-Project"} {
+		if metaStat.Metadata.Get(wantKey) == "" {
+			t.Fatalf("metadata header %q missing from StatObject response", wantKey)
+		}
+	}
+
+	// Test edge case: put and get an empty (zero-byte) object
+	emptyKey := "minioclient/empty-object.txt"
+	t.Cleanup(func() {
+		_ = minioClient.RemoveObject(ctx, bucket, emptyKey, minio.RemoveObjectOptions{})
+	})
+	if _, err := minioClient.PutObject(ctx, bucket, emptyKey, bytes.NewReader([]byte{}), 0, minio.PutObjectOptions{
+		ContentType: "text/plain",
+	}); err != nil {
+		t.Fatalf("minio PutObject empty object via gateway: %v", err)
+	}
+	emptyStat, err := minioClient.StatObject(ctx, bucket, emptyKey, minio.StatObjectOptions{})
+	if err != nil {
+		t.Fatalf("minio StatObject empty object via gateway: %v", err)
+	}
+	if emptyStat.Size != 0 {
+		t.Fatalf("empty object size mismatch: got=%d want=0", emptyStat.Size)
+	}
+	emptyObj, err := minioClient.GetObject(ctx, bucket, emptyKey, minio.GetObjectOptions{})
+	if err != nil {
+		t.Fatalf("minio GetObject empty object via gateway: %v", err)
+	}
+	emptyBody, err := io.ReadAll(emptyObj)
+	_ = emptyObj.Close()
+	if err != nil {
+		t.Fatalf("read empty object body: %v", err)
+	}
+	if len(emptyBody) != 0 {
+		t.Fatalf("empty object body should be empty, got %d bytes", len(emptyBody))
+	}
+
+	// Test edge case: reading a non-existent object returns NoSuchKey
+	nonExistentObj, err := minioClient.GetObject(ctx, bucket, "minioclient/does-not-exist.txt", minio.GetObjectOptions{})
+	if err != nil {
+		t.Fatalf("minio GetObject non-existent key should not fail on call: %v", err)
+	}
+	_, readErr := io.ReadAll(nonExistentObj)
+	_ = nonExistentObj.Close()
+	if readErr == nil {
+		t.Fatalf("expected error reading non-existent object body")
+	}
+	nonExistErrResp := minio.ToErrorResponse(readErr)
+	if nonExistErrResp.Code != "NoSuchKey" {
+		t.Fatalf("expected NoSuchKey for non-existent object, got code=%q", nonExistErrResp.Code)
+	}
+
+	// Test multipart upload: set PartSize below object size to force multipart.
+	// S3 requires parts to be at least 5 MiB except for the final part.
+	mpKey := "minioclient/multipart.bin"
+	const mpPartSize = 5 * 1024 * 1024               // 5 MiB — minimum S3 non-final part size
+	mpPayload := bytes.Repeat([]byte("m"), mpPartSize+512) // just over one part → two parts
+	t.Cleanup(func() {
+		_ = minioClient.RemoveObject(ctx, bucket, mpKey, minio.RemoveObjectOptions{})
+	})
+	mpUploadInfo, err := minioClient.PutObject(ctx, bucket, mpKey, bytes.NewReader(mpPayload), int64(len(mpPayload)), minio.PutObjectOptions{
+		ContentType: "application/octet-stream",
+		PartSize:    mpPartSize,
+	})
+	if err != nil {
+		t.Fatalf("minio PutObject multipart via gateway: %v", err)
+	}
+	if mpUploadInfo.Key != mpKey {
+		t.Fatalf("multipart PutObject key mismatch: got=%q want=%q", mpUploadInfo.Key, mpKey)
+	}
+	mpStat, err := minioClient.StatObject(ctx, bucket, mpKey, minio.StatObjectOptions{})
+	if err != nil {
+		t.Fatalf("minio StatObject multipart object via gateway: %v", err)
+	}
+	if mpStat.Size != int64(len(mpPayload)) {
+		t.Fatalf("multipart object size mismatch: got=%d want=%d", mpStat.Size, len(mpPayload))
+	}
+	mpObj, err := minioClient.GetObject(ctx, bucket, mpKey, minio.GetObjectOptions{})
+	if err != nil {
+		t.Fatalf("minio GetObject multipart object via gateway: %v", err)
+	}
+	mpGotBody, err := io.ReadAll(mpObj)
+	_ = mpObj.Close()
+	if err != nil {
+		t.Fatalf("read multipart object body: %v", err)
+	}
+	if !bytes.Equal(mpGotBody, mpPayload) {
+		t.Fatalf("multipart object body mismatch: gotLen=%d wantLen=%d", len(mpGotBody), len(mpPayload))
+	}
+
+	// Clean up extra objects before testing bucket deletion
+	for _, extraKey := range []string{metaKey, emptyKey, mpKey} {
+		if err := minioClient.RemoveObject(ctx, bucket, extraKey, minio.RemoveObjectOptions{}); err != nil {
+			t.Fatalf("minio RemoveObject %q before RemoveBucket: %v", extraKey, err)
+		}
 	}
 
 	// Test RemoveObject
