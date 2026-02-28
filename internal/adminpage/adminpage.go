@@ -608,16 +608,16 @@ func buildAdminGroupAccess(groups map[string]struct{}, buckets []string, preview
 			continue
 		}
 
-		bucketPrefix := strings.ToLower(prefix) + "-"
+		bucketNS := strings.ToLower(prefix)
 		row := adminGroupAccessView{
 			GroupName:         group,
-			BucketPrefix:      bucketPrefix,
+			BucketPrefix:      bucketNS,
 			PermissionLetters: permLetters(perm),
 			Permissions:       permViews(perm),
 			Buckets:           make([]adminBucketView, 0),
 		}
 		for _, bucket := range allBuckets {
-			if strings.HasPrefix(strings.ToLower(bucket), bucketPrefix) {
+			if authz.BucketNamespace(bucket) == bucketNS {
 				bucketView, ok := previews[bucket]
 				if !ok {
 					bucketView = adminBucketView{Name: bucket}

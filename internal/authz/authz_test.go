@@ -4,19 +4,38 @@ import (
 	"testing"
 )
 
-func TestBucketPerm_MostSpecificPrefix(t *testing.T) {
+func TestBucketNamespace(t *testing.T) {
+	tests := []struct {
+		bucket string
+		want   string
+	}{
+		{"team2-data", "team2"},
+		{"team2-data-extra", "team2"},
+		{"nohyphen", "nohyphen"},
+		{"TEAM-data", "team"},
+		{"-leading", "-leading"}, // leading dash: Index returns 0, not > 0, whole name
+	}
+	for _, tt := range tests {
+		got := BucketNamespace(tt.bucket)
+		if got != tt.want {
+			t.Errorf("BucketNamespace(%q) = %q, want %q", tt.bucket, got, tt.want)
+		}
+	}
+}
+
+func TestBucketPerm_ExactNamespaceMatch(t *testing.T) {
 	rules := []Rule{
-		{BucketPrefix: "team-", Perm: PermRead},
-		{BucketPrefix: "team2-", Perm: PermReadWrite},
+		{BucketPrefix: "team", Perm: PermRead},
+		{BucketPrefix: "team2", Perm: PermReadWrite},
 	}
 
 	tests := []struct {
 		bucket string
 		want   Perm
 	}{
-		// Matches only "team-" (longest matching prefix; "team2-" doesn't match)
+		// Namespace "team" matches exactly
 		{"team-data", PermRead},
-		// Matches both "team-" and "team2-"; "team2-" is more specific, so only its perm applies
+		// Namespace "team2" matches exactly; "team" does NOT match
 		{"team2-data", PermReadWrite},
 		// No match
 		{"other-bucket", PermNone},
@@ -31,17 +50,16 @@ func TestBucketPerm_MostSpecificPrefix(t *testing.T) {
 }
 
 func TestBucketPerm_NoOverlapUnion(t *testing.T) {
-	// Verify that the old OR-union behaviour is gone: a bucket matching a less-specific
-	// prefix must NOT inherit permissions from that less-specific rule when a more-specific
-	// rule also matches.
+	// The namespace of "team2-logs" is "team2", which does not equal "team".
+	// PermDeleteBucket from the "team" rule must NOT apply.
 	rules := []Rule{
-		{BucketPrefix: "team-", Perm: PermDeleteBucket},
-		{BucketPrefix: "team2-", Perm: PermRead},
+		{BucketPrefix: "team", Perm: PermDeleteBucket},
+		{BucketPrefix: "team2", Perm: PermRead},
 	}
 
 	got := BucketPerm(rules, "team2-logs")
 	if got&PermDeleteBucket != 0 {
-		t.Errorf("BucketPerm(team2-logs) unexpectedly contains PermDeleteBucket from less-specific prefix")
+		t.Errorf("BucketPerm(team2-logs) unexpectedly contains PermDeleteBucket from unrelated namespace")
 	}
 	if got != PermRead {
 		t.Errorf("BucketPerm(team2-logs) = %v, want PermRead", got)
@@ -50,7 +68,7 @@ func TestBucketPerm_NoOverlapUnion(t *testing.T) {
 
 func TestBucketPerm_ExactSingleMatch(t *testing.T) {
 	rules := []Rule{
-		{BucketPrefix: "alpha-", Perm: PermWrite},
+		{BucketPrefix: "alpha", Perm: PermWrite},
 	}
 	if got := BucketPerm(rules, "alpha-bucket"); got != PermWrite {
 		t.Errorf("BucketPerm(alpha-bucket) = %v, want PermWrite", got)
@@ -68,9 +86,13 @@ func TestBucketPerm_EmptyRules(t *testing.T) {
 
 func TestBucketPerm_CaseInsensitive(t *testing.T) {
 	rules := []Rule{
-		{BucketPrefix: "team-", Perm: PermRead},
+		{BucketPrefix: "team", Perm: PermRead},
+		{BucketPrefix: "team2", Perm: PermReadWrite},
 	}
 	if got := BucketPerm(rules, "TEAM-data"); got != PermRead {
 		t.Errorf("BucketPerm(TEAM-data) = %v, want PermRead", got)
+	}
+	if got := BucketPerm(rules, "TEAM2-data"); got != PermReadWrite {
+		t.Errorf("BucketPerm(TEAM2-data) = %v, want PermReadWrite", got)
 	}
 }

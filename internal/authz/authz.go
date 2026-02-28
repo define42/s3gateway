@@ -25,7 +25,7 @@ func RulesFromCtx(r *http.Request) []Rule {
 	return rules
 }
 
-// ==================== AuthZ: <prefix>-<letters> => bucket prefix "<prefix>-" ====================
+// ==================== AuthZ: <namespace>-<letters> => bucket namespace "<namespace>" ====================
 // Permission letters:
 //
 //	r = read
@@ -48,7 +48,7 @@ const (
 )
 
 type Rule struct {
-	BucketPrefix string // e.g. "test-"
+	BucketPrefix string // e.g. "test"
 	Perm         Perm
 }
 
@@ -59,7 +59,7 @@ func RulesFromGroups(groups map[string]struct{}) []Rule {
 		if !ok {
 			continue
 		}
-		bp := strings.ToLower(prefix) + "-"
+		bp := strings.ToLower(prefix)
 		byPrefix[bp] |= perm
 	}
 	out := make([]Rule, 0, len(byPrefix))
@@ -71,7 +71,7 @@ func RulesFromGroups(groups map[string]struct{}) []Rule {
 
 func ParseGroup(g string) (prefix string, perm Perm, ok bool) {
 	g = strings.ToLower(strings.TrimSpace(g))
-	i := strings.LastIndex(g, "-")
+	i := strings.Index(g, "-")
 	if i <= 0 || i >= len(g)-1 {
 		return "", PermNone, false
 	}
@@ -104,17 +104,24 @@ func ParseGroup(g string) (prefix string, perm Perm, ok bool) {
 	return p, out, true
 }
 
-func BucketPerm(rules []Rule, bucket string) Perm {
+// BucketNamespace returns the namespace portion of a bucket name: everything
+// before the first '-'. If the name contains no '-', the whole name is returned.
+func BucketNamespace(bucket string) string {
 	b := strings.ToLower(bucket)
-	bestLen := -1
-	best := PermNone
+	if i := strings.Index(b, "-"); i > 0 {
+		return b[:i]
+	}
+	return b
+}
+
+func BucketPerm(rules []Rule, bucket string) Perm {
+	ns := BucketNamespace(bucket)
 	for _, r := range rules {
-		if strings.HasPrefix(b, r.BucketPrefix) && len(r.BucketPrefix) > bestLen {
-			bestLen = len(r.BucketPrefix)
-			best = r.Perm
+		if ns == r.BucketPrefix {
+			return r.Perm
 		}
 	}
-	return best
+	return PermNone
 }
 
 func CanRead(rules []Rule, bucket string) bool  { return BucketPerm(rules, bucket)&PermRead != 0 }

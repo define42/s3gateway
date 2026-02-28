@@ -524,6 +524,11 @@ func TestParseGroupPermissions(t *testing.T) {
 			group:  "team2-rx",
 			wantOK: false,
 		},
+		{
+			name:   "multiple dashes: first dash used, rest treated as letters (invalid)",
+			group:  "my-team-r",
+			wantOK: false,
+		},
 	}
 
 	for _, tt := range tests {
