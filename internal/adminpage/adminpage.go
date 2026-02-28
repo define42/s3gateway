@@ -13,6 +13,7 @@ import (
 	"html/template"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -37,6 +38,10 @@ const (
 	adminSessionValueGrps   = "groups"
 	adminPreviewMaxKeys     = int32(25)
 	maxAdminFormBodySize    = 64 * 1024 // 64 KiB is more than enough for any admin form
+
+	// Login rate limiting: max 10 failed attempts per IP within 10 minutes.
+	loginRateLimitMaxAttempts = 10
+	loginRateLimitWindow      = 10 * time.Minute
 )
 
 func IsBrowser(r *http.Request) bool {
@@ -1048,8 +1053,22 @@ func (h *handler) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.loginLimiter != nil {
+		ip := remoteIP(r)
+		if !h.loginLimiter.isAllowed(ip) {
+			writeAdminLoginPage(w, r, http.StatusTooManyRequests, adminLoginPageData{
+				Username: upn,
+				Error:    "Too many failed login attempts. Please try again later.",
+			})
+			return
+		}
+	}
+
 	groups, err := h.authenticate(upn, pass)
 	if err != nil {
+		if h.loginLimiter != nil {
+			h.loginLimiter.recordFailure(remoteIP(r))
+		}
 		writeAdminLoginPage(w, r, http.StatusUnauthorized, adminLoginPageData{
 			Username: upn,
 			Error:    "LDAP login failed. Check your username and password.",
@@ -1745,16 +1764,72 @@ func (h *handler) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
+// loginRateLimiter tracks failed login attempts per IP address and blocks
+// excessive attempts using a sliding window.
+type loginRateLimiter struct {
+	mu       sync.Mutex
+	attempts map[string][]time.Time
+	maxAttempts int
+	window      time.Duration
+}
+
+func newLoginRateLimiter(maxAttempts int, window time.Duration) *loginRateLimiter {
+	return &loginRateLimiter{
+		attempts:    make(map[string][]time.Time),
+		maxAttempts: maxAttempts,
+		window:      window,
+	}
+}
+
+// isAllowed returns true if the IP is allowed to attempt login, false if rate-limited.
+func (l *loginRateLimiter) isAllowed(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-l.window)
+
+	// Prune old attempts outside the sliding window.
+	recent := l.attempts[ip][:0]
+	for _, t := range l.attempts[ip] {
+		if t.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+	l.attempts[ip] = recent
+
+	return len(recent) < l.maxAttempts
+}
+
+// recordFailure records a failed login attempt for the given IP.
+func (l *loginRateLimiter) recordFailure(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.attempts[ip] = append(l.attempts[ip], time.Now())
+}
+
+// remoteIP extracts the IP address (without port) from an HTTP request.
+func remoteIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		return strings.TrimSpace(r.RemoteAddr)
+	}
+	return host
+}
+
 type handler struct {
 	s3           *s3.Client
 	webSessions  *AdminGorillaStore
 	authenticate func(upn, pass string) (map[string]struct{}, error)
+	loginLimiter *loginRateLimiter
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'self'; frame-ancestors 'none'")
+	w.Header().Set("Referrer-Policy", "no-referrer")
 
 	switch normalizeAdminRoutePath(r.URL.Path) {
 	case "/":
@@ -1788,6 +1863,7 @@ func NewHandler(s3Client *s3.Client, cookieSecret string, maxSessions int, authe
 		s3:           s3Client,
 		webSessions:  webSessions,
 		authenticate: authenticate,
+		loginLimiter: newLoginRateLimiter(loginRateLimitMaxAttempts, loginRateLimitWindow),
 	}
 }
 
@@ -1797,6 +1873,7 @@ func NewHandlerWithSessions(s3Client *s3.Client, webSessions *AdminGorillaStore,
 		s3:           s3Client,
 		webSessions:  webSessions,
 		authenticate: authenticate,
+		loginLimiter: newLoginRateLimiter(loginRateLimitMaxAttempts, loginRateLimitWindow),
 	}
 }
 

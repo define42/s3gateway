@@ -32,6 +32,9 @@ func (s *Server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
 		if authz.BucketPerm(rules, *bk.Name) != authz.PermNone {
 			xw.Start("Bucket")
 			xw.Elem("Name", *bk.Name)
+			if bk.CreationDate != nil {
+				xw.Elem("CreationDate", xmlhelper.FormatS3Time(*bk.CreationDate))
+			}
 			xw.End("Bucket")
 		}
 	}

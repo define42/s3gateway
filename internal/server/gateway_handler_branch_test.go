@@ -1431,6 +1431,44 @@ func TestHandleListBucketsAllowsAnyPermission(t *testing.T) {
 	}
 }
 
+func TestHandleListBucketsCreationDate(t *testing.T) {
+	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Buckets>
+    <Bucket><Name>team2-data</Name><CreationDate>2024-01-15T10:30:00.000Z</CreationDate></Bucket>
+    <Bucket><Name>team2-logs</Name></Bucket>
+  </Buckets>
+</ListAllMyBucketsResult>`))
+	})
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req = reqWithRules(req, []authz.Rule{{
+		BucketPrefix: "team2",
+		Perm:         authz.PermRead,
+	}})
+	rr := httptest.NewRecorder()
+
+	gw.handleListBuckets(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "<Name>team2-data</Name>") {
+		t.Fatalf("expected team2-data in response: %s", body)
+	}
+	if !strings.Contains(body, "<CreationDate>") {
+		t.Fatalf("expected CreationDate in list-buckets response, got: %s", body)
+	}
+	if !strings.Contains(body, "<Name>team2-logs</Name>") {
+		t.Fatalf("expected team2-logs in response: %s", body)
+	}
+}
+
+
 func TestHandleListObjectVersionsBranchMatrix(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

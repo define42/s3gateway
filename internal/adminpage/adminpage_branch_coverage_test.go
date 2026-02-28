@@ -1654,4 +1654,83 @@ func TestAdminSecurityHeaders(t *testing.T) {
 	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control: got=%q want=%q", got, "no-store")
 	}
+	if got := rr.Header().Get("Content-Security-Policy"); got == "" {
+		t.Errorf("Content-Security-Policy header missing")
+	}
+	if got := rr.Header().Get("Referrer-Policy"); got != "no-referrer" {
+		t.Errorf("Referrer-Policy: got=%q want=%q", got, "no-referrer")
+	}
+}
+
+func TestLoginRateLimiter(t *testing.T) {
+	limiter := newLoginRateLimiter(3, time.Minute)
+
+	// First 3 attempts should be allowed.
+	for i := 0; i < 3; i++ {
+		if !limiter.isAllowed("1.2.3.4") {
+			t.Fatalf("attempt %d should be allowed", i+1)
+		}
+		limiter.recordFailure("1.2.3.4")
+	}
+
+	// 4th attempt should be blocked.
+	if limiter.isAllowed("1.2.3.4") {
+		t.Fatalf("4th attempt should be blocked after 3 failures")
+	}
+
+	// Different IP should be unaffected.
+	if !limiter.isAllowed("5.6.7.8") {
+		t.Fatalf("different IP should not be rate-limited")
+	}
+}
+
+func TestLoginRateLimiterWindowExpiry(t *testing.T) {
+	// Window of 1 millisecond so it expires quickly.
+	limiter := newLoginRateLimiter(1, time.Millisecond)
+
+	limiter.recordFailure("1.2.3.4")
+	if limiter.isAllowed("1.2.3.4") {
+		t.Fatalf("should be blocked immediately after 1 failure with max=1")
+	}
+
+	time.Sleep(2 * time.Millisecond)
+
+	// After the window expires, the IP should be allowed again.
+	if !limiter.isAllowed("1.2.3.4") {
+		t.Fatalf("should be allowed after window expiry")
+	}
+}
+
+func TestAdminLoginRateLimitingBlocks(t *testing.T) {
+	creds := &testCredentials{}
+	sessions := NewAdminSessionStore(defaultAdminSessionTTL, 100)
+	webSessions := NewAdminGorillaStore("test-secret-key-32characters!!", defaultAdminSessionTTL, sessions)
+	h := &handler{
+		s3:           nil,
+		webSessions:  webSessions,
+		authenticate: creds.authenticate,
+		loginLimiter: newLoginRateLimiter(2, time.Minute),
+	}
+
+	sendLogin := func(username, password string) int {
+		form := url.Values{"username": {username}, "password": {password}}
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = "10.0.0.1:12345"
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr.Code
+	}
+
+	// Two failures (maxAttempts=2) should both return 401.
+	if got := sendLogin("alice", "wrong1"); got != http.StatusUnauthorized {
+		t.Fatalf("attempt 1: got=%d want=%d", got, http.StatusUnauthorized)
+	}
+	if got := sendLogin("alice", "wrong2"); got != http.StatusUnauthorized {
+		t.Fatalf("attempt 2: got=%d want=%d", got, http.StatusUnauthorized)
+	}
+	// Third attempt: already at limit, should return 429.
+	if got := sendLogin("alice", "wrong3"); got != http.StatusTooManyRequests {
+		t.Fatalf("attempt 3 (rate limited): got=%d want=%d", got, http.StatusTooManyRequests)
+	}
 }
