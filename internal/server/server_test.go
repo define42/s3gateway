@@ -1641,7 +1641,7 @@ func TestGatewayPreservesUpstreamErrorStatusAndHeaders(t *testing.T) {
 	upstreamClient := testutil.NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
 	gw := NewServer(gatewayconfig.Config{}, upstreamClient)
 	gwSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := authz.WithRules(r.Context(), []authz.Rule{{BucketPrefix: "team2-", Perm: authz.PermReadWrite}})
+		ctx := authz.WithRules(r.Context(), []authz.Rule{{BucketPrefix: "team2", Perm: authz.PermReadWrite}})
 		gw.ServeHTTP(w, r.WithContext(ctx))
 	}))
 	defer gwSrv.Close()
@@ -1687,7 +1687,7 @@ func TestGatewayHandlesUpstreamLatencySpike(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	timeoutCtx, cancel := context.WithTimeout(req.Context(), 150*time.Millisecond)
 	defer cancel()
-	req = req.WithContext(authz.WithRules(timeoutCtx, []authz.Rule{{BucketPrefix: "team2-", Perm: authz.PermReadWrite}}))
+	req = req.WithContext(authz.WithRules(timeoutCtx, []authz.Rule{{BucketPrefix: "team2", Perm: authz.PermReadWrite}}))
 
 	rr := httptest.NewRecorder()
 	start := time.Now()
@@ -1734,7 +1734,7 @@ func TestHandleGetObjectAttributesIncludesChecksum(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/team2-checksum/object.txt?attributes", nil)
 	req.Header.Set("x-amz-object-attributes", "Checksum")
-	req = req.WithContext(authz.WithRules(req.Context(), []authz.Rule{{BucketPrefix: "team2-", Perm: authz.PermRead}}))
+	req = req.WithContext(authz.WithRules(req.Context(), []authz.Rule{{BucketPrefix: "team2", Perm: authz.PermRead}}))
 
 	rr := httptest.NewRecorder()
 	gw.ServeHTTP(rr, req)

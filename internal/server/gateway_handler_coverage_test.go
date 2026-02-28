@@ -36,7 +36,7 @@ func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func
 
 func fullTeam2Rule() []authz.Rule {
 	return []authz.Rule{{
-		BucketPrefix: "team2-",
+		BucketPrefix: "team2",
 		Perm:         authz.PermRead | authz.PermWrite | authz.PermCreateBucket | authz.PermDeleteObject | authz.PermDeleteBucket,
 	}}
 }

@@ -1414,7 +1414,7 @@ func TestHandleListBucketsAllowsAnyPermission(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req = reqWithRules(req, []authz.Rule{{
-		BucketPrefix: "team2-",
+		BucketPrefix: "team2",
 		Perm:         authz.PermDeleteBucket,
 	}})
 	rr := httptest.NewRecorder()
@@ -1762,7 +1762,7 @@ func TestBucketLifecycleHandlersBranches(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?lifecycle", strings.NewReader(validLifecycle))
 		req = reqWithRules(req, []authz.Rule{{
-			BucketPrefix: "team2-",
+			BucketPrefix: "team2",
 			Perm:         authz.PermWrite,
 		}})
 		rr := httptest.NewRecorder()
@@ -1780,7 +1780,7 @@ func TestBucketLifecycleHandlersBranches(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?lifecycle", strings.NewReader(validLifecycle))
 		req = reqWithRules(req, []authz.Rule{{
-			BucketPrefix: "team2-",
+			BucketPrefix: "team2",
 			Perm:         authz.PermCreateBucket,
 		}})
 		rr := httptest.NewRecorder()
@@ -1912,7 +1912,7 @@ func TestBucketLifecycleHandlersBranches(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?lifecycle", nil)
 		req = reqWithRules(req, []authz.Rule{{
-			BucketPrefix: "team2-",
+			BucketPrefix: "team2",
 			Perm:         authz.PermWrite,
 		}})
 		rr := httptest.NewRecorder()
@@ -1930,7 +1930,7 @@ func TestBucketLifecycleHandlersBranches(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?lifecycle", nil)
 		req = reqWithRules(req, []authz.Rule{{
-			BucketPrefix: "team2-",
+			BucketPrefix: "team2",
 			Perm:         authz.PermDeleteBucket,
 		}})
 		rr := httptest.NewRecorder()
