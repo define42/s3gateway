@@ -1654,8 +1654,8 @@ func TestAdminSecurityHeaders(t *testing.T) {
 	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control: got=%q want=%q", got, "no-store")
 	}
-	if got := rr.Header().Get("Content-Security-Policy"); got == "" {
-		t.Errorf("Content-Security-Policy header missing")
+	if got := rr.Header().Get("Content-Security-Policy"); got != adminCSP {
+		t.Errorf("Content-Security-Policy: got=%q want=%q", got, adminCSP)
 	}
 	if got := rr.Header().Get("Referrer-Policy"); got != "no-referrer" {
 		t.Errorf("Referrer-Policy: got=%q want=%q", got, "no-referrer")

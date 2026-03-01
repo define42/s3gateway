@@ -42,6 +42,10 @@ const (
 	// Login rate limiting: max 10 failed attempts per IP within 10 minutes.
 	loginRateLimitMaxAttempts = 10
 	loginRateLimitWindow      = 10 * time.Minute
+
+	// adminCSP is the Content-Security-Policy applied to all admin responses.
+	// Templates use only inline <style> blocks (no external resources, no JS).
+	adminCSP = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'self'; frame-ancestors 'none'"
 )
 
 func IsBrowser(r *http.Request) bool {
@@ -1790,7 +1794,7 @@ func (l *loginRateLimiter) isAllowed(ip string) bool {
 	cutoff := now.Add(-l.window)
 
 	// Prune old attempts outside the sliding window.
-	recent := l.attempts[ip][:0]
+	recent := make([]time.Time, 0, len(l.attempts[ip]))
 	for _, t := range l.attempts[ip] {
 		if t.After(cutoff) {
 			recent = append(recent, t)
@@ -1828,7 +1832,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'self'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", adminCSP)
 	w.Header().Set("Referrer-Policy", "no-referrer")
 
 	switch normalizeAdminRoutePath(r.URL.Path) {
