@@ -162,7 +162,7 @@ func encrypt(receiverPub *ecdh.PublicKey, plaintext []byte) (string, error) {
 	return s3CredentialsX25519V1 + base64.RawURLEncoding.EncodeToString(payload), nil
 }
 
-func GetDecryptedToken(encoded string, privateKey *ecdh.PrivateKey) (ldapUsername, ldapPassword, secretKey string, err error) {
+func decryptToken(encoded string, privateKey *ecdh.PrivateKey) (ldapUsername, ldapPassword, secretKey string, err error) {
 	if !strings.HasPrefix(encoded, s3CredentialsX25519V1) {
 		return "", "", "", errors.New("invalid token version")
 	}

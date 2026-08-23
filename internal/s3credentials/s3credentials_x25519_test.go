@@ -33,7 +33,7 @@ func TestGenerateKeys(t *testing.T) {
 		t.Fatalf("failed to parse private key: %v", err)
 	}
 
-	outLdapUsername, outLdapPassword, outSecretKey, err := GetDecryptedToken(accessKey, privateKey)
+	outLdapUsername, outLdapPassword, outSecretKey, err := decryptToken(accessKey, privateKey)
 	if err != nil {
 		t.Fatalf("failed to decrypt token: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestDecryptTamperedCiphertext(t *testing.T) {
 	}
 }
 
-func TestGetDecryptedTokenInvalidFormat(t *testing.T) {
+func TestDecryptTokenInvalidFormat(t *testing.T) {
 	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("failed to generate receiver key: %v", err)
@@ -165,7 +165,7 @@ func TestGetDecryptedTokenInvalidFormat(t *testing.T) {
 		t.Fatalf("failed to encrypt test payload: %v", err)
 	}
 
-	_, _, _, err = GetDecryptedToken(encoded, receiverPriv)
+	_, _, _, err = decryptToken(encoded, receiverPriv)
 	if err == nil {
 		t.Fatalf("expected invalid token format error")
 	}
@@ -174,7 +174,7 @@ func TestGetDecryptedTokenInvalidFormat(t *testing.T) {
 	}
 }
 
-func TestGetDecryptedTokenRejectsEmptyCredentials(t *testing.T) {
+func TestDecryptTokenRejectsEmptyCredentials(t *testing.T) {
 	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("failed to generate receiver key: %v", err)
@@ -196,7 +196,7 @@ func TestGetDecryptedTokenRejectsEmptyCredentials(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to encrypt test payload: %v", err)
 			}
-			_, _, _, err = GetDecryptedToken(encoded, receiverPriv)
+			_, _, _, err = decryptToken(encoded, receiverPriv)
 			if err == nil {
 				t.Fatalf("expected invalid token format error")
 			}
@@ -304,13 +304,13 @@ func TestX25519PrivateKeyFromHex(t *testing.T) {
 	}
 }
 
-func TestGetDecryptedTokenDecryptError(t *testing.T) {
+func TestDecryptTokenDecryptError(t *testing.T) {
 	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("failed to generate receiver key: %v", err)
 	}
 
-	_, _, _, err = GetDecryptedToken("X1%%%", receiverPriv)
+	_, _, _, err = decryptToken("X1%%%", receiverPriv)
 	if err == nil {
 		t.Fatalf("expected decrypt error")
 	}

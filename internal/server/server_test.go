@@ -2690,7 +2690,7 @@ func mapBoolKeys(in map[string]bool) []string {
 
 func mustGatewaySecretForAccessKey(tb testing.TB, accessKey string) string {
 	tb.Helper()
-	_, _, secretKey, err := s3credentials.S3credentials(accessKey, nil)
+	_, _, secretKey, err := s3credentials.Decode(accessKey, nil)
 	if err != nil {
 		tb.Fatalf("derive secret key for access key %q: %v", accessKey, err)
 	}

@@ -10,7 +10,7 @@ import (
 
 func TestDecodeUserPassFromAccessKeyErrorPaths(t *testing.T) {
 	t.Run("accessKey not base64", func(t *testing.T) {
-		_, _, _, err := s3credentials.S3CredentialsBase64Encoded("AD!not-base64!")
+		_, _, _, err := s3credentials.Decode("AD!not-base64!", nil)
 		if err == nil {
 			t.Fatalf("expected error for non-base64 access key")
 		}
@@ -21,7 +21,7 @@ func TestDecodeUserPassFromAccessKeyErrorPaths(t *testing.T) {
 
 	t.Run("accessKey must decode to user pass", func(t *testing.T) {
 		accessKey := base64.StdEncoding.EncodeToString([]byte("useronly"))
-		_, _, _, err := s3credentials.S3CredentialsBase64Encoded("AD" + accessKey)
+		_, _, _, err := s3credentials.Decode("AD"+accessKey, nil)
 		if err == nil {
 			t.Fatalf("expected error for decoded access key without username:password format")
 		}
@@ -36,7 +36,7 @@ func TestDecodeUserPassFromAccessKeyErrorPaths(t *testing.T) {
 			t.Fatalf("unexpected error generating access key: %v", err)
 		}
 
-		username, password, secretKeyGot, err := s3credentials.S3CredentialsBase64Encoded(accessKey)
+		username, password, secretKeyGot, err := s3credentials.Decode(accessKey, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
