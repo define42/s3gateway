@@ -1402,11 +1402,26 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 		return
 	}
 
+	meta := extractAmzMeta(r.Header)
+	// With the REPLACE directive the caller supplies a fresh metadata set for the
+	// destination, so the copy is subject to the same upload-metadata policy as a
+	// PutObject: stamp uploaded-by (overriding any client-provided value) and
+	// enforce REQUIRED_UPLOAD_METADATA_KEYS. With the default COPY directive the
+	// destination inherits the source object's metadata and the request metadata
+	// is ignored by S3, so there is nothing to enforce here.
+	if metadataDirective == types.MetadataDirectiveReplace {
+		meta = ensureUploadedByMetadata(meta, UploaderFromCtx(r))
+		if missing := missingRequiredUploadMetadata(meta, s.cfg.RequiredUploadMetadataKeys); len(missing) > 0 {
+			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
+			return
+		}
+	}
+
 	in := &s3.CopyObjectInput{
 		Bucket:     &bucket,
 		Key:        &key,
 		CopySource: aws.String(copySource),
-		Metadata:   extractAmzMeta(r.Header),
+		Metadata:   meta,
 		Expires:    expires,
 	}
 	if ifMatch != "" {
