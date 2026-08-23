@@ -26,17 +26,18 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	authz "github.com/define42/s3gateway/internal/authz"
+	"github.com/define42/s3gateway/internal/config"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 )
 
 const (
-	adminSessionCookieName  = "s3gateway_admin_session"
-	defaultAdminSessionTTL  = 30 * time.Minute
-	adminSessionValueUser   = "username"
-	adminSessionValueGrps   = "groups"
-	adminPreviewMaxKeys     = int32(25)
-	maxAdminFormBodySize    = 64 * 1024 // 64 KiB is more than enough for any admin form
+	adminSessionCookieName = "s3gateway_admin_session"
+	defaultAdminSessionTTL = 30 * time.Minute
+	adminSessionValueUser  = "username"
+	adminSessionValueGrps  = "groups"
+	adminPreviewMaxKeys    = int32(25)
+	maxAdminFormBodySize   = 64 * 1024 // 64 KiB is more than enough for any admin form
 )
 
 func IsBrowser(r *http.Request) bool {
@@ -145,20 +146,21 @@ type adminBucketView struct {
 }
 
 type adminBucketPageData struct {
-	Username         string
-	BucketName       string
-	Error            string
-	Notice           string
-	GeneratedAt      string
-	Objects          []adminBucketObjectView
-	HasNext          bool
-	HasPrev          bool
-	NextURL          string
-	PrevURL          string
-	CurrentCursor    string
-	CurrentHistory   string
-	CanUploadObjects bool
-	CanDeleteObjects bool
+	Username             string
+	BucketName           string
+	Error                string
+	Notice               string
+	GeneratedAt          string
+	Objects              []adminBucketObjectView
+	HasNext              bool
+	HasPrev              bool
+	NextURL              string
+	PrevURL              string
+	CurrentCursor        string
+	CurrentHistory       string
+	CanUploadObjects     bool
+	CanDeleteObjects     bool
+	RequiredMetadataKeys []string
 }
 
 type adminBucketObjectView struct {
@@ -1236,12 +1238,13 @@ func (h *handler) handleAdminBucketPage(w http.ResponseWriter, r *http.Request) 
 	canDelete := authz.CanDeleteObject(rules, bucket)
 	if !authz.CanRead(rules, bucket) {
 		writeAdminBucketPage(w, r, http.StatusForbidden, adminBucketPageData{
-			Username:         session.Username,
-			BucketName:       bucket,
-			Error:            "Read permission is required for this bucket.",
-			GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
-			CanUploadObjects: canUpload,
-			CanDeleteObjects: canDelete,
+			Username:             session.Username,
+			BucketName:           bucket,
+			Error:                "Read permission is required for this bucket.",
+			GeneratedAt:          time.Now().UTC().Format(time.RFC3339),
+			CanUploadObjects:     canUpload,
+			CanDeleteObjects:     canDelete,
+			RequiredMetadataKeys: h.requiredUploadMetadataKeys,
 		})
 		return
 	}
@@ -1251,12 +1254,13 @@ func (h *handler) handleAdminBucketPage(w http.ResponseWriter, r *http.Request) 
 	history, err := decodeAdminCursorHistory(historyEncoded)
 	if err != nil {
 		writeAdminBucketPage(w, r, http.StatusBadRequest, adminBucketPageData{
-			Username:         session.Username,
-			BucketName:       bucket,
-			Error:            "Invalid pagination cursor state.",
-			GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
-			CanUploadObjects: canUpload,
-			CanDeleteObjects: canDelete,
+			Username:             session.Username,
+			BucketName:           bucket,
+			Error:                "Invalid pagination cursor state.",
+			GeneratedAt:          time.Now().UTC().Format(time.RFC3339),
+			CanUploadObjects:     canUpload,
+			CanDeleteObjects:     canDelete,
+			RequiredMetadataKeys: h.requiredUploadMetadataKeys,
 		})
 		return
 	}
@@ -1264,27 +1268,29 @@ func (h *handler) handleAdminBucketPage(w http.ResponseWriter, r *http.Request) 
 	objects, nextCursor, truncated, err := h.listBucketObjects(r.Context(), bucket, cursor, adminPreviewMaxKeys)
 	if err != nil {
 		writeAdminBucketPage(w, r, http.StatusBadGateway, adminBucketPageData{
-			Username:         session.Username,
-			BucketName:       bucket,
-			Error:            "Could not list bucket objects.",
-			GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
-			CanUploadObjects: canUpload,
-			CanDeleteObjects: canDelete,
+			Username:             session.Username,
+			BucketName:           bucket,
+			Error:                "Could not list bucket objects.",
+			GeneratedAt:          time.Now().UTC().Format(time.RFC3339),
+			CanUploadObjects:     canUpload,
+			CanDeleteObjects:     canDelete,
+			RequiredMetadataKeys: h.requiredUploadMetadataKeys,
 		})
 		return
 	}
 
 	data := adminBucketPageData{
-		Username:         session.Username,
-		BucketName:       bucket,
-		Notice:           strings.TrimSpace(r.URL.Query().Get("msg")),
-		Error:            strings.TrimSpace(r.URL.Query().Get("err")),
-		GeneratedAt:      time.Now().UTC().Format(time.RFC3339),
-		Objects:          objects,
-		CurrentCursor:    cursor,
-		CurrentHistory:   historyEncoded,
-		CanUploadObjects: canUpload,
-		CanDeleteObjects: canDelete,
+		Username:             session.Username,
+		BucketName:           bucket,
+		Notice:               strings.TrimSpace(r.URL.Query().Get("msg")),
+		Error:                strings.TrimSpace(r.URL.Query().Get("err")),
+		GeneratedAt:          time.Now().UTC().Format(time.RFC3339),
+		Objects:              objects,
+		CurrentCursor:        cursor,
+		CurrentHistory:       historyEncoded,
+		CanUploadObjects:     canUpload,
+		CanDeleteObjects:     canDelete,
+		RequiredMetadataKeys: h.requiredUploadMetadataKeys,
 	}
 
 	if len(history) > 0 {
@@ -1418,6 +1424,7 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 		history string
 		size    int64 = -1
 	)
+	metaValues := map[string]string{}
 
 	redirectUploadPayloadError := func(pageErr string) {
 		if strings.TrimSpace(bucket) == "" {
@@ -1446,6 +1453,20 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 		}
 
 		partName := strings.TrimSpace(part.FormName())
+		if rawKey := strings.TrimPrefix(partName, "meta-"); rawKey != partName {
+			// User-supplied object metadata field (meta-<key>). Collected before
+			// the file part so it can be validated and attached to the upload.
+			valueBytes, readErr := io.ReadAll(io.LimitReader(part, maxUploadFieldBytes+1))
+			_ = part.Close()
+			if readErr != nil || int64(len(valueBytes)) > maxUploadFieldBytes {
+				redirectUploadPayloadError("Could not process upload payload.")
+				return
+			}
+			if metaKey := config.NormalizeRequiredMetadataKey(rawKey); metaKey != "" {
+				metaValues[metaKey] = strings.TrimSpace(string(valueBytes))
+			}
+			continue
+		}
 		switch partName {
 		case "name", "key", "cursor", "history", "size":
 			valueBytes, readErr := io.ReadAll(io.LimitReader(part, maxUploadFieldBytes+1))
@@ -1522,12 +1543,25 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 				return
 			}
 
+			// Apply the same upload-metadata policy as the S3 API: stamp
+			// uploaded-by (overriding any client-supplied value) and enforce
+			// REQUIRED_UPLOAD_METADATA_KEYS, which the browser form collects as
+			// meta-<key> fields.
+			meta := make(map[string]string, len(metaValues)+1)
+			for k, v := range metaValues {
+				meta[k] = v
+			}
+			meta["uploaded-by"] = strings.TrimSpace(session.Username)
+			if missing := missingRequiredMetadata(meta, h.requiredUploadMetadataKeys); len(missing) > 0 {
+				_ = part.Close()
+				redirectToBucket("", "Missing required metadata: "+strings.Join(missing, ", "))
+				return
+			}
+
 			createIn := &s3.CreateMultipartUploadInput{
-				Bucket: &bucket,
-				Key:    &finalKey,
-				Metadata: map[string]string{
-					"uploaded-by": strings.TrimSpace(session.Username),
-				},
+				Bucket:   &bucket,
+				Key:      &finalKey,
+				Metadata: meta,
 			}
 			if fileContentType != "" {
 				createIn.ContentType = aws.String(fileContentType)
@@ -1746,9 +1780,29 @@ func (h *handler) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 type handler struct {
-	s3           *s3.Client
-	webSessions  *AdminGorillaStore
-	authenticate func(upn, pass string) (map[string]struct{}, error)
+	s3                         *s3.Client
+	webSessions                *AdminGorillaStore
+	authenticate               func(upn, pass string) (map[string]struct{}, error)
+	requiredUploadMetadataKeys []string // normalized (lowercase, no x-amz-meta- prefix) keys required on uploads
+}
+
+// missingRequiredMetadata returns the required keys absent from meta (in the
+// order they were configured). meta keys are the normalized, prefix-stripped
+// form used for object metadata.
+func missingRequiredMetadata(meta map[string]string, required []string) []string {
+	if len(required) == 0 {
+		return nil
+	}
+	missing := make([]string, 0, len(required))
+	for _, key := range required {
+		if v, ok := meta[key]; !ok || strings.TrimSpace(v) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return missing
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -1781,13 +1835,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // NewHandler creates the admin page HTTP handler.
-func NewHandler(s3Client *s3.Client, cookieSecret string, maxSessions int, authenticate func(upn, pass string) (map[string]struct{}, error)) http.Handler {
+func NewHandler(s3Client *s3.Client, cookieSecret string, maxSessions int, requiredUploadMetadataKeys []string, authenticate func(upn, pass string) (map[string]struct{}, error)) http.Handler {
 	sessions := NewAdminSessionStore(defaultAdminSessionTTL, maxSessions)
 	webSessions := NewAdminGorillaStore(cookieSecret, defaultAdminSessionTTL, sessions)
 	return &handler{
-		s3:           s3Client,
-		webSessions:  webSessions,
-		authenticate: authenticate,
+		s3:                         s3Client,
+		webSessions:                webSessions,
+		authenticate:               authenticate,
+		requiredUploadMetadataKeys: requiredUploadMetadataKeys,
 	}
 }
 

@@ -264,6 +264,12 @@
             Object key (optional)
             <input type="text" name="key" placeholder="folder/file.txt">
           </label>
+          {{range .RequiredMetadataKeys}}
+          <label>
+            {{.}} (required metadata)
+            <input type="text" name="meta-{{.}}" required>
+          </label>
+          {{end}}
           <label>
             File
             <input type="file" name="file" required>

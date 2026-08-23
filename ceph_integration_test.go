@@ -9,12 +9,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	s3gateway "github.com/define42/s3gateway"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	"github.com/testcontainers/testcontainers-go"
@@ -152,6 +154,22 @@ func createCephBucketViaS3cmd(ctx context.Context, t *testing.T, c testcontainer
 	}
 }
 
+// assertCephTagSet compares two tag sets order-independently.
+func assertCephTagSet(t *testing.T, label string, got, want []s3types.Tag) {
+	t.Helper()
+	sig := func(tags []s3types.Tag) []string {
+		out := make([]string, 0, len(tags))
+		for _, tag := range tags {
+			out = append(out, aws.ToString(tag.Key)+"="+aws.ToString(tag.Value))
+		}
+		sort.Strings(out)
+		return out
+	}
+	if gotSig, wantSig := fmt.Sprintf("%v", sig(got)), fmt.Sprintf("%v", sig(want)); gotSig != wantSig {
+		t.Fatalf("%s tag set mismatch: got=%q want=%q", label, gotSig, wantSig)
+	}
+}
+
 func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -281,4 +299,86 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 		t.Fatalf("gateway object body mismatch: got=%q want=%q", string(gwBody), string(payload))
 	}
 
+	// ---- Object user metadata round-trip (incl. gateway-stamped uploaded-by) ----
+	metaKey := fmt.Sprintf("cephgw/meta-%d.txt", time.Now().UnixNano())
+	metaPayload := []byte("ceph object with user metadata")
+	t.Cleanup(func() {
+		_, _ = gatewayClient.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(metaKey),
+		})
+	})
+	if _, err := gatewayClient.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(metaKey),
+		Body:          bytes.NewReader(metaPayload),
+		ContentLength: aws.Int64(int64(len(metaPayload))),
+		ContentType:   aws.String("text/plain"),
+		Metadata: map[string]string{
+			"author":  "testuser",
+			"project": "s3gateway",
+		},
+	}); err != nil {
+		t.Fatalf("put object with metadata via s3gateway: %v", err)
+	}
+
+	headMeta, err := gatewayClient.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(metaKey),
+	})
+	if err != nil {
+		t.Fatalf("head metadata object via s3gateway: %v", err)
+	}
+	for k, want := range map[string]string{
+		"author":      "testuser",
+		"project":     "s3gateway",
+		"uploaded-by": "testuser", // stamped by the gateway from the authenticated UPN
+	} {
+		if got := headMeta.Metadata[k]; got != want {
+			t.Fatalf("metadata[%q] mismatch: got=%q want=%q (all=%v)", k, got, want, headMeta.Metadata)
+		}
+	}
+
+	// ---- Object tagging round-trip ----
+	objectTagging := &s3types.Tagging{
+		TagSet: []s3types.Tag{
+			{Key: aws.String("env"), Value: aws.String("test")},
+			{Key: aws.String("team"), Value: aws.String("team2")},
+		},
+	}
+	if _, err := gatewayClient.PutObjectTagging(ctx, &s3.PutObjectTaggingInput{
+		Bucket:  aws.String(bucket),
+		Key:     aws.String(key),
+		Tagging: objectTagging,
+	}); err != nil {
+		t.Fatalf("put object tagging via s3gateway: %v", err)
+	}
+	gotObjTagging, err := gatewayClient.GetObjectTagging(ctx, &s3.GetObjectTaggingInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		t.Fatalf("get object tagging via s3gateway: %v", err)
+	}
+	assertCephTagSet(t, "object tagging gateway round-trip", gotObjTagging.TagSet, objectTagging.TagSet)
+
+	// ---- Bucket tagging round-trip ----
+	bucketTagging := &s3types.Tagging{
+		TagSet: []s3types.Tag{
+			{Key: aws.String("cost-center"), Value: aws.String("1234")},
+		},
+	}
+	if _, err := gatewayClient.PutBucketTagging(ctx, &s3.PutBucketTaggingInput{
+		Bucket:  aws.String(bucket),
+		Tagging: bucketTagging,
+	}); err != nil {
+		t.Fatalf("put bucket tagging via s3gateway: %v", err)
+	}
+	gotBucketTagging, err := gatewayClient.GetBucketTagging(ctx, &s3.GetBucketTaggingInput{
+		Bucket: aws.String(bucket),
+	})
+	if err != nil {
+		t.Fatalf("get bucket tagging via s3gateway: %v", err)
+	}
+	assertCephTagSet(t, "bucket tagging gateway round-trip", gotBucketTagging.TagSet, bucketTagging.TagSet)
 }
