@@ -11,7 +11,7 @@ import (
 )
 
 func TestGroupsForCredentialsSingleflightDeduplicatesConcurrentMisses(t *testing.T) {
-	s := NewServer(config.Config{
+	s := New(config.Config{
 		GroupTTL:             time.Minute,
 		GroupCacheMaxEntries: 64,
 	}, nil)

@@ -32,12 +32,12 @@ func newHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
 func BootS3Gateway() (*http.Server, config.Config, error) {
 	cfg := config.LoadConfig()
 
-	up, err := upstream.NewUpstreamS3(context.Background(), cfg)
+	up, err := upstream.New(context.Background(), cfg)
 	if err != nil {
 		return nil, cfg, fmt.Errorf("init upstream s3: %w", err)
 	}
 
-	s := srv.NewServer(cfg, up)
+	s := srv.New(cfg, up)
 
 	adminHandler := adminpage.NewHandler(up, cfg.CookieSecret, cfg.GroupCacheMaxEntries, cfg.RequiredUploadMetadataKeys, s.GroupsForCredentials)
 	httpSrv := newHTTPServer(cfg, s.WithAuth(s, adminHandler))

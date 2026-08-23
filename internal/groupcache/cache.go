@@ -18,29 +18,29 @@ type groupCacheEntry struct {
 	lastSeen       time.Time
 }
 
-type GroupCache struct {
+type Cache struct {
 	mu         sync.Mutex
 	data       map[string]groupCacheEntry
 	ttl        time.Duration
 	maxEntries int
 }
 
-func NewGroupCacheWithMaxEntries(ttl time.Duration, maxEntries int) *GroupCache {
+func New(ttl time.Duration, maxEntries int) *Cache {
 	if maxEntries <= 0 {
 		maxEntries = config.DefaultGroupCacheMaxEntries
 	}
-	return &GroupCache{
+	return &Cache{
 		data:       map[string]groupCacheEntry{},
 		ttl:        ttl,
 		maxEntries: maxEntries,
 	}
 }
 
-func (c *GroupCache) MaxEntries() int {
+func (c *Cache) MaxEntries() int {
 	return c.maxEntries
 }
 
-func (c *GroupCache) Len() int {
+func (c *Cache) Len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.data)
@@ -66,7 +66,7 @@ func CloneGroups(groups map[string]struct{}) map[string]struct{} {
 	return out
 }
 
-func (c *GroupCache) Get(upn, password string) (map[string]struct{}, bool) {
+func (c *Cache) Get(upn, password string) (map[string]struct{}, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -88,7 +88,7 @@ func (c *GroupCache) Get(upn, password string) (map[string]struct{}, bool) {
 	return CloneGroups(e.groups), true
 }
 
-func (c *GroupCache) evictExpiredLocked(now time.Time) {
+func (c *Cache) evictExpiredLocked(now time.Time) {
 	for upn, e := range c.data {
 		if now.After(e.expires) {
 			delete(c.data, upn)
@@ -96,7 +96,7 @@ func (c *GroupCache) evictExpiredLocked(now time.Time) {
 	}
 }
 
-func (c *GroupCache) evictOneOldestLocked() {
+func (c *Cache) evictOneOldestLocked() {
 	var victim string
 	var victimEntry groupCacheEntry
 	found := false
@@ -119,7 +119,7 @@ func (c *GroupCache) evictOneOldestLocked() {
 	}
 }
 
-func (c *GroupCache) Set(upn, password string, groups map[string]struct{}) {
+func (c *Cache) Set(upn, password string, groups map[string]struct{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

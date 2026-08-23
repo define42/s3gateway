@@ -356,7 +356,7 @@ func TestSigV4AuthFromCtx(t *testing.T) {
 	})
 
 	t.Run("valid auth value", func(t *testing.T) {
-		want := &sigv4.SigV4Auth{
+		want := &sigv4.Auth{
 			AccessKey:    "access",
 			Date:         "20260207",
 			Region:       "us-east-1",
@@ -419,7 +419,7 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 	})
 
 	t.Run("missing sigv4 secret context", func(t *testing.T) {
-		auth := &sigv4.SigV4Auth{
+		auth := &sigv4.Auth{
 			AccessKey:    "access",
 			Date:         "20260207",
 			Region:       "us-east-1",
@@ -442,7 +442,7 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 	})
 
 	t.Run("with sigv4 auth context", func(t *testing.T) {
-		auth := &sigv4.SigV4Auth{
+		auth := &sigv4.Auth{
 			AccessKey:    "access",
 			Date:         "20260207",
 			Region:       "us-east-1",

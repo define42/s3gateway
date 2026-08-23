@@ -50,17 +50,17 @@ const ctxUploaderKey ctxKey = "uploader-upn"
 type Server struct {
 	cfg           config.Config
 	up            *s3.Client
-	gcache        *groupcache.GroupCache
+	gcache        *groupcache.Cache
 	groupLookupSF singleflight.Group
 	fetchGroups   func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
 }
 
-func NewServer(cfg config.Config, up *s3.Client) *Server {
+func New(cfg config.Config, up *s3.Client) *Server {
 	cfg.ApplyDefaults()
 	return &Server{
 		cfg:         cfg,
 		up:          up,
-		gcache:      groupcache.NewGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
+		gcache:      groupcache.New(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
 		fetchGroups: ldapinternal.FetchGroupsUPN,
 	}
 }

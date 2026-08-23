@@ -27,7 +27,7 @@ func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func
 	upstreamSrv := httptest.NewServer(h)
 	ctx := context.Background()
 	upstreamClient := testutil.NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := NewServer(config.Config{}, upstreamClient)
+	gw := New(config.Config{}, upstreamClient)
 
 	return gw, func() {
 		upstreamSrv.Close()
