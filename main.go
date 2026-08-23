@@ -39,7 +39,7 @@ func BootS3Gateway() (*http.Server, config.Config, error) {
 
 	s := srv.NewServer(cfg, up)
 
-	adminHandler := adminpage.NewHandler(up, cfg.CookieSecret, cfg.GroupCacheMaxEntries, s.GroupsForCredentials)
+	adminHandler := adminpage.NewHandler(up, cfg.CookieSecret, cfg.GroupCacheMaxEntries, cfg.RequiredUploadMetadataKeys, s.GroupsForCredentials)
 	httpSrv := newHTTPServer(cfg, s.WithAuth(s, adminHandler))
 	return httpSrv, cfg, nil
 }
