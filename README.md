@@ -73,6 +73,8 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 | Bucket | `PUT /<bucket>` | Create bucket | `c` on target bucket prefix |
 | Bucket | `HEAD /<bucket>` | Head bucket | `r` on target bucket prefix |
 | Bucket | `DELETE /<bucket>` | Delete bucket | `b` on target bucket prefix |
+| Bucket | `GET /<bucket>?location` | Get bucket location | Any permission on target bucket prefix |
+| Bucket | `GET /<bucket>` | List objects (v1) | `r` on target bucket prefix |
 | Bucket | `GET /<bucket>?list-type=2` | List objects v2 | `r` on target bucket prefix |
 | Bucket | `GET /<bucket>?versions` | List object versions | `r` on target bucket prefix |
 | Bucket | `POST /<bucket>?delete` | Multi-object delete | `d` on target bucket prefix |
@@ -101,12 +103,15 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 | Multipart | `POST /<bucket>/<key>?uploadId=...` | Complete multipart upload | `w` on target bucket prefix |
 | Multipart | `DELETE /<bucket>/<key>?uploadId=...` | Abort multipart upload | `w` on target bucket prefix |
 | Streaming | `PUT` object/part with `x-amz-content-sha256: STREAMING-AWS4-HMAC-SHA256-PAYLOAD` | `aws-chunked` streaming uploads | Same as underlying write route (`w`); requires `x-amz-decoded-content-length` and per-chunk signature chain |
+| Streaming | `PUT` object/part with `x-amz-content-sha256: STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER` | `aws-chunked` streaming uploads with signed trailing checksum | Same as `STREAMING-AWS4-HMAC-SHA256-PAYLOAD`, plus `x-amz-trailer-signature` verification and trailing `x-amz-checksum-*` validation |
+| Streaming | `PUT` object/part with `x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER` | `aws-chunked` streaming uploads with unsigned trailing checksum (current AWS SDK/CLI default over TLS) | Same as underlying write route (`w`); requires `x-amz-decoded-content-length`; trailing `x-amz-checksum-*` (crc32, crc32c, crc64nvme, sha1, sha256) is validated against the payload |
 
 ## Notable Limits / Non-Goals
 
 - Path-style requests only.
 - Header-based SigV4 auth only (no presigned URL flow).
 - Only implemented operations are supported; unsupported routes return `NotImplemented`.
+- Requests carrying a sub-resource of an unimplemented operation (for example `?acl`, `?policy`, `?retention`) are rejected with `NotImplemented` before any bucket/object handler runs, so they can never be misinterpreted as a plain `GET`/`PUT`/`DELETE`.
 
 ## Configuration
 

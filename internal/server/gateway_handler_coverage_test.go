@@ -19,6 +19,7 @@ import (
 	"github.com/define42/s3gateway/internal/config"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	"github.com/define42/s3gateway/internal/testutil"
+	"github.com/define42/s3gateway/internal/upstream"
 )
 
 func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func()) {
@@ -26,7 +27,23 @@ func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func
 
 	upstreamSrv := httptest.NewServer(h)
 	ctx := context.Background()
-	upstreamClient := testutil.NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
+	// A custom CA bundle cannot be installed into the production factory's
+	// plain *http.Client; it is irrelevant for the local stub anyway.
+	t.Setenv("AWS_CA_BUNDLE", "")
+	// Use the production upstream client factory so unit tests exercise the
+	// same client configuration (e.g. request checksums only when required,
+	// which non-seekable proxied bodies depend on).
+	upstreamClient, err := upstream.NewUpstreamS3(ctx, config.Config{
+		UpstreamEndpoint:       upstreamSrv.URL,
+		UpstreamRegion:         "us-east-1",
+		UpstreamAccessKey:      "upstream-ak",
+		UpstreamSecretKey:      "upstream-sk",
+		UpstreamForcePathStyle: true,
+	})
+	if err != nil {
+		upstreamSrv.Close()
+		t.Fatalf("init stub upstream client: %v", err)
+	}
 	gw := NewServer(config.Config{}, upstreamClient)
 
 	return gw, func() {

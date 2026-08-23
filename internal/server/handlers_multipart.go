@@ -255,8 +255,7 @@ func (s *Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 		s3.WithAPIOptions(v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware),
 	)
 	if err != nil {
-		if sigv4.IsChunkSignatureValidationError(err) {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "SignatureDoesNotMatch", "Invalid aws-chunked chunk signature")
+		if writeChunkedBodyError(w, err, body) {
 			return
 		}
 		xmlhelper.WriteUpstreamError(w, err)

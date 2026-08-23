@@ -88,6 +88,37 @@ func (s *Server) handleHeadBucket(w http.ResponseWriter, r *http.Request, bucket
 	w.WriteHeader(http.StatusOK)
 }
 
+func (s *Server) handleGetBucketLocation(w http.ResponseWriter, r *http.Request, bucket string) {
+	rules := authz.RulesFromCtx(r)
+	// Any permission on the bucket prefix is enough: clients such as `mc` and
+	// rclone call GetBucketLocation before read *and* write operations, so
+	// requiring `r` would break write-only users.
+	if authz.BucketPerm(rules, bucket) == authz.PermNone {
+		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	in := &s3.GetBucketLocationInput{Bucket: &bucket}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	out, err := s.up.GetBucketLocation(r.Context(), in)
+	if err != nil {
+		xmlhelper.WriteUpstreamError(w, err)
+		return
+	}
+
+	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
+	defer xmlhelper.FlushXMLWriterResponse(xw)
+
+	xmlhelper.EncodeS3RootStart(xw, "LocationConstraint")
+	// An empty LocationConstraint means us-east-1, matching AWS behavior.
+	if loc := string(out.LocationConstraint); loc != "" {
+		xw.RawString(xmlhelper.XMLEscape(loc))
+	}
+	xw.End("LocationConstraint")
+}
+
 func (s *Server) handleDeleteBucket(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromCtx(r)
 	if !authz.CanDeleteBucket(rules, bucket) {

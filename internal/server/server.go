@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -157,11 +159,63 @@ func UploaderFromCtx(r *http.Request) string {
 	return strings.TrimSpace(uploader)
 }
 
+// unsupportedSubresources are the S3 sub-resource query keys of operations the
+// gateway does not implement. They must be rejected before method dispatch:
+// a sub-resource request that fell through would otherwise be executed as the
+// plain bucket/object operation (e.g. PutObjectAcl `PUT /b/k?acl` would
+// overwrite the object via PutObject, and DeleteBucketPolicy
+// `DELETE /b?policy` would delete the bucket).
+var unsupportedSubresources = map[string]struct{}{
+	"accelerate":            {},
+	"acl":                   {},
+	"analytics":             {},
+	"cors":                  {},
+	"encryption":            {},
+	"intelligent-tiering":   {},
+	"inventory":             {},
+	"legal-hold":            {},
+	"logging":               {},
+	"metadataConfiguration": {},
+	"metadataTable":         {},
+	"metrics":               {},
+	"notification":          {},
+	"object-lock":           {},
+	"ownershipControls":     {},
+	"policy":                {},
+	"policyStatus":          {},
+	"publicAccessBlock":     {},
+	"renameObject":          {},
+	"replication":           {},
+	"requestPayment":        {},
+	"restore":               {},
+	"retention":             {},
+	"select":                {},
+	"session":               {},
+	"torrent":               {},
+	"website":               {},
+}
+
+func firstUnsupportedSubresource(q url.Values) string {
+	found := make([]string, 0, 1)
+	for k := range q {
+		if _, ok := unsupportedSubresources[k]; ok {
+			found = append(found, k)
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	sort.Strings(found)
+	return found[0]
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Path-style only:
 	//   /                 => ListBuckets
-	//   /bucket           => CreateBucket, ListObjects (v2), ListMultipartUploads, Lifecycle config
+	//   /bucket           => CreateBucket, ListObjects (v1+v2), GetBucketLocation, ListMultipartUploads, Lifecycle config
 	//   /bucket/key       => GetObject, PutObject, DeleteObject, GetObjectAttributes, Multipart ops via query
+	// Sub-resources of unimplemented operations are rejected up front so they
+	// can never fall through to a plain bucket/object handler.
 
 	p := r.URL.Path
 	if p == "" {
@@ -181,6 +235,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleReadyz(w, r)
+		return
+	}
+
+	if sub := firstUnsupportedSubresource(r.URL.Query()); sub != "" {
+		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented: "+sub)
 		return
 	}
 
@@ -248,8 +307,36 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if _, ok := q["delete"]; ok && r.Method == http.MethodPost {
-			s.handleDeleteObjects(w, r, bucket)
+		if _, ok := q["delete"]; ok {
+			if r.Method == http.MethodPost {
+				s.handleDeleteObjects(w, r, bucket)
+				return
+			}
+			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			return
+		}
+		if _, ok := q["location"]; ok {
+			if r.Method == http.MethodGet {
+				s.handleGetBucketLocation(w, r, bucket)
+				return
+			}
+			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			return
+		}
+		if _, ok := q["versions"]; ok {
+			if r.Method == http.MethodGet {
+				s.handleListObjectVersions(w, r, bucket)
+				return
+			}
+			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			return
+		}
+		if _, ok := q["uploads"]; ok {
+			if r.Method == http.MethodGet {
+				s.handleListMultipartUploads(w, r, bucket)
+				return
+			}
+			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 			return
 		}
 		if r.Method == http.MethodPut {
@@ -265,18 +352,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.Method == http.MethodGet {
-			if _, ok := q["versions"]; ok {
-				s.handleListObjectVersions(w, r, bucket)
-				return
-			}
-			if q.Get("list-type") == "2" {
+			if lt := q.Get("list-type"); lt != "" {
+				if lt != "2" {
+					xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "Invalid List Type")
+					return
+				}
 				s.handleListObjectsV2(w, r, bucket)
 				return
 			}
-			if _, ok := q["uploads"]; ok {
-				s.handleListMultipartUploads(w, r, bucket)
-				return
-			}
+			s.handleListObjects(w, r, bucket)
+			return
 		}
 		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 		return
@@ -304,12 +389,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Multipart
-	if _, ok := q["uploads"]; ok && r.Method == http.MethodPost {
-		s.handleCreateMultipart(w, r, bucket, key)
+	if _, ok := q["uploads"]; ok {
+		if r.Method == http.MethodPost {
+			s.handleCreateMultipart(w, r, bucket, key)
+			return
+		}
+		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 		return
 	}
-	if _, ok := q["attributes"]; ok && r.Method == http.MethodGet {
-		s.handleGetObjectAttributes(w, r, bucket, key)
+	if _, ok := q["attributes"]; ok {
+		if r.Method == http.MethodGet {
+			s.handleGetObjectAttributes(w, r, bucket, key)
+			return
+		}
+		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 		return
 	}
 	if uploadID := q.Get("uploadId"); uploadID != "" {
