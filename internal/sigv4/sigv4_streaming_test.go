@@ -474,6 +474,215 @@ func TestTrailerGuardWithholdsFinalByteUntilValidation(t *testing.T) {
 	})
 }
 
+func TestDecodeTrailerSectionEdgeCases(t *testing.T) {
+	payload := "edge case payload"
+	unsignedBody := func(trailerSection string) string {
+		return fmt.Sprintf("%x\r\n%s\r\n0\r\n%s", len(payload), payload, trailerSection)
+	}
+
+	t.Run("malformed trailer line without colon", func(t *testing.T) {
+		req := newStreamingRequest(sigv4.StreamingUnsignedPayloadTrailer, unsignedBody("not-a-header\r\n\r\n"), len(payload))
+		if _, err := decodeAll(t, req, nil); !errors.Is(err, sigv4.ErrInvalidTrailer) {
+			t.Fatalf("expected invalid trailer error, got: %v", err)
+		}
+	})
+
+	t.Run("trailer line too long", func(t *testing.T) {
+		huge := "x-amz-checksum-crc32:" + strings.Repeat("A", 17*1024) + "\r\n\r\n"
+		req := newStreamingRequest(sigv4.StreamingUnsignedPayloadTrailer, unsignedBody(huge), len(payload))
+		if _, err := decodeAll(t, req, nil); !errors.Is(err, sigv4.ErrInvalidChunkHeader) {
+			t.Fatalf("expected line-too-long error, got: %v", err)
+		}
+	})
+
+	t.Run("too many trailer lines", func(t *testing.T) {
+		var sb strings.Builder
+		for i := 0; i < 40; i++ {
+			fmt.Fprintf(&sb, "x-amz-meta-t%d:v\r\n", i)
+		}
+		sb.WriteString("\r\n")
+		req := newStreamingRequest(sigv4.StreamingUnsignedPayloadTrailer, unsignedBody(sb.String()), len(payload))
+		if _, err := decodeAll(t, req, nil); !errors.Is(err, sigv4.ErrInvalidTrailer) {
+			t.Fatalf("expected too-many-trailers error, got: %v", err)
+		}
+	})
+
+	t.Run("unsigned mode ignores stray trailer signature", func(t *testing.T) {
+		req := newStreamingRequest(sigv4.StreamingUnsignedPayloadTrailer,
+			unsignedBody("x-amz-trailer-signature:"+strings.Repeat("ab", 32)+"\r\n\r\n"), len(payload))
+		got, err := decodeAll(t, req, nil)
+		if err != nil {
+			t.Fatalf("unsigned mode must ignore x-amz-trailer-signature, got: %v", err)
+		}
+		if got != payload {
+			t.Fatalf("decoded body mismatch: got=%q", got)
+		}
+	})
+
+	t.Run("unknown and duplicate trailer names are tolerated", func(t *testing.T) {
+		sum := crc32.ChecksumIEEE([]byte(payload))
+		checksum := base64.StdEncoding.EncodeToString([]byte{byte(sum >> 24), byte(sum >> 16), byte(sum >> 8), byte(sum)})
+		req := newStreamingRequest(sigv4.StreamingUnsignedPayloadTrailer,
+			unsignedBody("x-amz-checksum-bogus:AAAA\r\nx-amz-checksum-crc32:"+checksum+"\r\n\r\n"),
+			len(payload),
+			"x-amz-checksum-crc32, x-amz-checksum-crc32", "", "x-amz-checksum-bogus")
+		got, err := decodeAll(t, req, nil)
+		if err != nil {
+			t.Fatalf("decode with unknown/duplicate trailer names: %v", err)
+		}
+		if got != payload {
+			t.Fatalf("decoded body mismatch: got=%q", got)
+		}
+	})
+
+	t.Run("data chunk missing signature in signed mode", func(t *testing.T) {
+		auth := newTestAuth()
+		body := fmt.Sprintf("%x\r\n%s\r\n0;chunk-signature=%s\r\n\r\n", len(payload), payload, strings.Repeat("0", 64))
+		req := newStreamingRequest(sigv4.StreamingSignedPayload, body, len(payload))
+		if _, err := decodeAll(t, req, sigv4.NewAWSChunkSignatureVerifier(auth, testSecret)); !errors.Is(err, sigv4.ErrMissingChunkSignature) {
+			t.Fatalf("expected missing chunk signature error, got: %v", err)
+		}
+	})
+
+	t.Run("final chunk missing signature in signed mode", func(t *testing.T) {
+		auth := newTestAuth()
+		chunkSig := signTestChunk(auth, strings.ToLower(auth.SignatureHex), []byte(payload))
+		body := fmt.Sprintf("%x;chunk-signature=%s\r\n%s\r\n0\r\n\r\n", len(payload), chunkSig, payload)
+		req := newStreamingRequest(sigv4.StreamingSignedPayload, body, len(payload))
+		if _, err := decodeAll(t, req, sigv4.NewAWSChunkSignatureVerifier(auth, testSecret)); !errors.Is(err, sigv4.ErrMissingChunkSignature) {
+			t.Fatalf("expected missing final chunk signature error, got: %v", err)
+		}
+	})
+
+	t.Run("missing chunk data CRLF", func(t *testing.T) {
+		body := fmt.Sprintf("%x\r\n%sXX0\r\n\r\n", len(payload), payload)
+		req := newStreamingRequest(sigv4.StreamingUnsignedPayloadTrailer, body, len(payload))
+		if _, err := decodeAll(t, req, nil); err == nil {
+			t.Fatalf("expected error for missing chunk CRLF")
+		}
+	})
+
+	t.Run("signed plain mode skips padding lines until blank", func(t *testing.T) {
+		auth := newTestAuth()
+		chunkSig := signTestChunk(auth, strings.ToLower(auth.SignatureHex), []byte(payload))
+		finalSig := signTestChunk(auth, chunkSig, nil)
+		body := fmt.Sprintf("%x;chunk-signature=%s\r\n%s\r\n", len(payload), chunkSig, payload) +
+			"0;chunk-signature=" + finalSig + "\r\n" +
+			"x-amz-ignored:padding\r\n" +
+			"\r\n"
+		req := newStreamingRequest(sigv4.StreamingSignedPayload, body, len(payload))
+		got, err := decodeAll(t, req, sigv4.NewAWSChunkSignatureVerifier(auth, testSecret))
+		if err != nil {
+			t.Fatalf("read decoded body: %v", err)
+		}
+		if got != payload {
+			t.Fatalf("decoded body mismatch: got=%q", got)
+		}
+	})
+
+	t.Run("signed plain mode bounds padding lines", func(t *testing.T) {
+		auth := newTestAuth()
+		chunkSig := signTestChunk(auth, strings.ToLower(auth.SignatureHex), []byte(payload))
+		finalSig := signTestChunk(auth, chunkSig, nil)
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("%x;chunk-signature=%s\r\n%s\r\n", len(payload), chunkSig, payload))
+		sb.WriteString("0;chunk-signature=" + finalSig + "\r\n")
+		for i := 0; i < 40; i++ {
+			sb.WriteString("padding\r\n")
+		}
+		sb.WriteString("\r\n")
+		req := newStreamingRequest(sigv4.StreamingSignedPayload, sb.String(), len(payload))
+		if _, err := decodeAll(t, req, sigv4.NewAWSChunkSignatureVerifier(auth, testSecret)); !errors.Is(err, sigv4.ErrInvalidTrailer) {
+			t.Fatalf("expected too-many-trailers error, got: %v", err)
+		}
+	})
+
+	t.Run("signed trailer with bare-LF final blank line", func(t *testing.T) {
+		auth := newTestAuth()
+		sum := crc32.ChecksumIEEE([]byte(payload))
+		checksum := base64.StdEncoding.EncodeToString([]byte{byte(sum >> 24), byte(sum >> 16), byte(sum >> 8), byte(sum)})
+		chunkSig := signTestChunk(auth, strings.ToLower(auth.SignatureHex), []byte(payload))
+		finalSig := signTestChunk(auth, chunkSig, nil)
+		trailerBlock := "x-amz-checksum-crc32:" + checksum + "\n"
+		trailerSig := signTestTrailer(auth, finalSig, trailerBlock)
+		body := fmt.Sprintf("%x;chunk-signature=%s\r\n%s\r\n", len(payload), chunkSig, payload) +
+			"0;chunk-signature=" + finalSig + "\r\n" +
+			trailerBlock +
+			"x-amz-trailer-signature:" + trailerSig + "\n" +
+			"\n"
+		req := newStreamingRequest(sigv4.StreamingSignedPayloadTrailer, body, len(payload), "x-amz-checksum-crc32")
+		got, err := decodeAll(t, req, sigv4.NewAWSChunkSignatureVerifier(auth, testSecret))
+		if err != nil {
+			t.Fatalf("read decoded body: %v", err)
+		}
+		if got != payload {
+			t.Fatalf("decoded body mismatch: got=%q", got)
+		}
+	})
+
+	t.Run("trailer signature with bad length and encoding", func(t *testing.T) {
+		auth := newTestAuth()
+		for _, sig := range []string{"deadbeef", strings.Repeat("z", 64)} {
+			chunkSig := signTestChunk(auth, strings.ToLower(auth.SignatureHex), []byte(payload))
+			finalSig := signTestChunk(auth, chunkSig, nil)
+			body := fmt.Sprintf("%x;chunk-signature=%s\r\n%s\r\n", len(payload), chunkSig, payload) +
+				"0;chunk-signature=" + finalSig + "\r\n" +
+				"x-amz-trailer-signature:" + sig + "\r\n\r\n"
+			req := newStreamingRequest(sigv4.StreamingSignedPayloadTrailer, body, len(payload))
+			if _, err := decodeAll(t, req, sigv4.NewAWSChunkSignatureVerifier(auth, testSecret)); !errors.Is(err, sigv4.ErrInvalidChunkSignature) {
+				t.Fatalf("sig %q: expected invalid trailer signature error, got: %v", sig, err)
+			}
+		}
+	})
+
+	t.Run("invalid decoded content length", func(t *testing.T) {
+		req := newStreamingRequest(sigv4.StreamingUnsignedPayloadTrailer, "0\r\n\r\n", 0)
+		req.Header.Set("x-amz-decoded-content-length", "-5")
+		if _, _, err := sigv4.DecodeBodyForS3Write(req, nil); !errors.Is(err, sigv4.ErrInvalidDecodedContentLength) {
+			t.Fatalf("expected invalid decoded length error, got: %v", err)
+		}
+	})
+
+	t.Run("signed trailer mode requires verifier", func(t *testing.T) {
+		req := newStreamingRequest(sigv4.StreamingSignedPayloadTrailer, "0\r\n\r\n", 0)
+		if _, _, err := sigv4.DecodeBodyForS3Write(req, nil); !errors.Is(err, sigv4.ErrMissingSigV4AuthContext) {
+			t.Fatalf("expected missing auth context error, got: %v", err)
+		}
+	})
+}
+
+// TestTrailerGuardByteAtATimeRead drives the guard through single-byte reads,
+// exercising its full-buffer carry rotation.
+func TestTrailerGuardByteAtATimeRead(t *testing.T) {
+	payload := "byte at a time"
+	sum := crc32.ChecksumIEEE([]byte(payload))
+	checksum := base64.StdEncoding.EncodeToString([]byte{byte(sum >> 24), byte(sum >> 16), byte(sum >> 8), byte(sum)})
+	body := fmt.Sprintf("%x\r\n%s\r\n0\r\nx-amz-checksum-crc32:%s\r\n\r\n", len(payload), payload, checksum)
+
+	req := newStreamingRequest(sigv4.StreamingUnsignedPayloadTrailer, body, len(payload), "x-amz-checksum-crc32")
+	rc, _, err := sigv4.DecodeBodyForS3Write(req, nil)
+	if err != nil {
+		t.Fatalf("decode setup: %v", err)
+	}
+	defer rc.Close()
+
+	var got []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := rc.Read(buf)
+		got = append(got, buf[:n]...)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("single-byte read: %v", err)
+		}
+	}
+	if string(got) != payload {
+		t.Fatalf("decoded body mismatch: got=%q want=%q", string(got), payload)
+	}
+}
+
 // TestDecodeZeroLengthPayloadValidatesUpFront covers the corner the trailer
 // guard cannot: with no payload byte to withhold, validation must happen
 // before DecodeBodyForS3Write returns, so the handler fails before starting

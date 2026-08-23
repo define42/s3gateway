@@ -233,6 +233,113 @@ func TestListObjectsV1RoutingAndResponse(t *testing.T) {
 	})
 }
 
+func TestListObjectsV1ParameterAndErrorBranches(t *testing.T) {
+	t.Run("all optional params forwarded and all fields rendered", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("encoding-type") != "url" {
+				t.Errorf("upstream query mismatch: %s", r.URL.RawQuery)
+			}
+			// The SDK carries optional-object-attributes as a header upstream.
+			if r.Header.Get("x-amz-optional-object-attributes") != "RestoreStatus" {
+				t.Errorf("optional-object-attributes not forwarded: %q", r.Header.Get("x-amz-optional-object-attributes"))
+			}
+			if r.Header.Get("x-amz-expected-bucket-owner") != "owner-123" || r.Header.Get("x-amz-request-payer") != "requester" {
+				t.Errorf("upstream headers missing: owner=%q payer=%q", r.Header.Get("x-amz-expected-bucket-owner"), r.Header.Get("x-amz-request-payer"))
+			}
+			w.Header().Set("x-amz-request-charged", "requester")
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>team2-bucket</Name>
+  <Prefix>p/</Prefix>
+  <EncodingType>url</EncodingType>
+  <MaxKeys>1</MaxKeys>
+  <IsTruncated>false</IsTruncated>
+  <Contents>
+    <Key>p/a.txt</Key>
+    <LastModified>2026-02-07T01:02:03.000Z</LastModified>
+    <ETag>&quot;etag-a&quot;</ETag>
+    <ChecksumAlgorithm>CRC32</ChecksumAlgorithm>
+    <ChecksumType>FULL_OBJECT</ChecksumType>
+    <Size>7</Size>
+    <StorageClass>STANDARD</StorageClass>
+    <Owner><ID>owner-id</ID><DisplayName>owner-name</DisplayName></Owner>
+    <RestoreStatus><IsRestoreInProgress>false</IsRestoreInProgress><RestoreExpiryDate>2026-03-01T00:00:00.000Z</RestoreExpiryDate></RestoreStatus>
+  </Contents>
+</ListBucketResult>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket?prefix=p%2F&encoding-type=url&optional-object-attributes=RestoreStatus", nil)
+		req.Header.Set("x-amz-expected-bucket-owner", "owner-123")
+		req.Header.Set("x-amz-request-payer", "requester")
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if rr.Header().Get("x-amz-request-charged") != "requester" {
+			t.Fatalf("missing x-amz-request-charged header")
+		}
+		body := rr.Body.String()
+		for _, want := range []string{
+			"<EncodingType>url</EncodingType>", "<ChecksumAlgorithm>CRC32</ChecksumAlgorithm>",
+			"<ChecksumType>FULL_OBJECT</ChecksumType>", "<ID>owner-id</ID>", "<IsRestoreInProgress>false</IsRestoreInProgress>",
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("response missing %q: %s", want, body)
+			}
+		}
+	})
+
+	t.Run("invalid parameters", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Errorf("upstream must not be called for invalid params: %s", r.URL.String())
+		})
+		defer cleanup()
+
+		for _, target := range []string{
+			"/team2-bucket?encoding-type=base64",
+			"/team2-bucket?optional-object-attributes=Bogus",
+		} {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			req = reqWithRules(req, fullTeam2Rule())
+			rr := httptest.NewRecorder()
+			gw.ServeHTTP(rr, req)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("%s: status=%d want=400 body=%s", target, rr.Code, rr.Body.String())
+			}
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket", nil)
+		req.Header.Set("x-amz-request-payer", "bogus")
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.ServeHTTP(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("invalid request-payer: status=%d want=400 body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("upstream error passthrough", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchBucket</Code><Message>gone</Message></Error>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket", nil)
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.ServeHTTP(rr, req)
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("status=%d want=404 body=%s", rr.Code, rr.Body.String())
+		}
+	})
+}
+
 func TestGetBucketLocationRoutingAndResponse(t *testing.T) {
 	t.Run("region returned", func(t *testing.T) {
 		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
@@ -308,6 +415,161 @@ func TestGetBucketLocationRoutingAndResponse(t *testing.T) {
 			t.Fatalf("status=%d want=%d body=%s", rr.Code, http.StatusForbidden, rr.Body.String())
 		}
 	})
+
+	t.Run("expected owner forwarded and upstream error passthrough", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("x-amz-expected-bucket-owner") != "owner-123" {
+				t.Errorf("expected-bucket-owner not forwarded: %q", r.Header.Get("x-amz-expected-bucket-owner"))
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchBucket</Code><Message>gone</Message></Error>`))
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/team2-bucket?location", nil)
+		req.Header.Set("x-amz-expected-bucket-owner", "owner-123")
+		req = reqWithRules(req, fullTeam2Rule())
+		rr := httptest.NewRecorder()
+		gw.ServeHTTP(rr, req)
+		if rr.Code != http.StatusNotFound {
+			t.Fatalf("status=%d want=404 body=%s", rr.Code, rr.Body.String())
+		}
+	})
+}
+
+// TestUploadPartTrailerStreaming covers the streaming decode path of
+// UploadPart with the unsigned-trailer mode, including the BadDigest mapping.
+func TestUploadPartTrailerStreaming(t *testing.T) {
+	payload := strings.Repeat("upload part trailer ", 512)
+	sum := crc32.ChecksumIEEE([]byte(payload))
+	goodChecksum := base64.StdEncoding.EncodeToString([]byte{byte(sum >> 24), byte(sum >> 16), byte(sum >> 8), byte(sum)})
+
+	newPartReq := func(trailerValue string) *http.Request {
+		body := fmt.Sprintf("%x\r\n%s\r\n0\r\nx-amz-checksum-crc32:%s\r\n\r\n", len(payload), payload, trailerValue)
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/mp.bin?partNumber=1&uploadId=upload-1", strings.NewReader(body))
+		req.Header.Set("x-amz-content-sha256", sigv4.StreamingUnsignedPayloadTrailer)
+		req.Header.Set("x-amz-decoded-content-length", fmt.Sprintf("%d", len(payload)))
+		req.Header.Set("x-amz-trailer", "x-amz-checksum-crc32")
+		return reqWithRules(req, fullTeam2Rule())
+	}
+
+	t.Run("valid part upload decodes payload", func(t *testing.T) {
+		var upstreamBody []byte
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("partNumber") != "1" || r.URL.Query().Get("uploadId") != "upload-1" {
+				t.Errorf("unexpected upstream query: %s", r.URL.RawQuery)
+			}
+			b, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Errorf("read upstream body: %v", err)
+			}
+			upstreamBody = b
+			w.Header().Set("ETag", `"etag-part"`)
+			w.WriteHeader(http.StatusOK)
+		})
+		defer cleanup()
+
+		rr := httptest.NewRecorder()
+		gw.ServeHTTP(rr, newPartReq(goodChecksum))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+		}
+		if string(upstreamBody) != payload {
+			t.Fatalf("upstream body mismatch: got len=%d want len=%d", len(upstreamBody), len(payload))
+		}
+	})
+
+	t.Run("corrupted trailing checksum is BadDigest", func(t *testing.T) {
+		received := make(chan int64, 1)
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			n, _ := io.Copy(io.Discard, r.Body)
+			received <- n
+			w.WriteHeader(http.StatusOK)
+		})
+		defer cleanup()
+
+		rr := httptest.NewRecorder()
+		gw.ServeHTTP(rr, newPartReq(base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4})))
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d want=400 body=%s", rr.Code, rr.Body.String())
+		}
+		if !strings.Contains(rr.Body.String(), "BadDigest") {
+			t.Fatalf("expected BadDigest error code, got: %s", rr.Body.String())
+		}
+		select {
+		case n := <-received:
+			if n >= int64(len(payload)) {
+				t.Fatalf("upstream received complete part body (%d of %d bytes) despite checksum failure", n, len(payload))
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("timed out waiting for upstream to finish reading the aborted body")
+		}
+	})
+}
+
+// TestPutObjectStreamingSignatureErrorMapsToSignatureDoesNotMatch covers the
+// handler-level SignatureDoesNotMatch classification for tampered chunk
+// signatures.
+func TestPutObjectStreamingSignatureErrorMapsToSignatureDoesNotMatch(t *testing.T) {
+	auth := &sigv4.Auth{
+		AccessKey:     "test-access-key",
+		Date:          "20260207",
+		Region:        "us-east-1",
+		Service:       "s3",
+		SignedHeaders: []string{"host", "x-amz-date"},
+		SignatureHex:  strings.Repeat("0", 64),
+		AmzDate:       "20260207T010203Z",
+	}
+	payload := "tampered chunk payload"
+	body := fmt.Sprintf("%x;chunk-signature=%s\r\n%s\r\n0;chunk-signature=%s\r\n\r\n",
+		len(payload), strings.Repeat("ab", 32), payload, strings.Repeat("cd", 32))
+
+	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusOK)
+	})
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPut, "/team2-bucket/tampered.bin", strings.NewReader(body))
+	req.Header.Set("x-amz-content-sha256", sigv4.StreamingSignedPayload)
+	req.Header.Set("x-amz-decoded-content-length", fmt.Sprintf("%d", len(payload)))
+	req = reqWithRulesAndSigV4(req, fullTeam2Rule(), auth)
+
+	rr := httptest.NewRecorder()
+	gw.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want=400 body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "SignatureDoesNotMatch") {
+		t.Fatalf("expected SignatureDoesNotMatch error code, got: %s", rr.Body.String())
+	}
+}
+
+// TestPutObjectZeroLengthTrailerChecksumMismatch covers the decode-time
+// BadDigest mapping for empty payloads, which are validated before any
+// upstream call starts.
+func TestPutObjectZeroLengthTrailerChecksumMismatch(t *testing.T) {
+	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("upstream must not be called when up-front validation fails")
+	})
+	defer cleanup()
+
+	body := "0\r\nx-amz-checksum-crc32:BBBBBB==\r\n\r\n"
+	req := httptest.NewRequest(http.MethodPut, "/team2-bucket/empty.bin", strings.NewReader(body))
+	req.Header.Set("x-amz-content-sha256", sigv4.StreamingUnsignedPayloadTrailer)
+	req.Header.Set("x-amz-decoded-content-length", "0")
+	req.Header.Set("x-amz-trailer", "x-amz-checksum-crc32")
+	req = reqWithRules(req, fullTeam2Rule())
+
+	rr := httptest.NewRecorder()
+	gw.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d want=400 body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "BadDigest") {
+		t.Fatalf("expected BadDigest error code, got: %s", rr.Body.String())
+	}
 }
 
 // TestPutObjectUnsignedTrailerStreaming drives an STREAMING-UNSIGNED-PAYLOAD-TRAILER
