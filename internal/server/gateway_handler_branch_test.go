@@ -1275,7 +1275,7 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 		}
 
 		handler := gw.WithAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if authz.RulesFromCtx(r) == nil {
+			if authz.RulesFromRequest(r) == nil {
 				t.Fatalf("expected rules in request context")
 			}
 			w.WriteHeader(http.StatusNoContent)

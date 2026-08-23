@@ -388,8 +388,8 @@ const (
 	CtxSigV4SecretKey CtxKey = "sigv4-secret"
 )
 
-// SigV4AuthFromCtx retrieves the Auth from the request context.
-func SigV4AuthFromCtx(r *http.Request) *Auth {
+// AuthFromRequest retrieves the Auth from the request context.
+func AuthFromRequest(r *http.Request) *Auth {
 	v := r.Context().Value(CtxSigV4AuthKey)
 	if v == nil {
 		return nil
@@ -398,8 +398,8 @@ func SigV4AuthFromCtx(r *http.Request) *Auth {
 	return auth
 }
 
-// SigV4SecretFromCtx retrieves the SigV4 secret from the request context.
-func SigV4SecretFromCtx(r *http.Request) string {
+// SecretFromRequest retrieves the SigV4 secret from the request context.
+func SecretFromRequest(r *http.Request) string {
 	v := r.Context().Value(CtxSigV4SecretKey)
 	if v == nil {
 		return ""
@@ -428,11 +428,11 @@ func ChunkSignatureVerifierFromRequest(r *http.Request) (*AWSChunkSignatureVerif
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedStreamingMode, mode)
 	}
 
-	auth := SigV4AuthFromCtx(r)
+	auth := AuthFromRequest(r)
 	if auth == nil {
 		return nil, ErrMissingSigV4AuthContext
 	}
-	secret := SigV4SecretFromCtx(r)
+	secret := SecretFromRequest(r)
 	if strings.TrimSpace(secret) == "" {
 		return nil, ErrMissingSigV4SecretContext
 	}

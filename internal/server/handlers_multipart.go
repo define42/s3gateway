@@ -18,7 +18,7 @@ import (
 )
 
 func (s *Server) handleListMultipartUploads(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -120,7 +120,7 @@ type completeMultipartUpload struct {
 }
 
 func (s *Server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -128,7 +128,7 @@ func (s *Server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 
 	ct := r.Header.Get("Content-Type")
 	meta := extractAmzMeta(r.Header)
-	meta = ensureUploadedByMetadata(meta, UploaderFromCtx(r))
+	meta = ensureUploadedByMetadata(meta, UploaderFromRequest(r))
 	if missing := missingRequiredUploadMetadata(meta, s.cfg.RequiredUploadMetadataKeys); len(missing) > 0 {
 		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
 		return
@@ -187,7 +187,7 @@ func (s *Server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 }
 
 func (s *Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string, partNumber int32) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -270,7 +270,7 @@ func (s *Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 }
 
 func (s *Server) handleListParts(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -333,7 +333,7 @@ func (s *Server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 
 // CompleteMultipartUpload requires PartNumber + ETag for each part.
 func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -401,7 +401,7 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) handleAbortMultipart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return

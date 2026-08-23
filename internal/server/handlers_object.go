@@ -36,7 +36,7 @@ type deleteObjectReqItemXML struct {
 }
 
 func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -91,7 +91,7 @@ func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) handleGetObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -128,7 +128,7 @@ func (s *Server) handleGetObjectTagging(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) handleDeleteObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -157,7 +157,7 @@ func (s *Server) handleDeleteObjectTagging(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanDeleteObject(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -271,7 +271,7 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 }
 
 func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -415,7 +415,7 @@ func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -551,7 +551,7 @@ func (s *Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 }
 
 func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -759,7 +759,7 @@ func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 }
 
 func (s *Server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -1011,7 +1011,7 @@ func parseObjectAttributesHeader(h http.Header) ([]types.ObjectAttributes, error
 }
 
 func (s *Server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -1144,7 +1144,7 @@ func (s *Server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -1173,7 +1173,7 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 
 	ct := r.Header.Get("Content-Type")
 	meta := extractAmzMeta(r.Header)
-	meta = ensureUploadedByMetadata(meta, UploaderFromCtx(r))
+	meta = ensureUploadedByMetadata(meta, UploaderFromRequest(r))
 	if missing := missingRequiredUploadMetadata(meta, s.cfg.RequiredUploadMetadataKeys); len(missing) > 0 {
 		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
 		return
@@ -1321,7 +1321,7 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 }
 
 func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -1410,7 +1410,7 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 	// destination inherits the source object's metadata and the request metadata
 	// is ignored by S3, so there is nothing to enforce here.
 	if metadataDirective == types.MetadataDirectiveReplace {
-		meta = ensureUploadedByMetadata(meta, UploaderFromCtx(r))
+		meta = ensureUploadedByMetadata(meta, UploaderFromRequest(r))
 		if missing := missingRequiredUploadMetadata(meta, s.cfg.RequiredUploadMetadataKeys); len(missing) > 0 {
 			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
 			return
@@ -1572,7 +1572,7 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 }
 
 func (s *Server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string, partNumber int32) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
@@ -1715,7 +1715,7 @@ func (s *Server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bu
 }
 
 func (s *Server) handleDeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
-	rules := authz.RulesFromCtx(r)
+	rules := authz.RulesFromRequest(r)
 	if !authz.CanDeleteObject(rules, bucket) {
 		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return

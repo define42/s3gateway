@@ -148,7 +148,7 @@ func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Han
 	})
 }
 
-func UploaderFromCtx(r *http.Request) string {
+func UploaderFromRequest(r *http.Request) string {
 	v := r.Context().Value(ctxUploaderKey)
 	if v == nil {
 		return ""

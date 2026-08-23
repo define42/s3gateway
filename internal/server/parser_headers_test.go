@@ -341,7 +341,7 @@ func TestDecodeVersioningConfigXMLMFADeleteValues(t *testing.T) {
 func TestSigV4AuthFromCtx(t *testing.T) {
 	t.Run("missing context value", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil)
-		if got := sigv4.SigV4AuthFromCtx(req); got != nil {
+		if got := sigv4.AuthFromRequest(req); got != nil {
 			t.Fatalf("sigV4AuthFromCtx() = %+v, want nil", got)
 		}
 	})
@@ -350,7 +350,7 @@ func TestSigV4AuthFromCtx(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
 			context.WithValue(context.Background(), sigv4.CtxSigV4AuthKey, "not-auth"),
 		)
-		if got := sigv4.SigV4AuthFromCtx(req); got != nil {
+		if got := sigv4.AuthFromRequest(req); got != nil {
 			t.Fatalf("sigV4AuthFromCtx() = %+v, want nil for wrong context type", got)
 		}
 	})
@@ -367,7 +367,7 @@ func TestSigV4AuthFromCtx(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
 			context.WithValue(context.Background(), sigv4.CtxSigV4AuthKey, want),
 		)
-		got := sigv4.SigV4AuthFromCtx(req)
+		got := sigv4.AuthFromRequest(req)
 		if got != want {
 			t.Fatalf("sigV4AuthFromCtx() pointer mismatch: got=%p want=%p", got, want)
 		}
@@ -377,7 +377,7 @@ func TestSigV4AuthFromCtx(t *testing.T) {
 func TestSigV4SecretFromCtx(t *testing.T) {
 	t.Run("missing context value", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil)
-		if got := sigv4.SigV4SecretFromCtx(req); got != "" {
+		if got := sigv4.SecretFromRequest(req); got != "" {
 			t.Fatalf("sigV4SecretFromCtx() = %q, want empty string", got)
 		}
 	})
@@ -386,7 +386,7 @@ func TestSigV4SecretFromCtx(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
 			context.WithValue(context.Background(), sigv4.CtxSigV4SecretKey, 123),
 		)
-		if got := sigv4.SigV4SecretFromCtx(req); got != "" {
+		if got := sigv4.SecretFromRequest(req); got != "" {
 			t.Fatalf("sigV4SecretFromCtx() = %q, want empty string for wrong context type", got)
 		}
 	})
@@ -396,7 +396,7 @@ func TestSigV4SecretFromCtx(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
 			context.WithValue(context.Background(), sigv4.CtxSigV4SecretKey, want),
 		)
-		if got := sigv4.SigV4SecretFromCtx(req); got != want {
+		if got := sigv4.SecretFromRequest(req); got != want {
 			t.Fatalf("sigV4SecretFromCtx() = %q, want %q", got, want)
 		}
 	})
