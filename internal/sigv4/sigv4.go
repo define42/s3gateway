@@ -568,12 +568,77 @@ func IsTrailerChecksumMismatchError(err error) bool {
 
 type awsChunkedReadCloser struct {
 	reader *awsChunkedReader
+	guard  trailerGuardReader
 	c      io.Closer
 }
 
-func (r *awsChunkedReadCloser) Read(p []byte) (int, error) { return r.reader.Read(p) }
+func (r *awsChunkedReadCloser) Read(p []byte) (int, error) { return r.guard.Read(p) }
 
 func (r *awsChunkedReadCloser) Close() error { return r.c.Close() }
+
+// trailerGuardReader delays the final byte of the decoded stream until the
+// underlying chunked reader reports a clean EOF, i.e. until every
+// end-of-stream validation (final chunk signature, trailer signature,
+// trailing checksums) has passed. Without it the upstream would hold a
+// complete body — and could commit the object — before a bad trailer is
+// discovered; with it, a failed validation leaves the upstream one byte short
+// of Content-Length, so the upstream write is aborted instead of committed.
+type trailerGuardReader struct {
+	r         io.Reader
+	carry     byte
+	haveCarry bool
+	err       error
+}
+
+func (g *trailerGuardReader) Read(p []byte) (int, error) {
+	if g.err != nil {
+		return 0, g.err
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	for {
+		n, err := g.r.Read(p)
+		if n > 0 {
+			if g.haveCarry {
+				if n == len(p) {
+					// No room to grow: emit the carry in front and retain the
+					// new final byte instead.
+					newCarry := p[n-1]
+					copy(p[1:], p[:n-1])
+					p[0] = g.carry
+					g.carry = newCarry
+					return n, nil
+				}
+				copy(p[1:n+1], p[:n])
+				p[0] = g.carry
+				g.haveCarry = false
+				n++
+			}
+			n--
+			g.carry = p[n]
+			g.haveCarry = true
+			if n > 0 {
+				return n, nil
+			}
+			if err == nil {
+				continue
+			}
+		}
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, io.EOF) && g.haveCarry {
+			// End-of-stream validation passed; release the held byte.
+			p[0] = g.carry
+			g.haveCarry = false
+			g.err = io.EOF
+			return 1, nil
+		}
+		g.err = err
+		return 0, err
+	}
+}
 
 // StreamValidationError returns the aws-chunked validation error the decoded
 // body hit while being streamed upstream, if any. The upstream SDK may mask
@@ -938,10 +1003,22 @@ func DecodeBodyForS3Write(r *http.Request, verifier *AWSChunkSignatureVerifier) 
 		if err != nil {
 			return nil, 0, err
 		}
-		return &awsChunkedReadCloser{
-			reader: newAWSChunkedReader(r.Body, verifier, signedTrailer, checksums),
+		reader := newAWSChunkedReader(r.Body, verifier, signedTrailer, checksums)
+		rc := &awsChunkedReadCloser{
+			reader: reader,
+			guard:  trailerGuardReader{r: reader},
 			c:      r.Body,
-		}, decodedLen, nil
+		}
+		if decodedLen == 0 {
+			// A zero-length payload has no byte the trailer guard could hold
+			// back, and the upstream request body is complete the moment it
+			// starts. Validate the whole (payload-free) stream up front so an
+			// invalid trailer fails before any upstream write begins.
+			if _, err := io.Copy(io.Discard, rc); err != nil {
+				return nil, 0, err
+			}
+		}
+		return rc, decodedLen, nil
 	}
 	if r.ContentLength < 0 {
 		return nil, 0, ErrContentLengthRequired

@@ -1306,6 +1306,9 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 			xmlhelper.WriteXMLError(w, http.StatusLengthRequired, "MissingContentLength", "Content-Length required")
 			return
 		}
+		if writeChunkedBodyError(w, err, nil) {
+			return
+		}
 		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Invalid request body")
 		return
 	}

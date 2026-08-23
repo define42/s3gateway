@@ -398,3 +398,98 @@ func TestDecodeUnsignedPayloadTrailerTruncatedChunk(t *testing.T) {
 		t.Fatalf("expected unexpected EOF for truncated chunk, got: %v", err)
 	}
 }
+
+// TestTrailerGuardWithholdsFinalByteUntilValidation proves the property the
+// upstream write depends on: the decoded stream never delivers its full
+// Content-Length worth of bytes unless end-of-stream validation passed, so a
+// bad trailer leaves the upstream request body incomplete instead of letting
+// the upstream commit the object before the failure is discovered.
+func TestTrailerGuardWithholdsFinalByteUntilValidation(t *testing.T) {
+	payload := strings.Repeat("guarded payload ", 512)
+
+	countDelivered := func(body io.Reader) (int64, error) {
+		// Mimic net/http's transferWriter: copy exactly Content-Length bytes.
+		return io.CopyN(io.Discard, body, int64(len(payload)))
+	}
+
+	t.Run("unsigned trailer checksum mismatch stays one byte short", func(t *testing.T) {
+		bad := fmt.Sprintf("%x\r\n%s\r\n0\r\nx-amz-checksum-crc32:%s\r\n\r\n", len(payload), payload, "AAAAAA==")
+		req := newStreamingRequest(sigv4.StreamingUnsignedPayloadTrailer, bad, len(payload), "x-amz-checksum-crc32")
+		body, _, err := sigv4.DecodeBodyForS3Write(req, nil)
+		if err != nil {
+			t.Fatalf("decode setup: %v", err)
+		}
+		defer body.Close()
+		n, err := countDelivered(body)
+		if !sigv4.IsTrailerChecksumMismatchError(err) {
+			t.Fatalf("expected checksum mismatch error, got: %v", err)
+		}
+		if n != int64(len(payload))-1 {
+			t.Fatalf("delivered %d bytes before failure, want %d (one short of full body)", n, len(payload)-1)
+		}
+	})
+
+	t.Run("valid unsigned trailer delivers the full body", func(t *testing.T) {
+		sum := crc32.ChecksumIEEE([]byte(payload))
+		checksum := base64.StdEncoding.EncodeToString([]byte{byte(sum >> 24), byte(sum >> 16), byte(sum >> 8), byte(sum)})
+		good := fmt.Sprintf("%x\r\n%s\r\n0\r\nx-amz-checksum-crc32:%s\r\n\r\n", len(payload), payload, checksum)
+		req := newStreamingRequest(sigv4.StreamingUnsignedPayloadTrailer, good, len(payload), "x-amz-checksum-crc32")
+		body, _, err := sigv4.DecodeBodyForS3Write(req, nil)
+		if err != nil {
+			t.Fatalf("decode setup: %v", err)
+		}
+		defer body.Close()
+		n, err := countDelivered(body)
+		if err != nil {
+			t.Fatalf("read full body: %v", err)
+		}
+		if n != int64(len(payload)) {
+			t.Fatalf("delivered %d bytes, want %d", n, len(payload))
+		}
+		if extra, err := io.Copy(io.Discard, body); err != nil || extra != 0 {
+			t.Fatalf("expected clean EOF after full body, got extra=%d err=%v", extra, err)
+		}
+	})
+
+	t.Run("signed trailer signature mismatch stays one byte short", func(t *testing.T) {
+		auth := newTestAuth()
+		chunkSig := signTestChunk(auth, strings.ToLower(auth.SignatureHex), []byte(payload))
+		finalSig := signTestChunk(auth, chunkSig, nil)
+		bad := fmt.Sprintf("%x;chunk-signature=%s\r\n%s\r\n", len(payload), chunkSig, payload) +
+			"0;chunk-signature=" + finalSig + "\r\n" +
+			"x-amz-trailer-signature:" + strings.Repeat("ab", 32) + "\r\n\r\n"
+		req := newStreamingRequest(sigv4.StreamingSignedPayloadTrailer, bad, len(payload))
+		body, _, err := sigv4.DecodeBodyForS3Write(req, sigv4.NewAWSChunkSignatureVerifier(auth, testSecret))
+		if err != nil {
+			t.Fatalf("decode setup: %v", err)
+		}
+		defer body.Close()
+		n, err := countDelivered(body)
+		if !errors.Is(err, sigv4.ErrInvalidChunkSignature) {
+			t.Fatalf("expected trailer signature error, got: %v", err)
+		}
+		if n != int64(len(payload))-1 {
+			t.Fatalf("delivered %d bytes before failure, want %d (one short of full body)", n, len(payload)-1)
+		}
+	})
+}
+
+// TestDecodeZeroLengthPayloadValidatesUpFront covers the corner the trailer
+// guard cannot: with no payload byte to withhold, validation must happen
+// before DecodeBodyForS3Write returns, so the handler fails before starting
+// any upstream write.
+func TestDecodeZeroLengthPayloadValidatesUpFront(t *testing.T) {
+	body := "0\r\nx-amz-checksum-crc32:AAAAAA==\r\n\r\n" // crc32("") is AAAAAA== only for 0x00000000
+	req := newStreamingRequest(sigv4.StreamingUnsignedPayloadTrailer, body, 0, "x-amz-checksum-crc32")
+	if rc, _, err := sigv4.DecodeBodyForS3Write(req, nil); err != nil {
+		t.Fatalf("valid empty payload should decode, got: %v", err)
+	} else {
+		_ = rc.Close()
+	}
+
+	badBody := "0\r\nx-amz-checksum-crc32:BBBBBB==\r\n\r\n"
+	badReq := newStreamingRequest(sigv4.StreamingUnsignedPayloadTrailer, badBody, 0, "x-amz-checksum-crc32")
+	if _, _, err := sigv4.DecodeBodyForS3Write(badReq, nil); !sigv4.IsTrailerChecksumMismatchError(err) {
+		t.Fatalf("expected up-front checksum mismatch for empty payload, got: %v", err)
+	}
+}

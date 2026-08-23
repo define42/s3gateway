@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -356,10 +357,13 @@ func TestPutObjectUnsignedTrailerStreaming(t *testing.T) {
 		}
 	})
 
-	t.Run("corrupted trailing checksum is BadDigest", func(t *testing.T) {
+	t.Run("corrupted trailing checksum is BadDigest and upstream body stays incomplete", func(t *testing.T) {
+		// The gateway aborts the upstream request without awaiting its
+		// response, so the stub reports its byte count through a channel.
+		received := make(chan int64, 1)
 		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-			// The body read fails mid-stream; the SDK surfaces the reader error.
-			_, _ = io.Copy(io.Discard, r.Body)
+			n, _ := io.Copy(io.Discard, r.Body)
+			received <- n
 			w.WriteHeader(http.StatusOK)
 		})
 		defer cleanup()
@@ -372,6 +376,16 @@ func TestPutObjectUnsignedTrailerStreaming(t *testing.T) {
 		}
 		if !strings.Contains(rr.Body.String(), "BadDigest") {
 			t.Fatalf("expected BadDigest error code, got: %s", rr.Body.String())
+		}
+		// The trailer guard must keep the upstream request body incomplete so
+		// the upstream can never commit the rejected object.
+		select {
+		case upstreamReceived := <-received:
+			if upstreamReceived >= int64(len(payload)) {
+				t.Fatalf("upstream received complete body (%d of %d bytes) despite checksum failure", upstreamReceived, len(payload))
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("timed out waiting for upstream to finish reading the aborted body")
 		}
 	})
 }
