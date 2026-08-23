@@ -1,4 +1,4 @@
-package handler_bucket
+package bucketxml
 
 import (
 	"encoding/xml"

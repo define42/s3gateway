@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	authz "github.com/define42/s3gateway/internal/authz"
-	handler_bucket "github.com/define42/s3gateway/internal/handler_bucket"
+	bucketxml "github.com/define42/s3gateway/internal/bucketxml"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 	"github.com/define42/s3gateway/internal/xmlhelper"
 )
@@ -307,41 +307,41 @@ func TestDecodeVersioningConfigXMLMFADeleteValues(t *testing.T) {
 	for _, v := range allowed {
 		v := v
 		t.Run("exact_"+string(v), func(t *testing.T) {
-			cfg, err := handler_bucket.DecodeVersioningConfigXML(strings.NewReader(
+			cfg, err := bucketxml.DecodeVersioningConfigXML(strings.NewReader(
 				`<VersioningConfiguration><MfaDelete>` + string(v) + `</MfaDelete></VersioningConfiguration>`,
 			))
 			if err != nil {
-				t.Fatalf("handler_bucket.DecodeVersioningConfigXML() error = %v", err)
+				t.Fatalf("bucketxml.DecodeVersioningConfigXML() error = %v", err)
 			}
 			if cfg.MFADelete != v {
-				t.Fatalf("handler_bucket.DecodeVersioningConfigXML() MFADelete = %q, want %q", cfg.MFADelete, v)
+				t.Fatalf("bucketxml.DecodeVersioningConfigXML() MFADelete = %q, want %q", cfg.MFADelete, v)
 			}
 		})
 
 		t.Run("trimmed_case_insensitive_"+string(v), func(t *testing.T) {
-			cfg, err := handler_bucket.DecodeVersioningConfigXML(strings.NewReader(
+			cfg, err := bucketxml.DecodeVersioningConfigXML(strings.NewReader(
 				`<VersioningConfiguration><MfaDelete>  ` + strings.ToLower(string(v)) + ` </MfaDelete></VersioningConfiguration>`,
 			))
 			if err != nil {
-				t.Fatalf("handler_bucket.DecodeVersioningConfigXML() error = %v", err)
+				t.Fatalf("bucketxml.DecodeVersioningConfigXML() error = %v", err)
 			}
 			if cfg.MFADelete != v {
-				t.Fatalf("handler_bucket.DecodeVersioningConfigXML() MFADelete = %q, want %q", cfg.MFADelete, v)
+				t.Fatalf("bucketxml.DecodeVersioningConfigXML() MFADelete = %q, want %q", cfg.MFADelete, v)
 			}
 		})
 	}
 
-	if _, err := handler_bucket.DecodeVersioningConfigXML(strings.NewReader(
+		if _, err := bucketxml.DecodeVersioningConfigXML(strings.NewReader(
 		`<VersioningConfiguration><MfaDelete>invalid</MfaDelete></VersioningConfiguration>`,
 	)); err == nil {
-		t.Fatalf("handler_bucket.DecodeVersioningConfigXML() expected error for invalid MfaDelete")
+		t.Fatalf("bucketxml.DecodeVersioningConfigXML() expected error for invalid MfaDelete")
 	}
 }
 
 func TestSigV4AuthFromCtx(t *testing.T) {
 	t.Run("missing context value", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil)
-		if got := sigv4.SigV4AuthFromCtx(req); got != nil {
+		if got := sigv4.AuthFromRequest(req); got != nil {
 			t.Fatalf("sigV4AuthFromCtx() = %+v, want nil", got)
 		}
 	})
@@ -350,13 +350,13 @@ func TestSigV4AuthFromCtx(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
 			context.WithValue(context.Background(), sigv4.CtxSigV4AuthKey, "not-auth"),
 		)
-		if got := sigv4.SigV4AuthFromCtx(req); got != nil {
+		if got := sigv4.AuthFromRequest(req); got != nil {
 			t.Fatalf("sigV4AuthFromCtx() = %+v, want nil for wrong context type", got)
 		}
 	})
 
 	t.Run("valid auth value", func(t *testing.T) {
-		want := &sigv4.SigV4Auth{
+		want := &sigv4.Auth{
 			AccessKey:    "access",
 			Date:         "20260207",
 			Region:       "us-east-1",
@@ -367,7 +367,7 @@ func TestSigV4AuthFromCtx(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
 			context.WithValue(context.Background(), sigv4.CtxSigV4AuthKey, want),
 		)
-		got := sigv4.SigV4AuthFromCtx(req)
+		got := sigv4.AuthFromRequest(req)
 		if got != want {
 			t.Fatalf("sigV4AuthFromCtx() pointer mismatch: got=%p want=%p", got, want)
 		}
@@ -377,7 +377,7 @@ func TestSigV4AuthFromCtx(t *testing.T) {
 func TestSigV4SecretFromCtx(t *testing.T) {
 	t.Run("missing context value", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil)
-		if got := sigv4.SigV4SecretFromCtx(req); got != "" {
+		if got := sigv4.SecretFromRequest(req); got != "" {
 			t.Fatalf("sigV4SecretFromCtx() = %q, want empty string", got)
 		}
 	})
@@ -386,7 +386,7 @@ func TestSigV4SecretFromCtx(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
 			context.WithValue(context.Background(), sigv4.CtxSigV4SecretKey, 123),
 		)
-		if got := sigv4.SigV4SecretFromCtx(req); got != "" {
+		if got := sigv4.SecretFromRequest(req); got != "" {
 			t.Fatalf("sigV4SecretFromCtx() = %q, want empty string for wrong context type", got)
 		}
 	})
@@ -396,7 +396,7 @@ func TestSigV4SecretFromCtx(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
 			context.WithValue(context.Background(), sigv4.CtxSigV4SecretKey, want),
 		)
-		if got := sigv4.SigV4SecretFromCtx(req); got != want {
+		if got := sigv4.SecretFromRequest(req); got != want {
 			t.Fatalf("sigV4SecretFromCtx() = %q, want %q", got, want)
 		}
 	})
@@ -419,7 +419,7 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 	})
 
 	t.Run("missing sigv4 secret context", func(t *testing.T) {
-		auth := &sigv4.SigV4Auth{
+		auth := &sigv4.Auth{
 			AccessKey:    "access",
 			Date:         "20260207",
 			Region:       "us-east-1",
@@ -442,7 +442,7 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 	})
 
 	t.Run("with sigv4 auth context", func(t *testing.T) {
-		auth := &sigv4.SigV4Auth{
+		auth := &sigv4.Auth{
 			AccessKey:    "access",
 			Date:         "20260207",
 			Region:       "us-east-1",

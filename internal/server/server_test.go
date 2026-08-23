@@ -87,12 +87,12 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 		t.Fatalf("expected team2-r to deny create/delete permissions, got groups: %v", mapKeys(roGrps))
 	}
 
-	up, err := upstream.NewUpstreamS3(ctx, cfg)
+	up, err := upstream.New(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := NewServer(cfg, up)
+	gw := New(cfg, up)
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
@@ -249,12 +249,12 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := upstream.NewUpstreamS3(ctx, cfg)
+	up, err := upstream.New(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := NewServer(cfg, up)
+	gw := New(cfg, up)
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
@@ -339,12 +339,12 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := upstream.NewUpstreamS3(ctx, cfg)
+	up, err := upstream.New(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := NewServer(cfg, up)
+	gw := New(cfg, up)
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
@@ -430,12 +430,12 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := upstream.NewUpstreamS3(ctx, cfg)
+	up, err := upstream.New(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := NewServer(cfg, up)
+	gw := New(cfg, up)
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
@@ -522,12 +522,12 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := upstream.NewUpstreamS3(ctx, cfg)
+	up, err := upstream.New(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := NewServer(cfg, up)
+	gw := New(cfg, up)
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
@@ -714,12 +714,12 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := upstream.NewUpstreamS3(ctx, cfg)
+	up, err := upstream.New(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := NewServer(cfg, up)
+	gw := New(cfg, up)
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
@@ -906,12 +906,12 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := upstream.NewUpstreamS3(ctx, cfg)
+	up, err := upstream.New(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := NewServer(cfg, up)
+	gw := New(cfg, up)
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
@@ -1136,12 +1136,12 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := upstream.NewUpstreamS3(ctx, cfg)
+	up, err := upstream.New(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := NewServer(cfg, up)
+	gw := New(cfg, up)
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
@@ -1399,8 +1399,8 @@ func TestLifecycleConfigXMLExpandedRoundTrip(t *testing.T) {
 }
 
 func TestDecodeBodyForS3WriteAWSChunked(t *testing.T) {
-	newAuth := func() *sigv4.SigV4Auth {
-		return &sigv4.SigV4Auth{
+	newAuth := func() *sigv4.Auth {
+		return &sigv4.Auth{
 			AccessKey:    "test-access-key",
 			Date:         "20260207",
 			Region:       "us-east-1",
@@ -1476,7 +1476,7 @@ func TestValidateSigV4RequestTime(t *testing.T) {
 
 	t.Run("within allowed skew", func(t *testing.T) {
 		reqTime := now.Add(-10 * time.Minute)
-		auth := &sigv4.SigV4Auth{
+		auth := &sigv4.Auth{
 			Date:    reqTime.Format("20060102"),
 			AmzDate: reqTime.Format("20060102T150405Z"),
 		}
@@ -1487,7 +1487,7 @@ func TestValidateSigV4RequestTime(t *testing.T) {
 
 	t.Run("too old", func(t *testing.T) {
 		reqTime := now.Add(-16 * time.Minute)
-		auth := &sigv4.SigV4Auth{
+		auth := &sigv4.Auth{
 			Date:    reqTime.Format("20060102"),
 			AmzDate: reqTime.Format("20060102T150405Z"),
 		}
@@ -1498,7 +1498,7 @@ func TestValidateSigV4RequestTime(t *testing.T) {
 
 	t.Run("too far in future", func(t *testing.T) {
 		reqTime := now.Add(16 * time.Minute)
-		auth := &sigv4.SigV4Auth{
+		auth := &sigv4.Auth{
 			Date:    reqTime.Format("20060102"),
 			AmzDate: reqTime.Format("20060102T150405Z"),
 		}
@@ -1508,7 +1508,7 @@ func TestValidateSigV4RequestTime(t *testing.T) {
 	})
 
 	t.Run("invalid amz date", func(t *testing.T) {
-		auth := &sigv4.SigV4Auth{
+		auth := &sigv4.Auth{
 			Date:    now.Format("20060102"),
 			AmzDate: "not-a-date",
 		}
@@ -1519,7 +1519,7 @@ func TestValidateSigV4RequestTime(t *testing.T) {
 
 	t.Run("credential scope date mismatch", func(t *testing.T) {
 		reqTime := now
-		auth := &sigv4.SigV4Auth{
+		auth := &sigv4.Auth{
 			Date:    "20000101",
 			AmzDate: reqTime.Format("20060102T150405Z"),
 		}
@@ -1530,7 +1530,7 @@ func TestValidateSigV4RequestTime(t *testing.T) {
 }
 
 func TestGroupCacheCredentialAwareAndBounded(t *testing.T) {
-	c := gatewaycache.NewGroupCacheWithMaxEntries(2*time.Second, 2)
+	c := gatewaycache.New(2*time.Second, 2)
 
 	g1 := map[string]struct{}{"team1-rw": {}}
 	c.Set("u1@example.com", "pass1", g1)
@@ -1573,7 +1573,7 @@ func TestGroupCacheCredentialAwareAndBounded(t *testing.T) {
 }
 
 func TestGroupCacheExpiredEntryIsRemovedOnLookup(t *testing.T) {
-	c := gatewaycache.NewGroupCacheWithMaxEntries(20*time.Millisecond, 10)
+	c := gatewaycache.New(20*time.Millisecond, 10)
 	c.Set("u1@example.com", "pass1", map[string]struct{}{"team1-rw": {}})
 	time.Sleep(30 * time.Millisecond)
 
@@ -1639,7 +1639,7 @@ func TestGatewayPreservesUpstreamErrorStatusAndHeaders(t *testing.T) {
 	defer upstreamSrv.Close()
 
 	upstreamClient := testutil.NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := NewServer(gatewayconfig.Config{}, upstreamClient)
+	gw := New(gatewayconfig.Config{}, upstreamClient)
 	gwSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := authz.WithRules(r.Context(), []authz.Rule{{BucketPrefix: "team2", Perm: authz.PermReadWrite}})
 		gw.ServeHTTP(w, r.WithContext(ctx))
@@ -1682,7 +1682,7 @@ func TestGatewayHandlesUpstreamLatencySpike(t *testing.T) {
 	defer upstreamSrv.Close()
 
 	upstreamClient := testutil.NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := NewServer(gatewayconfig.Config{}, upstreamClient)
+	gw := New(gatewayconfig.Config{}, upstreamClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	timeoutCtx, cancel := context.WithTimeout(req.Context(), 150*time.Millisecond)
@@ -1730,7 +1730,7 @@ func TestHandleGetObjectAttributesIncludesChecksum(t *testing.T) {
 	defer upstreamSrv.Close()
 
 	upstreamClient := testutil.NewS3Client(t, ctx, upstreamSrv.URL, "us-east-1", "upstream-ak", "upstream-sk")
-	gw := NewServer(gatewayconfig.Config{}, upstreamClient)
+	gw := New(gatewayconfig.Config{}, upstreamClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/team2-checksum/object.txt?attributes", nil)
 	req.Header.Set("x-amz-object-attributes", "Checksum")
@@ -1790,12 +1790,12 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := upstream.NewUpstreamS3(ctx, cfg)
+	up, err := upstream.New(ctx, cfg)
 	if err != nil {
 		t.Fatalf("init upstream s3: %v", err)
 	}
 
-	gw := NewServer(cfg, up)
+	gw := New(cfg, up)
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
@@ -1869,14 +1869,14 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 		UpstreamForcePathStyle: true,
 	}
 
-	up, err := upstream.NewUpstreamS3(ctx, cfg)
+	up, err := upstream.New(ctx, cfg)
 	if err != nil {
 		stopMinio()
 		stopLDAP()
 		cancel()
 		tb.Fatalf("init upstream s3: %v", err)
 	}
-	gw := NewServer(cfg, up)
+	gw := New(cfg, up)
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 
 	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
@@ -2690,14 +2690,14 @@ func mapBoolKeys(in map[string]bool) []string {
 
 func mustGatewaySecretForAccessKey(tb testing.TB, accessKey string) string {
 	tb.Helper()
-	_, _, secretKey, err := s3credentials.S3credentials(accessKey, nil)
+	_, _, secretKey, err := s3credentials.Decode(accessKey, nil)
 	if err != nil {
 		tb.Fatalf("derive secret key for access key %q: %v", accessKey, err)
 	}
 	return secretKey
 }
 
-func signedAWSChunkedPayloadForTest(t *testing.T, secret string, auth *sigv4.SigV4Auth, chunks [][]byte) string {
+func signedAWSChunkedPayloadForTest(t *testing.T, secret string, auth *sigv4.Auth, chunks [][]byte) string {
 	t.Helper()
 
 	signingKey := sigv4.DeriveSigningKey(secret, auth.Date, auth.Region, auth.Service)

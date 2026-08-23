@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestS3credentials(t *testing.T) {
+func TestDecode(t *testing.T) {
 
 	privateKey, err := x25519Curve.GenerateKey(rand.Reader)
 	if err != nil {
@@ -22,7 +22,7 @@ func TestS3credentials(t *testing.T) {
 		t.Fatalf("failed to generate access and secret keys: %v", err)
 	}
 
-	username, password, secretKey, err := S3credentials(accessKey, privateKey)
+	username, password, secretKey, err := Decode(accessKey, privateKey)
 	if err != nil {
 		t.Fatalf("failed to get credentials: %v", err)
 	}

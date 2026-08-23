@@ -33,7 +33,7 @@ func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func
 	// Use the production upstream client factory so unit tests exercise the
 	// same client configuration (e.g. request checksums only when required,
 	// which non-seekable proxied bodies depend on).
-	upstreamClient, err := upstream.NewUpstreamS3(ctx, config.Config{
+	upstreamClient, err := upstream.New(ctx, config.Config{
 		UpstreamEndpoint:       upstreamSrv.URL,
 		UpstreamRegion:         "us-east-1",
 		UpstreamAccessKey:      "upstream-ak",
@@ -44,7 +44,7 @@ func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func
 		upstreamSrv.Close()
 		t.Fatalf("init stub upstream client: %v", err)
 	}
-	gw := NewServer(config.Config{}, upstreamClient)
+	gw := New(config.Config{}, upstreamClient)
 
 	return gw, func() {
 		upstreamSrv.Close()

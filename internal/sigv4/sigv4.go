@@ -27,7 +27,7 @@ import (
 //
 // We verify signatures using the secret derived from access key credentials.
 // Real auth is then done by decoding accessKey -> upn:pass and binding to AD.
-type SigV4Auth struct {
+type Auth struct {
 	AccessKey     string // #nosec G117 -- AccessKey is a public identifier, not a secret
 	Date          string
 	Region        string
@@ -43,7 +43,7 @@ var (
 	ErrSigV4RequestOutsideMaxSkew = errors.New("request outside allowed time skew")
 )
 
-func ValidateSigV4RequestTime(auth *SigV4Auth, now time.Time, maxSkew time.Duration) error {
+func ValidateSigV4RequestTime(auth *Auth, now time.Time, maxSkew time.Duration) error {
 	amzTime, err := time.Parse("20060102T150405Z", strings.TrimSpace(auth.AmzDate))
 	if err != nil {
 		return ErrInvalidAmzDate
@@ -62,7 +62,7 @@ func ValidateSigV4RequestTime(auth *SigV4Auth, now time.Time, maxSkew time.Durat
 	return nil
 }
 
-func ParseSigV4Authorization(r *http.Request) (*SigV4Auth, error) {
+func ParseSigV4Authorization(r *http.Request) (*Auth, error) {
 	az := r.Header.Get("Authorization")
 	if az == "" {
 		return nil, errors.New("missing Authorization")
@@ -102,7 +102,7 @@ func ParseSigV4Authorization(r *http.Request) (*SigV4Auth, error) {
 		sh[i] = strings.ToLower(strings.TrimSpace(sh[i]))
 	}
 
-	return &SigV4Auth{
+	return &Auth{
 		AccessKey:     accessKey,
 		Date:          date,
 		Region:        region,
@@ -131,7 +131,7 @@ func splitAuthParts(s string) map[string]string {
 	return out
 }
 
-func VerifySigV4(r *http.Request, auth *SigV4Auth, secret string) error {
+func VerifySigV4(r *http.Request, auth *Auth, secret string) error {
 	payloadHash := r.Header.Get("x-amz-content-sha256")
 	if payloadHash == "" {
 		return errors.New("missing x-amz-content-sha256")
@@ -367,7 +367,7 @@ type AWSChunkSignatureVerifier struct {
 	PrevSig    string
 }
 
-func NewAWSChunkSignatureVerifier(auth *SigV4Auth, secret string) *AWSChunkSignatureVerifier {
+func NewAWSChunkSignatureVerifier(auth *Auth, secret string) *AWSChunkSignatureVerifier {
 	return &AWSChunkSignatureVerifier{
 		signingKey: DeriveSigningKey(secret, auth.Date, auth.Region, auth.Service),
 		amzDate:    auth.AmzDate,
@@ -497,18 +497,18 @@ const (
 	CtxSigV4SecretKey CtxKey = "sigv4-secret"
 )
 
-// SigV4AuthFromCtx retrieves the SigV4Auth from the request context.
-func SigV4AuthFromCtx(r *http.Request) *SigV4Auth {
+// AuthFromRequest retrieves the Auth from the request context.
+func AuthFromRequest(r *http.Request) *Auth {
 	v := r.Context().Value(CtxSigV4AuthKey)
 	if v == nil {
 		return nil
 	}
-	auth, _ := v.(*SigV4Auth)
+	auth, _ := v.(*Auth)
 	return auth
 }
 
-// SigV4SecretFromCtx retrieves the SigV4 secret from the request context.
-func SigV4SecretFromCtx(r *http.Request) string {
+// SecretFromRequest retrieves the SigV4 secret from the request context.
+func SecretFromRequest(r *http.Request) string {
 	v := r.Context().Value(CtxSigV4SecretKey)
 	if v == nil {
 		return ""
@@ -517,8 +517,8 @@ func SigV4SecretFromCtx(r *http.Request) string {
 	return secret
 }
 
-// WithSigV4Auth returns a context with the SigV4Auth set.
-func WithSigV4Auth(ctx context.Context, auth *SigV4Auth) context.Context {
+// WithSigV4Auth returns a context with the Auth set.
+func WithSigV4Auth(ctx context.Context, auth *Auth) context.Context {
 	return context.WithValue(ctx, CtxSigV4AuthKey, auth)
 }
 
@@ -534,11 +534,11 @@ func ChunkSignatureVerifierFromRequest(r *http.Request) (*AWSChunkSignatureVerif
 
 	switch mode := streamingPayloadMode(r.Header); mode {
 	case StreamingSignedPayload, StreamingSignedPayloadTrailer:
-		auth := SigV4AuthFromCtx(r)
+		auth := AuthFromRequest(r)
 		if auth == nil {
 			return nil, ErrMissingSigV4AuthContext
 		}
-		secret := SigV4SecretFromCtx(r)
+		secret := SecretFromRequest(r)
 		if strings.TrimSpace(secret) == "" {
 			return nil, ErrMissingSigV4SecretContext
 		}

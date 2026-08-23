@@ -52,17 +52,17 @@ const ctxUploaderKey ctxKey = "uploader-upn"
 type Server struct {
 	cfg           config.Config
 	up            *s3.Client
-	gcache        *groupcache.GroupCache
+	gcache        *groupcache.Cache
 	groupLookupSF singleflight.Group
 	fetchGroups   func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
 }
 
-func NewServer(cfg config.Config, up *s3.Client) *Server {
+func New(cfg config.Config, up *s3.Client) *Server {
 	cfg.ApplyDefaults()
 	return &Server{
 		cfg:         cfg,
 		up:          up,
-		gcache:      groupcache.NewGroupCacheWithMaxEntries(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
+		gcache:      groupcache.New(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
 		fetchGroups: ldapinternal.FetchGroupsUPN,
 	}
 }
@@ -124,7 +124,7 @@ func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Han
 			return
 		}
 
-		upn, pass, secretKey, err := s3credentials.S3credentials(auth.AccessKey, s.cfg.S3GatewayPrivateX25519Key)
+		upn, pass, secretKey, err := s3credentials.Decode(auth.AccessKey, s.cfg.S3GatewayPrivateX25519Key)
 		if err != nil {
 			xmlhelper.WriteXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
@@ -150,7 +150,7 @@ func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Han
 	})
 }
 
-func UploaderFromCtx(r *http.Request) string {
+func UploaderFromRequest(r *http.Request) string {
 	v := r.Context().Value(ctxUploaderKey)
 	if v == nil {
 		return ""

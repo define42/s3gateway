@@ -15,8 +15,8 @@ func WithRules(ctx context.Context, rules []Rule) context.Context {
 	return context.WithValue(ctx, ctxRulesKey, rules)
 }
 
-// RulesFromCtx retrieves the authorization rules stored in the request context.
-func RulesFromCtx(r *http.Request) []Rule {
+// RulesFromRequest retrieves the authorization rules stored in the request context.
+func RulesFromRequest(r *http.Request) []Rule {
 	v := r.Context().Value(ctxRulesKey)
 	if v == nil {
 		return nil

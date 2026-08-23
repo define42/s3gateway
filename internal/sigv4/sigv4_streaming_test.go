@@ -21,8 +21,8 @@ import (
 
 const testSecret = "test-secret"
 
-func newTestAuth() *sigv4.SigV4Auth {
-	return &sigv4.SigV4Auth{
+func newTestAuth() *sigv4.Auth {
+	return &sigv4.Auth{
 		AccessKey:     "test-access-key",
 		Date:          "20260207",
 		Region:        "us-east-1",
@@ -33,11 +33,11 @@ func newTestAuth() *sigv4.SigV4Auth {
 	}
 }
 
-func testScope(auth *sigv4.SigV4Auth) string {
+func testScope(auth *sigv4.Auth) string {
 	return fmt.Sprintf("%s/%s/%s/aws4_request", auth.Date, auth.Region, auth.Service)
 }
 
-func signTestChunk(auth *sigv4.SigV4Auth, prevSig string, chunk []byte) string {
+func signTestChunk(auth *sigv4.Auth, prevSig string, chunk []byte) string {
 	signingKey := sigv4.DeriveSigningKey(testSecret, auth.Date, auth.Region, auth.Service)
 	emptyHash := sha256.Sum256(nil)
 	chunkHash := sha256.Sum256(chunk)
@@ -54,7 +54,7 @@ func signTestChunk(auth *sigv4.SigV4Auth, prevSig string, chunk []byte) string {
 
 // signTestTrailer mirrors the AWS trailer signature: it chains from the final
 // chunk signature and covers the canonical "name:value\n" trailer block.
-func signTestTrailer(auth *sigv4.SigV4Auth, prevSig, trailerBlock string) string {
+func signTestTrailer(auth *sigv4.Auth, prevSig, trailerBlock string) string {
 	signingKey := sigv4.DeriveSigningKey(testSecret, auth.Date, auth.Region, auth.Service)
 	blockHash := sha256.Sum256([]byte(trailerBlock))
 	stringToSign := strings.Join([]string{

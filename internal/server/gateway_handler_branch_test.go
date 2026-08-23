@@ -21,7 +21,7 @@ func reqWithRules(req *http.Request, rules []authz.Rule) *http.Request {
 	return req.WithContext(authz.WithRules(req.Context(), rules))
 }
 
-func reqWithRulesAndSigV4(req *http.Request, rules []authz.Rule, auth *sigv4.SigV4Auth) *http.Request {
+func reqWithRulesAndSigV4(req *http.Request, rules []authz.Rule, auth *sigv4.Auth) *http.Request {
 	ctx := authz.WithRules(req.Context(), rules)
 	ctx = context.WithValue(ctx, sigv4.CtxSigV4AuthKey, auth)
 	ctx = context.WithValue(ctx, sigv4.CtxSigV4SecretKey, "secret")
@@ -443,7 +443,7 @@ func TestHandleUploadPartValidationAndBranches(t *testing.T) {
 	})
 	defer cleanupNoUpstream()
 
-	sigAuth := &sigv4.SigV4Auth{
+	sigAuth := &sigv4.Auth{
 		AccessKey:    "ak",
 		Date:         "20260207",
 		Region:       "us-east-1",
@@ -1225,7 +1225,7 @@ func TestCreateCompleteAndListPartsBranchMatrix(t *testing.T) {
 }
 
 func TestServeHTTPAndAuthBranches(t *testing.T) {
-	gw := NewServer(config.Config{SigV4MaxSkew: 15 * time.Minute}, nil)
+	gw := New(config.Config{SigV4MaxSkew: 15 * time.Minute}, nil)
 
 	t.Run("servehttp route not implemented and invalid part number branches", func(t *testing.T) {
 		cases := []struct {
@@ -1282,7 +1282,7 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 		}
 
 		handler := gw.WithAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if authz.RulesFromCtx(r) == nil {
+			if authz.RulesFromRequest(r) == nil {
 				t.Fatalf("expected rules in request context")
 			}
 			w.WriteHeader(http.StatusNoContent)
@@ -1317,7 +1317,7 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 		}
 
 		rrBadCreds := httptest.NewRecorder()
-		gwFetch := NewServer(config.Config{
+		gwFetch := New(config.Config{
 			SigV4MaxSkew: 0,
 			LDAPURL:      "ldap://127.0.0.1:1",
 			BaseDN:       "dc=example,dc=com",
@@ -1387,7 +1387,7 @@ func TestReadyzDependencyChecks(t *testing.T) {
 	})
 
 	t.Run("fails when s3 client is unavailable", func(t *testing.T) {
-		gw := NewServer(config.Config{LDAPURL: startLDAPListener(t)}, nil)
+		gw := New(config.Config{LDAPURL: startLDAPListener(t)}, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 		rr := httptest.NewRecorder()

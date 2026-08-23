@@ -379,7 +379,7 @@ func TestPutObjectUnsignedTrailerStreaming(t *testing.T) {
 // TestPutObjectSignedTrailerStreaming drives the signed-trailer mode through
 // the router with sigv4 context injected.
 func TestPutObjectSignedTrailerStreaming(t *testing.T) {
-	auth := &sigv4.SigV4Auth{
+	auth := &sigv4.Auth{
 		AccessKey:     "test-access-key",
 		Date:          "20260207",
 		Region:        "us-east-1",

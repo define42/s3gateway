@@ -7,12 +7,12 @@ import (
 	"strings"
 )
 
-func S3credentials(accessKey string, s3gatewayPrivateKey *ecdh.PrivateKey) (username, password, secretKey string, err error) {
+func Decode(accessKey string, s3gatewayPrivateKey *ecdh.PrivateKey) (username, password, secretKey string, err error) {
 	if s3gatewayPrivateKey != nil && strings.HasPrefix(accessKey, s3CredentialsX25519V1) {
-		return GetDecryptedToken(accessKey, s3gatewayPrivateKey)
+		return decryptToken(accessKey, s3gatewayPrivateKey)
 	}
 	// legacy base64-encoded credentials
-	return S3CredentialsBase64Encoded(accessKey)
+	return decodeBase64(accessKey)
 }
 
 func EncodeSecretKey(secretKey string) string {
