@@ -7,7 +7,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	authz "github.com/define42/s3gateway/internal/authz"
-	handler_bucket "github.com/define42/s3gateway/internal/handler_bucket"
+	bucketxml "github.com/define42/s3gateway/internal/bucketxml"
 	"github.com/define42/s3gateway/internal/xmlhelper"
 )
 
@@ -114,7 +114,7 @@ func (s *Server) handlePutBucketVersioning(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	cfg, err := handler_bucket.DecodeVersioningConfigXML(r.Body)
+	cfg, err := bucketxml.DecodeVersioningConfigXML(r.Body)
 	if err != nil {
 		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid versioning configuration")
 		return
@@ -157,7 +157,7 @@ func (s *Server) handleGetBucketVersioning(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	body, err := handler_bucket.EncodeVersioningConfigXML(out.Status, out.MFADelete)
+	body, err := bucketxml.EncodeVersioningConfigXML(out.Status, out.MFADelete)
 	if err != nil {
 		xmlhelper.WriteUpstreamError(w, err)
 		return
@@ -174,7 +174,7 @@ func (s *Server) handlePutBucketTagging(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	tagging, err := handler_bucket.DecodeTaggingXML(r.Body)
+	tagging, err := bucketxml.DecodeTaggingXML(r.Body)
 	if err != nil {
 		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid tagging payload")
 		return
@@ -225,7 +225,7 @@ func (s *Server) handleGetBucketTagging(w http.ResponseWriter, r *http.Request, 
 		xmlhelper.WriteUpstreamError(w, err)
 		return
 	}
-	handler_bucket.WriteTaggingXMLResponse(w, http.StatusOK, out.TagSet)
+	bucketxml.WriteTaggingXMLResponse(w, http.StatusOK, out.TagSet)
 }
 
 func (s *Server) handleDeleteBucketTagging(w http.ResponseWriter, r *http.Request, bucket string) {

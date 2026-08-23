@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	authz "github.com/define42/s3gateway/internal/authz"
-	handler_bucket "github.com/define42/s3gateway/internal/handler_bucket"
+	bucketxml "github.com/define42/s3gateway/internal/bucketxml"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 	"github.com/define42/s3gateway/internal/xmlhelper"
 )
@@ -307,34 +307,34 @@ func TestDecodeVersioningConfigXMLMFADeleteValues(t *testing.T) {
 	for _, v := range allowed {
 		v := v
 		t.Run("exact_"+string(v), func(t *testing.T) {
-			cfg, err := handler_bucket.DecodeVersioningConfigXML(strings.NewReader(
+			cfg, err := bucketxml.DecodeVersioningConfigXML(strings.NewReader(
 				`<VersioningConfiguration><MfaDelete>` + string(v) + `</MfaDelete></VersioningConfiguration>`,
 			))
 			if err != nil {
-				t.Fatalf("handler_bucket.DecodeVersioningConfigXML() error = %v", err)
+				t.Fatalf("bucketxml.DecodeVersioningConfigXML() error = %v", err)
 			}
 			if cfg.MFADelete != v {
-				t.Fatalf("handler_bucket.DecodeVersioningConfigXML() MFADelete = %q, want %q", cfg.MFADelete, v)
+				t.Fatalf("bucketxml.DecodeVersioningConfigXML() MFADelete = %q, want %q", cfg.MFADelete, v)
 			}
 		})
 
 		t.Run("trimmed_case_insensitive_"+string(v), func(t *testing.T) {
-			cfg, err := handler_bucket.DecodeVersioningConfigXML(strings.NewReader(
+			cfg, err := bucketxml.DecodeVersioningConfigXML(strings.NewReader(
 				`<VersioningConfiguration><MfaDelete>  ` + strings.ToLower(string(v)) + ` </MfaDelete></VersioningConfiguration>`,
 			))
 			if err != nil {
-				t.Fatalf("handler_bucket.DecodeVersioningConfigXML() error = %v", err)
+				t.Fatalf("bucketxml.DecodeVersioningConfigXML() error = %v", err)
 			}
 			if cfg.MFADelete != v {
-				t.Fatalf("handler_bucket.DecodeVersioningConfigXML() MFADelete = %q, want %q", cfg.MFADelete, v)
+				t.Fatalf("bucketxml.DecodeVersioningConfigXML() MFADelete = %q, want %q", cfg.MFADelete, v)
 			}
 		})
 	}
 
-	if _, err := handler_bucket.DecodeVersioningConfigXML(strings.NewReader(
+		if _, err := bucketxml.DecodeVersioningConfigXML(strings.NewReader(
 		`<VersioningConfiguration><MfaDelete>invalid</MfaDelete></VersioningConfiguration>`,
 	)); err == nil {
-		t.Fatalf("handler_bucket.DecodeVersioningConfigXML() expected error for invalid MfaDelete")
+		t.Fatalf("bucketxml.DecodeVersioningConfigXML() expected error for invalid MfaDelete")
 	}
 }
 
