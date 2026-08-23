@@ -19,7 +19,7 @@ The project is in good shape for its size. The architecture is clean (auth middl
 - Object bodies are streamed through (no buffering) in both directions; upstream client is tuned (connection pooling, timeouts).
 - Good CI hygiene baseline: golangci-lint, gosec target, CodeQL, coverage gate, scheduled benchmarks, wide integration coverage (glauth LDAP, MinIO, Ceph, real `minio-go` client).
 
-The findings below are ordered by severity. The most important items are two **authenticated memory-exhaustion DoS vectors** (F-1, F-2), a set of **policy-bypass inconsistencies** around required upload metadata / `uploaded-by` stamping (F-6), and **admin-session lifetime/cookie hardening** (F-3, F-4, F-5). None of the findings is an unauthenticated remote-compromise vector.
+The findings below are ordered by severity. The most important items are two **authenticated memory-exhaustion DoS vectors** (F-1, F-2), a set of **policy-bypass inconsistencies** around required upload metadata / `uploaded-by` stamping (F-6), and **admin-session cookie hardening** (F-3, F-5; F-4 was downgraded after review — see below). None of the findings is an unauthenticated remote-compromise vector.
 
 ---
 
@@ -62,10 +62,12 @@ A multi-gigabyte `<Delete>` document (or one huge `<Key>` element) is buffered i
 
 **Recommendation:** add a config knob (`COOKIE_SECURE=true` or trust of `X-Forwarded-Proto`) and default to `Secure` whenever the deployment is HTTPS-fronted.
 
-### F-4: Admin sessions slide forever and never re-check LDAP
-`internal/adminpage/adminpage.go:288-296` — every `get` extends `Expires = now + ttl`, with no absolute cap, and the group set is a snapshot taken at login (`handleAdminLogin`). Consequences: a disabled/offboarded LDAP user, or one whose groups were revoked, keeps full admin-UI access (read/upload/delete objects, create buckets) indefinitely as long as they keep the tab active.
+### F-4: Admin session groups are snapshotted at login and not re-checked (bounded to ~30 min)
+**Corrected after review feedback** (thanks to the automated reviewer on PR #36): my original claim here — that sessions "slide forever" and grant indefinite access — was **wrong**. There *is* an effective absolute session lifetime of ~30 minutes, enforced two independent ways: `NewAdminGorillaStore` sets the cookie `Max-Age` and, via `store.MaxAge`, the securecookie codec `MaxAge` to the 30-minute TTL; and normal authenticated requests go through `currentAdminSession` → `Get` only and **never re-save the cookie** (the only `Save` sites are login at `adminpage.go:1078` and logout/clear at `:966`). So the browser stops sending the cookie 30 minutes after login, and even a replayed cookie is rejected by `securecookie.DecodeMulti` once its embedded timestamp exceeds `MaxAge`. The backend store's sliding `Expires` (`adminpage.go:288-296`) does not extend session validity, because the client's cookie is capped independently — at most it is dead/misleading bookkeeping.
 
-**Recommendation:** add an absolute session lifetime (e.g. 8–12 h) and/or refresh groups periodically. Note the S3 API path does not have this problem (`LDAP_GROUP_TTL`, default 2 min).
+What remains (low severity): the group set is snapshotted at login (`handleAdminLogin`) and not refreshed, so a user whose groups are revoked keeps their admin-UI permissions until the session expires — a window now bounded to ≤30 minutes, versus the S3 API path's `LDAP_GROUP_TTL` (default 2 min).
+
+**Recommendation:** optionally refresh groups mid-session (or shorten the admin TTL) if a tighter bound than 30 minutes is desired; the absolute-lifetime recommendation from the original finding is withdrawn — it already exists. Consider deleting the unused sliding-`Expires` bookkeeping in the backend store to avoid the impression that it extends sessions.
 
 ### F-5: Login form lacks the same-origin check the other admin POSTs have (login CSRF)
 `internal/adminpage/adminpage.go:1004-1085` — `handleAdminLogin` accepts a cross-site form POST (`hasTrustedAdminOrigin` is enforced on create-bucket/upload/delete/logout, but not on login). `SameSite=Lax` does not help here because a login CSRF does not need an existing cookie: an attacker can silently log the victim's browser into an attacker-controlled LDAP account; anything the victim then uploads via the admin UI lands in attacker-visible buckets stamped `uploaded-by: attacker`.
