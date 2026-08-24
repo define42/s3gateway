@@ -16,16 +16,15 @@ import (
 
 // Boot constructs the configured gateway HTTP server.
 func Boot() (*http.Server, config.Config, error) {
-	httpServer, cfg, _, err := boot()
+	cfg := config.LoadConfig()
+	httpServer, _, err := boot(cfg)
 	return httpServer, cfg, err
 }
 
-func boot() (*http.Server, config.Config, func(), error) {
-	cfg := config.LoadConfig()
-
+func boot(cfg config.Config) (*http.Server, func(), error) {
 	up, err := upstream.New(context.Background(), cfg)
 	if err != nil {
-		return nil, cfg, func() {}, fmt.Errorf("init upstream s3: %w", err)
+		return nil, func() {}, fmt.Errorf("init upstream s3: %w", err)
 	}
 
 	var serverOptions []server.Option
@@ -37,7 +36,7 @@ func boot() (*http.Server, config.Config, func(), error) {
 			cfg.KafkaNotificationTimeout,
 		)
 		if err != nil {
-			return nil, cfg, cleanup, fmt.Errorf("init kafka upload notifier: %w", err)
+			return nil, cleanup, fmt.Errorf("init kafka upload notifier: %w", err)
 		}
 		cleanup = sync.OnceFunc(publisher.Close)
 		serverOptions = append(serverOptions, server.WithUploadNotifier(publisher))
@@ -56,5 +55,5 @@ func boot() (*http.Server, config.Config, func(), error) {
 		gateway.WithAuth(gateway, adminHandler),
 	)
 	httpServer.RegisterOnShutdown(cleanup)
-	return httpServer, cfg, cleanup, nil
+	return httpServer, cleanup, nil
 }

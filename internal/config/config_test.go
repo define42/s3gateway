@@ -8,12 +8,13 @@ import (
 
 func TestConfigValidateMatrix(t *testing.T) {
 	base := Config{
-		GroupCacheMaxEntries: 1,
-		SigV4MaxSkew:         time.Second,
-		ReadHeaderTimeout:    time.Second,
-		IdleTimeout:          time.Second,
-		ShutdownTimeout:      time.Second,
-		MaxHeaderBytes:       1,
+		GroupCacheMaxEntries:   1,
+		SigV4MaxSkew:           time.Second,
+		ReadHeaderTimeout:      time.Second,
+		IdleTimeout:            time.Second,
+		ShutdownTimeout:        time.Second,
+		MaxHeaderBytes:         1,
+		SplunkHECFlushInterval: time.Second,
 	}
 
 	if err := base.Validate(); err != nil {
@@ -96,6 +97,62 @@ func TestConfigValidateMatrix(t *testing.T) {
 			},
 			wantMsg: "KAFKA_BROKERS",
 		},
+		{
+			name: "splunk flush interval",
+			mutate: func(c *Config) {
+				c.SplunkHECFlushInterval = 0
+			},
+			wantMsg: "SPLUNK_HEC_FLUSH_INTERVAL",
+		},
+		{
+			name: "splunk token without endpoint",
+			mutate: func(c *Config) {
+				c.SplunkHECToken = "token"
+			},
+			wantMsg: "SPLUNK_HEC_ENDPOINT",
+		},
+		{
+			name: "splunk endpoint without token",
+			mutate: func(c *Config) {
+				c.SplunkHECEndpoint = "https://splunk.example/services/collector/event"
+			},
+			wantMsg: "SPLUNK_HEC_TOKEN",
+		},
+		{
+			name: "splunk endpoint and token without index",
+			mutate: func(c *Config) {
+				c.SplunkHECEndpoint = "https://splunk.example/services/collector/event"
+				c.SplunkHECToken = "token"
+			},
+			wantMsg: "SPLUNK_HEC_INDEX",
+		},
+		{
+			name: "splunk relative endpoint",
+			mutate: func(c *Config) {
+				c.SplunkHECEndpoint = "/services/collector/event"
+				c.SplunkHECToken = "token"
+				c.SplunkHECIndex = "gateway"
+			},
+			wantMsg: "absolute URL",
+		},
+		{
+			name: "splunk endpoint scheme",
+			mutate: func(c *Config) {
+				c.SplunkHECEndpoint = "ftp://splunk.example/services/collector/event"
+				c.SplunkHECToken = "token"
+				c.SplunkHECIndex = "gateway"
+			},
+			wantMsg: "http or https",
+		},
+		{
+			name: "splunk endpoint user information",
+			mutate: func(c *Config) {
+				c.SplunkHECEndpoint = "https://user@splunk.example/services/collector/event"
+				c.SplunkHECToken = "token"
+				c.SplunkHECIndex = "gateway"
+			},
+			wantMsg: "user information",
+		},
 	}
 
 	for _, tc := range tests {
@@ -176,16 +233,50 @@ func TestApplyDefaultsDoesNotInjectPrivateX25519Key(t *testing.T) {
 			defaultKafkaNotificationTimeout,
 		)
 	}
+	if cfg.SplunkHECFlushInterval != defaultSplunkHECFlushInterval {
+		t.Fatalf(
+			"splunk HEC flush interval mismatch: got=%s want=%s",
+			cfg.SplunkHECFlushInterval,
+			defaultSplunkHECFlushInterval,
+		)
+	}
+}
+
+func TestLoadConfigSplunkHEC(t *testing.T) {
+	t.Setenv("LDAP_URL", "ldap://ldap.example:389")
+	t.Setenv("LDAP_BASE_DN", "dc=example,dc=com")
+	t.Setenv("S3_ENDPOINT", "https://s3.example")
+	t.Setenv("S3_ACCESS_KEY", "access-key")
+	t.Setenv("S3_SECRET_KEY", "secret-key")
+	t.Setenv("SPLUNK_HEC_ENDPOINT", "https://splunk.example:8088/services/collector/event")
+	t.Setenv("SPLUNK_HEC_TOKEN", "hec-token")
+	t.Setenv("SPLUNK_HEC_INDEX", "gateway")
+	t.Setenv("SPLUNK_HEC_FLUSH_INTERVAL", "45s")
+
+	cfg := LoadConfig()
+	if cfg.SplunkHECEndpoint != "https://splunk.example:8088/services/collector/event" {
+		t.Fatalf("splunk HEC endpoint mismatch: got=%q", cfg.SplunkHECEndpoint)
+	}
+	if cfg.SplunkHECToken != "hec-token" {
+		t.Fatalf("splunk HEC token mismatch: got=%q", cfg.SplunkHECToken)
+	}
+	if cfg.SplunkHECIndex != "gateway" {
+		t.Fatalf("splunk HEC index mismatch: got=%q", cfg.SplunkHECIndex)
+	}
+	if cfg.SplunkHECFlushInterval != 45*time.Second {
+		t.Fatalf("splunk HEC flush interval mismatch: got=%s want=45s", cfg.SplunkHECFlushInterval)
+	}
 }
 
 func TestCookieSecretValidation(t *testing.T) {
 	base := Config{
-		GroupCacheMaxEntries: 1,
-		SigV4MaxSkew:         time.Second,
-		ReadHeaderTimeout:    time.Second,
-		IdleTimeout:          time.Second,
-		ShutdownTimeout:      time.Second,
-		MaxHeaderBytes:       1,
+		GroupCacheMaxEntries:   1,
+		SigV4MaxSkew:           time.Second,
+		ReadHeaderTimeout:      time.Second,
+		IdleTimeout:            time.Second,
+		ShutdownTimeout:        time.Second,
+		MaxHeaderBytes:         1,
+		SplunkHECFlushInterval: time.Second,
 	}
 
 	// empty string is allowed (ephemeral random keys)

@@ -4,6 +4,7 @@ import (
 	"crypto/ecdh"
 	"errors"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -37,6 +38,11 @@ type Config struct {
 	KafkaTopic               string // shared upload topic; when empty, the bucket name is used as the topic
 	KafkaNotificationTimeout time.Duration
 
+	SplunkHECEndpoint      string
+	SplunkHECToken         string
+	SplunkHECIndex         string
+	SplunkHECFlushInterval time.Duration
+
 	ReadHeaderTimeout         time.Duration
 	ReadTimeout               time.Duration
 	WriteTimeout              time.Duration
@@ -57,6 +63,7 @@ const (
 	defaultWriteTimeout             = 0 * time.Second
 	defaultShutdownTimeout          = 20 * time.Second
 	defaultKafkaNotificationTimeout = 5 * time.Second
+	defaultSplunkHECFlushInterval   = 30 * time.Second
 
 	DefaultGroupCacheMaxEntries = 10000
 	DefaultReadHeaderTimeout    = 10 * time.Second
@@ -82,6 +89,9 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.KafkaNotificationTimeout == 0 {
 		cfg.KafkaNotificationTimeout = defaultKafkaNotificationTimeout
+	}
+	if cfg.SplunkHECFlushInterval == 0 {
+		cfg.SplunkHECFlushInterval = defaultSplunkHECFlushInterval
 	}
 	if cfg.ReadHeaderTimeout == 0 {
 		cfg.ReadHeaderTimeout = DefaultReadHeaderTimeout
@@ -130,6 +140,31 @@ func (cfg Config) Validate() error {
 			if strings.TrimSpace(broker) == "" {
 				return errors.New("KAFKA_BROKERS must not contain empty addresses")
 			}
+		}
+	}
+	if cfg.SplunkHECFlushInterval <= 0 {
+		return errors.New("SPLUNK_HEC_FLUSH_INTERVAL must be > 0")
+	}
+	splunkConfigured := cfg.SplunkHECEndpoint != "" || cfg.SplunkHECToken != "" || cfg.SplunkHECIndex != ""
+	if splunkConfigured {
+		if cfg.SplunkHECEndpoint == "" {
+			return errors.New("SPLUNK_HEC_ENDPOINT is required when Splunk HEC logging is configured")
+		}
+		if cfg.SplunkHECToken == "" {
+			return errors.New("SPLUNK_HEC_TOKEN is required when Splunk HEC logging is configured")
+		}
+		if cfg.SplunkHECIndex == "" {
+			return errors.New("SPLUNK_HEC_INDEX is required when Splunk HEC logging is configured")
+		}
+		endpoint, err := url.ParseRequestURI(cfg.SplunkHECEndpoint)
+		if err != nil || endpoint.Host == "" {
+			return errors.New("SPLUNK_HEC_ENDPOINT must be an absolute URL")
+		}
+		if !strings.EqualFold(endpoint.Scheme, "http") && !strings.EqualFold(endpoint.Scheme, "https") {
+			return errors.New("SPLUNK_HEC_ENDPOINT must use http or https")
+		}
+		if endpoint.User != nil {
+			return errors.New("SPLUNK_HEC_ENDPOINT must not contain user information")
 		}
 	}
 	return nil
@@ -274,6 +309,11 @@ func LoadConfig() Config {
 		KafkaBrokers:             envCSV("KAFKA_BROKERS"),
 		KafkaTopic:               env("KAFKA_TOPIC", ""),
 		KafkaNotificationTimeout: envDuration("KAFKA_NOTIFICATION_TIMEOUT", defaultKafkaNotificationTimeout),
+
+		SplunkHECEndpoint:      env("SPLUNK_HEC_ENDPOINT", ""),
+		SplunkHECToken:         env("SPLUNK_HEC_TOKEN", ""),
+		SplunkHECIndex:         env("SPLUNK_HEC_INDEX", ""),
+		SplunkHECFlushInterval: envDuration("SPLUNK_HEC_FLUSH_INTERVAL", defaultSplunkHECFlushInterval),
 
 		ReadHeaderTimeout:         envDuration("HTTP_READ_HEADER_TIMEOUT", DefaultReadHeaderTimeout),
 		ReadTimeout:               envDuration("HTTP_READ_TIMEOUT", defaultReadTimeout),

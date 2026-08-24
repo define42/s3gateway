@@ -154,6 +154,10 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 - `KAFKA_BROKERS` (default empty): comma-separated Kafka bootstrap broker addresses (for example `kafka-1:9092,kafka-2:9092`). Upload notifications are disabled when this is empty.
 - `KAFKA_TOPIC` (default empty): shared topic for all upload notifications. When empty and `KAFKA_BROKERS` is configured, each notification is sent to the topic whose name matches the bucket name.
 - `KAFKA_NOTIFICATION_TIMEOUT` (default `5s`): maximum time the request waits for Kafka to acknowledge an upload notification.
+- `SPLUNK_HEC_ENDPOINT` (default empty): complete Splunk HEC JSON event URL, for example `https://splunk.example:8088/services/collector/event`. Splunk forwarding is disabled when this is empty.
+- `SPLUNK_HEC_TOKEN` (default empty): HEC authentication token. Required with `SPLUNK_HEC_ENDPOINT`; provide it through a secret manager or protected environment variable.
+- `SPLUNK_HEC_INDEX` (default empty): destination Splunk index. Required with `SPLUNK_HEC_ENDPOINT`.
+- `SPLUNK_HEC_FLUSH_INTERVAL` (default `30s`): interval used to bundle structured log events into HEC requests.
 - `COOKIE_SECRET` (default empty): secret seed used to sign and encrypt admin web-session cookies. When set, it must contain at least 32 characters. When not set, ephemeral random keys are generated at startup. Admin sessions are stored in memory, so they are invalidated on every restart and are not shared across multiple instances even when this value is set. **Set this to a strong random value of at least 32 characters in production.**
 - `HTTP_READ_HEADER_TIMEOUT` (default `10s`)
 - `HTTP_READ_TIMEOUT` (default `0s`)
@@ -165,6 +169,27 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 - `ACME_SERVER` (default `https://acme-v02.api.letsencrypt.org/directory`): ACME directory URL.
 - `ACME_DATA_DIR` (default `./certs`): directory used to store ACME account and certificate data.
 - `ACME_CA_DIR` (default empty): directory of PEM CA certificate file(s) trusted for TLS when connecting to the ACME server (useful for private ACME endpoints).
+
+### Splunk HEC logging
+
+Set all three HEC connection values to enable forwarding:
+
+```text
+SPLUNK_HEC_ENDPOINT=https://splunk.example:8088/services/collector/event
+SPLUNK_HEC_TOKEN=<secret-token>
+SPLUNK_HEC_INDEX=s3gateway
+SPLUNK_HEC_FLUSH_INTERVAL=30s
+```
+
+Logs continue to be emitted as JSON on stdout. In parallel, the gateway wraps
+each structured log record in a Splunk HEC event, groups records until the
+flush interval, and sends them in batched POST requests. Failed batches remain
+buffered for the next interval, subject to a 64 MiB in-memory safety limit, and
+pending logs are flushed during graceful shutdown. If that limit is reached,
+local stdout logging continues and the number of dropped HEC events is reported
+on stderr. HEC transport failures are also written to stderr without exposing
+the token. A response lost after successful ingestion can cause a batch to be
+retried, so duplicate events are possible. Use an HTTPS endpoint in production.
 
 ### Kafka upload notifications
 
