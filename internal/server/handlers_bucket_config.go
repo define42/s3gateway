@@ -12,7 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	authz "github.com/define42/s3gateway/internal/authz"
-	"github.com/define42/s3gateway/internal/xmlhelper"
+	"github.com/define42/s3gateway/internal/s3http"
+	"github.com/define42/s3gateway/internal/s3xml"
 )
 
 // The gateway has no per-user S3 identities: every object is owned by the
@@ -38,9 +39,9 @@ func isUpstreamNotFound(err error) bool {
 func (s *Server) requireBucketExists(w http.ResponseWriter, r *http.Request, bucket string) bool {
 	if _, err := s.up.HeadBucket(r.Context(), &s3.HeadBucketInput{Bucket: &bucket}); err != nil {
 		if isUpstreamNotFound(err) {
-			xmlhelper.WriteXMLError(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+			s3xml.WriteError(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
 		} else {
-			xmlhelper.WriteUpstreamError(w, err)
+			s3http.WriteUpstreamError(w, err)
 		}
 		return false
 	}
@@ -56,9 +57,9 @@ func (s *Server) requireObjectExists(w http.ResponseWriter, r *http.Request, buc
 	}
 	if _, err := s.up.HeadObject(r.Context(), in); err != nil {
 		if isUpstreamNotFound(err) {
-			xmlhelper.WriteXMLError(w, http.StatusNotFound, "NoSuchKey", "The specified key does not exist")
+			s3xml.WriteError(w, http.StatusNotFound, "NoSuchKey", "The specified key does not exist")
 		} else {
-			xmlhelper.WriteUpstreamError(w, err)
+			s3http.WriteUpstreamError(w, err)
 		}
 		return false
 	}
@@ -66,10 +67,10 @@ func (s *Server) requireObjectExists(w http.ResponseWriter, r *http.Request, buc
 }
 
 func writeCannedFullControlACL(w http.ResponseWriter) {
-	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-	defer xmlhelper.FlushXMLWriterResponse(xw)
+	xw := s3xml.BeginResponse(w, http.StatusOK)
+	defer s3xml.FlushResponse(xw)
 
-	xmlhelper.EncodeS3RootStart(xw, "AccessControlPolicy")
+	s3xml.EncodeRootStart(xw, "AccessControlPolicy")
 	xw.Start("Owner")
 	xw.Elem("ID", gatewayOwnerID)
 	xw.Elem("DisplayName", gatewayOwnerDisplayName)
@@ -118,7 +119,7 @@ func aclWriteIsNoOp(r *http.Request, bucketLevel bool) bool {
 func (s *Server) handleGetBucketACL(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 	if !s.requireBucketExists(w, r, bucket) {
@@ -130,11 +131,11 @@ func (s *Server) handleGetBucketACL(w http.ResponseWriter, r *http.Request, buck
 func (s *Server) handlePutBucketACL(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 	if !aclWriteIsNoOp(r, true) {
-		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Only the private canned ACL is supported; access is managed via LDAP groups")
+		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Only the private canned ACL is supported; access is managed via LDAP groups")
 		return
 	}
 	if !s.requireBucketExists(w, r, bucket) {
@@ -146,7 +147,7 @@ func (s *Server) handlePutBucketACL(w http.ResponseWriter, r *http.Request, buck
 func (s *Server) handleGetObjectACL(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 	if !s.requireObjectExists(w, r, bucket, key) {
@@ -158,11 +159,11 @@ func (s *Server) handleGetObjectACL(w http.ResponseWriter, r *http.Request, buck
 func (s *Server) handlePutObjectACL(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 	if !aclWriteIsNoOp(r, false) {
-		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Only owner-retaining canned ACLs are supported; access is managed via LDAP groups")
+		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Only owner-retaining canned ACLs are supported; access is managed via LDAP groups")
 		return
 	}
 	if !s.requireObjectExists(w, r, bucket, key) {
@@ -191,7 +192,7 @@ var bucketConfigReadKeys = []string{
 func (s *Server) handleBucketConfigRead(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 	if !s.requireBucketExists(w, r, bucket) {
@@ -200,13 +201,13 @@ func (s *Server) handleBucketConfigRead(w http.ResponseWriter, r *http.Request, 
 
 	switch key {
 	case "policy", "policyStatus":
-		xmlhelper.WriteXMLError(w, http.StatusNotFound, "NoSuchBucketPolicy", "The bucket policy does not exist")
+		s3xml.WriteError(w, http.StatusNotFound, "NoSuchBucketPolicy", "The bucket policy does not exist")
 	case "cors":
-		xmlhelper.WriteXMLError(w, http.StatusNotFound, "NoSuchCORSConfiguration", "The CORS configuration does not exist")
+		s3xml.WriteError(w, http.StatusNotFound, "NoSuchCORSConfiguration", "The CORS configuration does not exist")
 	case "website":
-		xmlhelper.WriteXMLError(w, http.StatusNotFound, "NoSuchWebsiteConfiguration", "The specified bucket does not have a website configuration")
+		s3xml.WriteError(w, http.StatusNotFound, "NoSuchWebsiteConfiguration", "The specified bucket does not have a website configuration")
 	case "replication":
-		xmlhelper.WriteXMLError(w, http.StatusNotFound, "ReplicationConfigurationNotFoundError", "The replication configuration was not found")
+		s3xml.WriteError(w, http.StatusNotFound, "ReplicationConfigurationNotFoundError", "The replication configuration was not found")
 	case "logging":
 		writeEmptyConfigElement(w, "BucketLoggingStatus")
 	case "notification":
@@ -214,29 +215,29 @@ func (s *Server) handleBucketConfigRead(w http.ResponseWriter, r *http.Request, 
 	case "accelerate":
 		writeEmptyConfigElement(w, "AccelerateConfiguration")
 	case "requestPayment":
-		xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-		defer xmlhelper.FlushXMLWriterResponse(xw)
-		xmlhelper.EncodeS3RootStart(xw, "RequestPaymentConfiguration")
+		xw := s3xml.BeginResponse(w, http.StatusOK)
+		defer s3xml.FlushResponse(xw)
+		s3xml.EncodeRootStart(xw, "RequestPaymentConfiguration")
 		xw.Elem("Payer", "BucketOwner")
 		xw.End("RequestPaymentConfiguration")
 	case "publicAccessBlock":
-		xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-		defer xmlhelper.FlushXMLWriterResponse(xw)
-		xmlhelper.EncodeS3RootStart(xw, "PublicAccessBlockConfiguration")
+		xw := s3xml.BeginResponse(w, http.StatusOK)
+		defer s3xml.FlushResponse(xw)
+		s3xml.EncodeRootStart(xw, "PublicAccessBlockConfiguration")
 		xw.ElemBool("BlockPublicAcls", true)
 		xw.ElemBool("IgnorePublicAcls", true)
 		xw.ElemBool("BlockPublicPolicy", true)
 		xw.ElemBool("RestrictPublicBuckets", true)
 		xw.End("PublicAccessBlockConfiguration")
 	default:
-		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 	}
 }
 
 func writeEmptyConfigElement(w http.ResponseWriter, name string) {
-	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-	defer xmlhelper.FlushXMLWriterResponse(xw)
-	xmlhelper.EncodeS3RootStart(xw, name)
+	xw := s3xml.BeginResponse(w, http.StatusOK)
+	defer s3xml.FlushResponse(xw)
+	s3xml.EncodeRootStart(xw, name)
 	xw.End(name)
 }
 
@@ -260,13 +261,13 @@ type sseByDefaultXML struct {
 func (s *Server) handlePutBucketEncryption(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanCreateBucket(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
 	var doc sseConfigXML
 	if err := xml.NewDecoder(io.LimitReader(r.Body, maxBucketConfigBodyBytes)).Decode(&doc); err != nil || len(doc.Rules) == 0 {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid server-side encryption configuration")
+		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid server-side encryption configuration")
 		return
 	}
 
@@ -292,7 +293,7 @@ func (s *Server) handlePutBucketEncryption(w http.ResponseWriter, r *http.Reques
 		},
 	})
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -301,19 +302,19 @@ func (s *Server) handlePutBucketEncryption(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleGetBucketEncryption(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
 	out, err := s.up.GetBucketEncryption(r.Context(), &s3.GetBucketEncryptionInput{Bucket: &bucket})
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 
-	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-	defer xmlhelper.FlushXMLWriterResponse(xw)
-	xmlhelper.EncodeS3RootStart(xw, "ServerSideEncryptionConfiguration")
+	xw := s3xml.BeginResponse(w, http.StatusOK)
+	defer s3xml.FlushResponse(xw)
+	s3xml.EncodeRootStart(xw, "ServerSideEncryptionConfiguration")
 	if out.ServerSideEncryptionConfiguration != nil {
 		for _, rule := range out.ServerSideEncryptionConfiguration.Rules {
 			xw.Start("Rule")
@@ -337,13 +338,13 @@ func (s *Server) handleGetBucketEncryption(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleDeleteBucketEncryption(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanDeleteBucket(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
 	_, err := s.up.DeleteBucketEncryption(r.Context(), &s3.DeleteBucketEncryptionInput{Bucket: &bucket})
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

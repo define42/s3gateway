@@ -14,7 +14,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	authz "github.com/define42/s3gateway/internal/authz"
-	"github.com/define42/s3gateway/internal/xmlhelper"
+	"github.com/define42/s3gateway/internal/s3http"
+	"github.com/define42/s3gateway/internal/s3xml"
 )
 
 type lifecycleConfigReqXML struct {
@@ -642,13 +643,13 @@ func lifecycleRuleLegacyPrefix(r types.LifecycleRule) *string {
 func (s *Server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanCreateBucket(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
 	cfg, err := decodeLifecycleConfigXML(r.Body)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Invalid lifecycle configuration")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Invalid lifecycle configuration")
 		return
 	}
 
@@ -657,7 +658,7 @@ func (s *Server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r 
 		LifecycleConfiguration: cfg,
 	})
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -666,7 +667,7 @@ func (s *Server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r 
 func (s *Server) handleGetBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -674,13 +675,13 @@ func (s *Server) handleGetBucketLifecycleConfiguration(w http.ResponseWriter, r 
 		Bucket: &bucket,
 	})
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 
 	body, err := encodeLifecycleConfigXML(out.Rules)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 
@@ -692,7 +693,7 @@ func (s *Server) handleGetBucketLifecycleConfiguration(w http.ResponseWriter, r 
 func (s *Server) handleDeleteBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanDeleteBucket(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -700,7 +701,7 @@ func (s *Server) handleDeleteBucketLifecycleConfiguration(w http.ResponseWriter,
 		Bucket: &bucket,
 	})
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

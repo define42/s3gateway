@@ -1,4 +1,4 @@
-package bucketxml
+package s3xml
 
 import (
 	"encoding/xml"
@@ -9,7 +9,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/define42/s3gateway/internal/xmlhelper"
 )
 
 type versioningConfigXML struct {
@@ -19,7 +18,7 @@ type versioningConfigXML struct {
 	MFADelete *string  `xml:"MfaDelete,omitempty"`
 }
 
-func DecodeVersioningConfigXML(r io.Reader) (*types.VersioningConfiguration, error) {
+func DecodeVersioningConfig(r io.Reader) (*types.VersioningConfiguration, error) {
 	var in versioningConfigXML
 	if err := xml.NewDecoder(r).Decode(&in); err != nil {
 		return nil, err
@@ -61,7 +60,7 @@ func DecodeVersioningConfigXML(r io.Reader) (*types.VersioningConfiguration, err
 	return &out, nil
 }
 
-func EncodeVersioningConfigXML(status types.BucketVersioningStatus, mfaDelete types.MFADeleteStatus) ([]byte, error) {
+func EncodeVersioningConfig(status types.BucketVersioningStatus, mfaDelete types.MFADeleteStatus) ([]byte, error) {
 	out := versioningConfigXML{
 		XMLNS: "http://s3.amazonaws.com/doc/2006-03-01/",
 	}
@@ -92,7 +91,7 @@ type tagXMLKV struct {
 	Value *string `xml:"Value"`
 }
 
-func DecodeTaggingXML(r io.Reader) (*types.Tagging, error) {
+func DecodeTagging(r io.Reader) (*types.Tagging, error) {
 	var in taggingXML
 	if err := xml.NewDecoder(r).Decode(&in); err != nil {
 		return nil, err
@@ -117,11 +116,11 @@ func DecodeTaggingXML(r io.Reader) (*types.Tagging, error) {
 	return out, nil
 }
 
-func WriteTaggingXMLResponse(w http.ResponseWriter, status int, tagSet []types.Tag) {
-	xw := xmlhelper.BeginXMLWriterResponse(w, status)
-	defer xmlhelper.FlushXMLWriterResponse(xw)
+func WriteTaggingResponse(w http.ResponseWriter, status int, tagSet []types.Tag) {
+	xw := BeginResponse(w, status)
+	defer FlushResponse(xw)
 
-	xmlhelper.EncodeS3RootStart(xw, "Tagging")
+	EncodeRootStart(xw, "Tagging")
 	xw.Start("TagSet")
 	for _, t := range tagSet {
 		xw.Start("Tag")

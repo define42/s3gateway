@@ -15,10 +15,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	authz "github.com/define42/s3gateway/internal/authz"
-	bucketxml "github.com/define42/s3gateway/internal/bucketxml"
 	"github.com/define42/s3gateway/internal/config"
+	"github.com/define42/s3gateway/internal/s3http"
+	"github.com/define42/s3gateway/internal/s3xml"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
-	"github.com/define42/s3gateway/internal/xmlhelper"
 )
 
 const maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
@@ -38,23 +38,23 @@ type deleteObjectReqItemXML struct {
 func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
-	tagging, err := bucketxml.DecodeTaggingXML(r.Body)
+	tagging, err := s3xml.DecodeTagging(r.Body)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid tagging payload")
+		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid tagging payload")
 		return
 	}
-	payer, err := xmlhelper.ParseRequestPayerHeader(r.Header)
+	payer, err := s3http.ParseRequestPayerHeader(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
 		return
 	}
-	checksumAlgorithm, err := xmlhelper.ParseChecksumAlgorithmHeader(r.Header.Get("x-amz-checksum-algorithm"))
+	checksumAlgorithm, err := s3http.ParseChecksumAlgorithmHeader(r.Header.Get("x-amz-checksum-algorithm"))
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum algorithm")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum algorithm")
 		return
 	}
 
@@ -81,7 +81,7 @@ func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, 
 
 	out, err := s.up.PutObjectTagging(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	if out.VersionId != nil {
@@ -93,12 +93,12 @@ func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, 
 func (s *Server) handleGetObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
-	payer, err := xmlhelper.ParseRequestPayerHeader(r.Header)
+	payer, err := s3http.ParseRequestPayerHeader(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
 		return
 	}
 
@@ -118,19 +118,19 @@ func (s *Server) handleGetObjectTagging(w http.ResponseWriter, r *http.Request, 
 
 	out, err := s.up.GetObjectTagging(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	if out.VersionId != nil {
 		w.Header().Set("x-amz-version-id", *out.VersionId)
 	}
-	bucketxml.WriteTaggingXMLResponse(w, http.StatusOK, out.TagSet)
+	s3xml.WriteTaggingResponse(w, http.StatusOK, out.TagSet)
 }
 
 func (s *Server) handleDeleteObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -147,7 +147,7 @@ func (s *Server) handleDeleteObjectTagging(w http.ResponseWriter, r *http.Reques
 
 	out, err := s.up.DeleteObjectTagging(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	if out.VersionId != nil {
@@ -159,17 +159,17 @@ func (s *Server) handleDeleteObjectTagging(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanDeleteObject(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
 	var req deleteObjectsReqXML
 	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid DeleteObjects payload")
+		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid DeleteObjects payload")
 		return
 	}
 	if len(req.Objects) == 0 || len(req.Objects) > 1000 {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "MalformedXML", "DeleteObjects requires 1..1000 objects")
+		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "DeleteObjects requires 1..1000 objects")
 		return
 	}
 
@@ -177,7 +177,7 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 	for i, obj := range req.Objects {
 		key := strings.TrimSpace(aws.ToString(obj.Key))
 		if key == "" {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "MalformedXML", fmt.Sprintf("DeleteObjects object[%d] missing Key", i))
+			s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", fmt.Sprintf("DeleteObjects object[%d] missing Key", i))
 			return
 		}
 		item := types.ObjectIdentifier{Key: aws.String(key)}
@@ -203,8 +203,8 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 			Quiet:   req.Quiet,
 		},
 	}
-	if bypass, set, err := xmlhelper.ParseOptionalBool(r.Header.Get("x-amz-bypass-governance-retention")); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-bypass-governance-retention header")
+	if bypass, set, err := s3http.ParseOptionalBool(r.Header.Get("x-amz-bypass-governance-retention")); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-bypass-governance-retention header")
 		return
 	} else if set {
 		in.BypassGovernanceRetention = aws.Bool(bypass)
@@ -215,8 +215,8 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
-	if payer, err := xmlhelper.ParseRequestPayerHeader(r.Header); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+	if payer, err := s3http.ParseRequestPayerHeader(r.Header); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
 		return
 	} else if payer != "" {
 		in.RequestPayer = payer
@@ -224,17 +224,17 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 
 	out, err := s.up.DeleteObjects(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	if out.RequestCharged != "" {
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-	defer xmlhelper.FlushXMLWriterResponse(xw)
+	xw := s3xml.BeginResponse(w, http.StatusOK)
+	defer s3xml.FlushResponse(xw)
 
-	xmlhelper.EncodeS3RootStart(xw, "DeleteResult")
+	s3xml.EncodeRootStart(xw, "DeleteResult")
 	for _, d := range out.Deleted {
 		xw.Start("Deleted")
 		if d.Key != nil {
@@ -273,7 +273,7 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -294,13 +294,13 @@ func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 	if v := q.Get("max-keys"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 32)
 		if err != nil || n < 0 {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-keys")
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-keys")
 			return
 		}
 		in.MaxKeys = aws.Int32(int32(n))
 	}
-	if et, err := xmlhelper.ParseEncodingType(q.Get("encoding-type")); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid encoding-type")
+	if et, err := s3http.ParseEncodingType(q.Get("encoding-type")); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid encoding-type")
 		return
 	} else if et != "" {
 		in.EncodingType = et
@@ -309,8 +309,8 @@ func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 	if optionalObjectAttrs == "" {
 		optionalObjectAttrs = strings.TrimSpace(r.Header.Get("x-amz-optional-object-attributes"))
 	}
-	if attrs, err := xmlhelper.ParseOptionalObjectAttributes(optionalObjectAttrs); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid optional-object-attributes")
+	if attrs, err := s3http.ParseOptionalObjectAttributes(optionalObjectAttrs); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid optional-object-attributes")
 		return
 	} else if len(attrs) > 0 {
 		in.OptionalObjectAttributes = attrs
@@ -318,8 +318,8 @@ func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
-	if payer, err := xmlhelper.ParseRequestPayerHeader(r.Header); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+	if payer, err := s3http.ParseRequestPayerHeader(r.Header); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
 		return
 	} else if payer != "" {
 		in.RequestPayer = payer
@@ -327,17 +327,17 @@ func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 
 	out, err := s.up.ListObjectVersions(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	if out.RequestCharged != "" {
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-	defer xmlhelper.FlushXMLWriterResponse(xw)
+	xw := s3xml.BeginResponse(w, http.StatusOK)
+	defer s3xml.FlushResponse(xw)
 
-	xmlhelper.EncodeS3RootStart(xw, "ListVersionsResult")
+	s3xml.EncodeRootStart(xw, "ListVersionsResult")
 	if out.Name != nil {
 		xw.Elem("Name", *out.Name)
 	}
@@ -366,7 +366,7 @@ func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 		xw.Elem("EncodingType", string(out.EncodingType))
 	}
 	xw.ElemBool("IsTruncated", aws.ToBool(out.IsTruncated))
-	xmlhelper.EncodeCommonPrefixes(xw, out.CommonPrefixes)
+	s3xml.EncodeCommonPrefixes(xw, out.CommonPrefixes)
 	for _, v := range out.Versions {
 		xw.Start("Version")
 		if v.Key != nil {
@@ -379,7 +379,7 @@ func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 			xw.ElemBool("IsLatest", *v.IsLatest)
 		}
 		if v.LastModified != nil {
-			xw.Elem("LastModified", xmlhelper.FormatS3Time(*v.LastModified))
+			xw.Elem("LastModified", s3xml.FormatTime(*v.LastModified))
 		}
 		if v.ETag != nil {
 			xw.Elem("ETag", *v.ETag)
@@ -390,8 +390,8 @@ func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 		if v.StorageClass != "" {
 			xw.Elem("StorageClass", string(v.StorageClass))
 		}
-		xmlhelper.EncodeOwnerIDThenDisplayName(xw, v.Owner)
-		xmlhelper.EncodeRestoreStatus(xw, v.RestoreStatus)
+		s3xml.EncodeOwnerIDThenDisplayName(xw, v.Owner)
+		s3xml.EncodeRestoreStatus(xw, v.RestoreStatus)
 		xw.End("Version")
 	}
 	for _, d := range out.DeleteMarkers {
@@ -406,9 +406,9 @@ func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 			xw.ElemBool("IsLatest", *d.IsLatest)
 		}
 		if d.LastModified != nil {
-			xw.Elem("LastModified", xmlhelper.FormatS3Time(*d.LastModified))
+			xw.Elem("LastModified", s3xml.FormatTime(*d.LastModified))
 		}
-		xmlhelper.EncodeOwnerIDThenDisplayName(xw, d.Owner)
+		s3xml.EncodeOwnerIDThenDisplayName(xw, d.Owner)
 		xw.End("DeleteMarker")
 	}
 	xw.End("ListVersionsResult")
@@ -424,11 +424,11 @@ func writeChunkedBodyError(w http.ResponseWriter, err error, body io.ReadCloser)
 			continue
 		}
 		if sigv4.IsTrailerChecksumMismatchError(e) {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "BadDigest", "The aws-chunked payload does not match its trailing checksum")
+			s3xml.WriteError(w, http.StatusBadRequest, "BadDigest", "The aws-chunked payload does not match its trailing checksum")
 			return true
 		}
 		if sigv4.IsChunkSignatureValidationError(e) {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "SignatureDoesNotMatch", "Invalid aws-chunked chunk signature")
+			s3xml.WriteError(w, http.StatusBadRequest, "SignatureDoesNotMatch", "Invalid aws-chunked chunk signature")
 			return true
 		}
 	}
@@ -440,7 +440,7 @@ func writeChunkedBodyError(w http.ResponseWriter, err error, body io.ReadCloser)
 func (s *Server) handleListObjects(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -458,13 +458,13 @@ func (s *Server) handleListObjects(w http.ResponseWriter, r *http.Request, bucke
 	if v := q.Get("max-keys"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 32)
 		if err != nil || n < 0 {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-keys")
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-keys")
 			return
 		}
 		in.MaxKeys = aws.Int32(int32(n))
 	}
-	if et, err := xmlhelper.ParseEncodingType(q.Get("encoding-type")); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid encoding-type")
+	if et, err := s3http.ParseEncodingType(q.Get("encoding-type")); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid encoding-type")
 		return
 	} else if et != "" {
 		in.EncodingType = et
@@ -473,8 +473,8 @@ func (s *Server) handleListObjects(w http.ResponseWriter, r *http.Request, bucke
 	if optionalObjectAttrs == "" {
 		optionalObjectAttrs = strings.TrimSpace(r.Header.Get("x-amz-optional-object-attributes"))
 	}
-	if attrs, err := xmlhelper.ParseOptionalObjectAttributes(optionalObjectAttrs); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid optional-object-attributes")
+	if attrs, err := s3http.ParseOptionalObjectAttributes(optionalObjectAttrs); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid optional-object-attributes")
 		return
 	} else if len(attrs) > 0 {
 		in.OptionalObjectAttributes = attrs
@@ -482,8 +482,8 @@ func (s *Server) handleListObjects(w http.ResponseWriter, r *http.Request, bucke
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
-	if payer, err := xmlhelper.ParseRequestPayerHeader(r.Header); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+	if payer, err := s3http.ParseRequestPayerHeader(r.Header); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
 		return
 	} else if payer != "" {
 		in.RequestPayer = payer
@@ -491,17 +491,17 @@ func (s *Server) handleListObjects(w http.ResponseWriter, r *http.Request, bucke
 
 	out, err := s.up.ListObjects(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	if out.RequestCharged != "" {
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-	defer xmlhelper.FlushXMLWriterResponse(xw)
+	xw := s3xml.BeginResponse(w, http.StatusOK)
+	defer s3xml.FlushResponse(xw)
 
-	xmlhelper.EncodeS3RootStart(xw, "ListBucketResult")
+	s3xml.EncodeRootStart(xw, "ListBucketResult")
 	if out.Name != nil {
 		xw.Elem("Name", *out.Name)
 	}
@@ -524,14 +524,14 @@ func (s *Server) handleListObjects(w http.ResponseWriter, r *http.Request, bucke
 		xw.Elem("EncodingType", string(out.EncodingType))
 	}
 	xw.ElemBool("IsTruncated", aws.ToBool(out.IsTruncated))
-	xmlhelper.EncodeCommonPrefixes(xw, out.CommonPrefixes)
+	s3xml.EncodeCommonPrefixes(xw, out.CommonPrefixes)
 	for _, o := range out.Contents {
 		xw.Start("Contents")
 		if o.Key != nil {
 			xw.Elem("Key", *o.Key)
 		}
 		if o.LastModified != nil {
-			xw.Elem("LastModified", xmlhelper.FormatS3Time(*o.LastModified))
+			xw.Elem("LastModified", s3xml.FormatTime(*o.LastModified))
 		}
 		if o.ETag != nil {
 			xw.Elem("ETag", *o.ETag)
@@ -551,8 +551,8 @@ func (s *Server) handleListObjects(w http.ResponseWriter, r *http.Request, bucke
 		if o.StorageClass != "" {
 			xw.Elem("StorageClass", string(o.StorageClass))
 		}
-		xmlhelper.EncodeOwnerIDThenDisplayName(xw, o.Owner)
-		xmlhelper.EncodeRestoreStatus(xw, o.RestoreStatus)
+		s3xml.EncodeOwnerIDThenDisplayName(xw, o.Owner)
+		s3xml.EncodeRestoreStatus(xw, o.RestoreStatus)
 		xw.End("Contents")
 	}
 	xw.End("ListBucketResult")
@@ -561,7 +561,7 @@ func (s *Server) handleListObjects(w http.ResponseWriter, r *http.Request, bucke
 func (s *Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -582,19 +582,19 @@ func (s *Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 	if v := q.Get("max-keys"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 32)
 		if err != nil || n < 0 {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-keys")
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-keys")
 			return
 		}
 		in.MaxKeys = aws.Int32(int32(n))
 	}
-	if fetchOwner, set, err := xmlhelper.ParseOptionalBool(q.Get("fetch-owner")); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid fetch-owner")
+	if fetchOwner, set, err := s3http.ParseOptionalBool(q.Get("fetch-owner")); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid fetch-owner")
 		return
 	} else if set {
 		in.FetchOwner = aws.Bool(fetchOwner)
 	}
-	if et, err := xmlhelper.ParseEncodingType(q.Get("encoding-type")); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid encoding-type")
+	if et, err := s3http.ParseEncodingType(q.Get("encoding-type")); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid encoding-type")
 		return
 	} else if et != "" {
 		in.EncodingType = et
@@ -603,8 +603,8 @@ func (s *Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 	if optionalObjectAttrs == "" {
 		optionalObjectAttrs = strings.TrimSpace(r.Header.Get("x-amz-optional-object-attributes"))
 	}
-	if attrs, err := xmlhelper.ParseOptionalObjectAttributes(optionalObjectAttrs); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid optional-object-attributes")
+	if attrs, err := s3http.ParseOptionalObjectAttributes(optionalObjectAttrs); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid optional-object-attributes")
 		return
 	} else if len(attrs) > 0 {
 		in.OptionalObjectAttributes = attrs
@@ -612,8 +612,8 @@ func (s *Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
-	if payer, err := xmlhelper.ParseRequestPayerHeader(r.Header); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+	if payer, err := s3http.ParseRequestPayerHeader(r.Header); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
 		return
 	} else if payer != "" {
 		in.RequestPayer = payer
@@ -621,17 +621,17 @@ func (s *Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 
 	out, err := s.up.ListObjectsV2(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	if out.RequestCharged != "" {
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-	defer xmlhelper.FlushXMLWriterResponse(xw)
+	xw := s3xml.BeginResponse(w, http.StatusOK)
+	defer s3xml.FlushResponse(xw)
 
-	xmlhelper.EncodeS3RootStart(xw, "ListBucketResult")
+	s3xml.EncodeRootStart(xw, "ListBucketResult")
 	if out.Name != nil {
 		xw.Elem("Name", *out.Name)
 	}
@@ -660,14 +660,14 @@ func (s *Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 		xw.Elem("NextContinuationToken", *out.NextContinuationToken)
 	}
 	xw.ElemBool("IsTruncated", aws.ToBool(out.IsTruncated))
-	xmlhelper.EncodeCommonPrefixes(xw, out.CommonPrefixes)
+	s3xml.EncodeCommonPrefixes(xw, out.CommonPrefixes)
 	for _, o := range out.Contents {
 		xw.Start("Contents")
 		if o.Key != nil {
 			xw.Elem("Key", *o.Key)
 		}
 		if o.LastModified != nil {
-			xw.Elem("LastModified", xmlhelper.FormatS3Time(*o.LastModified))
+			xw.Elem("LastModified", s3xml.FormatTime(*o.LastModified))
 		}
 		if o.ETag != nil {
 			xw.Elem("ETag", *o.ETag)
@@ -687,8 +687,8 @@ func (s *Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 		if o.StorageClass != "" {
 			xw.Elem("StorageClass", string(o.StorageClass))
 		}
-		xmlhelper.EncodeOwnerIDThenDisplayName(xw, o.Owner)
-		xmlhelper.EncodeRestoreStatus(xw, o.RestoreStatus)
+		s3xml.EncodeOwnerIDThenDisplayName(xw, o.Owner)
+		s3xml.EncodeRestoreStatus(xw, o.RestoreStatus)
 		xw.End("Contents")
 	}
 	xw.End("ListBucketResult")
@@ -697,7 +697,7 @@ func (s *Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, buc
 func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -708,7 +708,7 @@ func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 	if partNumStr := strings.TrimSpace(r.URL.Query().Get("partNumber")); partNumStr != "" {
 		partNum, err := strconv.ParseInt(partNumStr, 10, 32)
 		if err != nil || partNum <= 0 {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid partNumber")
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid partNumber")
 			return
 		}
 		in.PartNumber = aws.Int32(int32(partNum))
@@ -722,27 +722,27 @@ func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 	if ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match")); ifNoneMatch != "" {
 		in.IfNoneMatch = &ifNoneMatch
 	}
-	if t, err := xmlhelper.ParseOptionalHTTPTime(r.Header.Get("If-Modified-Since")); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid If-Modified-Since header")
+	if t, err := s3http.ParseOptionalHTTPTime(r.Header.Get("If-Modified-Since")); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid If-Modified-Since header")
 		return
 	} else if t != nil {
 		in.IfModifiedSince = t
 	}
-	if t, err := xmlhelper.ParseOptionalHTTPTime(r.Header.Get("If-Unmodified-Since")); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid If-Unmodified-Since header")
+	if t, err := s3http.ParseOptionalHTTPTime(r.Header.Get("If-Unmodified-Since")); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid If-Unmodified-Since header")
 		return
 	} else if t != nil {
 		in.IfUnmodifiedSince = t
 	}
-	if mode, err := xmlhelper.ParseChecksumMode(r.Header.Get("x-amz-checksum-mode")); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-checksum-mode header")
+	if mode, err := s3http.ParseChecksumMode(r.Header.Get("x-amz-checksum-mode")); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-checksum-mode header")
 		return
 	} else if mode != "" {
 		in.ChecksumMode = mode
 	}
-	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := xmlhelper.ParseSSECustomerHeaders(r.Header)
+	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := s3http.ParseSSECustomerHeaders(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
 		return
 	}
 	if hasSSEC {
@@ -753,8 +753,8 @@ func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
-	if payer, err := xmlhelper.ParseRequestPayerHeader(r.Header); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+	if payer, err := s3http.ParseRequestPayerHeader(r.Header); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
 		return
 	} else if payer != "" {
 		in.RequestPayer = payer
@@ -776,9 +776,9 @@ func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 		in.ResponseContentType = aws.String(v)
 	}
 	if v := q.Get("response-expires"); v != "" {
-		t, err := xmlhelper.ParseOptionalHTTPTime(v)
+		t, err := s3http.ParseOptionalHTTPTime(v)
 		if err != nil || t == nil {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid response-expires")
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid response-expires")
 			return
 		}
 		in.ResponseExpires = t
@@ -786,7 +786,7 @@ func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 
 	out, err := s.up.GetObject(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	defer out.Body.Close()
@@ -847,7 +847,7 @@ func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 		w.Header().Set("x-amz-server-side-encryption-customer-key-MD5", *out.SSECustomerKeyMD5)
 	}
 	if out.BucketKeyEnabled != nil {
-		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", xmlhelper.BoolString(*out.BucketKeyEnabled))
+		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", s3xml.BoolString(*out.BucketKeyEnabled))
 	}
 	if out.Expiration != nil {
 		w.Header().Set("x-amz-expiration", *out.Expiration)
@@ -905,7 +905,7 @@ func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 func (s *Server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -917,7 +917,7 @@ func (s *Server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket
 	if partNumStr := strings.TrimSpace(q.Get("partNumber")); partNumStr != "" {
 		partNum, err := strconv.ParseInt(partNumStr, 10, 32)
 		if err != nil || partNum <= 0 {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid partNumber")
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid partNumber")
 			return
 		}
 		in.PartNumber = aws.Int32(int32(partNum))
@@ -931,27 +931,27 @@ func (s *Server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket
 	if ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match")); ifNoneMatch != "" {
 		in.IfNoneMatch = &ifNoneMatch
 	}
-	if t, err := xmlhelper.ParseOptionalHTTPTime(r.Header.Get("If-Modified-Since")); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid If-Modified-Since header")
+	if t, err := s3http.ParseOptionalHTTPTime(r.Header.Get("If-Modified-Since")); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid If-Modified-Since header")
 		return
 	} else if t != nil {
 		in.IfModifiedSince = t
 	}
-	if t, err := xmlhelper.ParseOptionalHTTPTime(r.Header.Get("If-Unmodified-Since")); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid If-Unmodified-Since header")
+	if t, err := s3http.ParseOptionalHTTPTime(r.Header.Get("If-Unmodified-Since")); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid If-Unmodified-Since header")
 		return
 	} else if t != nil {
 		in.IfUnmodifiedSince = t
 	}
-	if mode, err := xmlhelper.ParseChecksumMode(r.Header.Get("x-amz-checksum-mode")); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-checksum-mode header")
+	if mode, err := s3http.ParseChecksumMode(r.Header.Get("x-amz-checksum-mode")); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-checksum-mode header")
 		return
 	} else if mode != "" {
 		in.ChecksumMode = mode
 	}
-	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := xmlhelper.ParseSSECustomerHeaders(r.Header)
+	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := s3http.ParseSSECustomerHeaders(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
 		return
 	}
 	if hasSSEC {
@@ -962,8 +962,8 @@ func (s *Server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
-	if payer, err := xmlhelper.ParseRequestPayerHeader(r.Header); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+	if payer, err := s3http.ParseRequestPayerHeader(r.Header); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
 		return
 	} else if payer != "" {
 		in.RequestPayer = payer
@@ -984,9 +984,9 @@ func (s *Server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket
 		in.ResponseContentType = aws.String(v)
 	}
 	if v := q.Get("response-expires"); v != "" {
-		t, err := xmlhelper.ParseOptionalHTTPTime(v)
+		t, err := s3http.ParseOptionalHTTPTime(v)
 		if err != nil || t == nil {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid response-expires")
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid response-expires")
 			return
 		}
 		in.ResponseExpires = t
@@ -994,7 +994,7 @@ func (s *Server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket
 
 	out, err := s.up.HeadObject(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamHeadError(w, err)
+		s3http.WriteUpstreamHeadError(w, err)
 		return
 	}
 
@@ -1035,7 +1035,7 @@ func (s *Server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket
 		w.Header().Set("x-amz-version-id", *out.VersionId)
 	}
 	if out.DeleteMarker != nil {
-		w.Header().Set("x-amz-delete-marker", xmlhelper.BoolString(*out.DeleteMarker))
+		w.Header().Set("x-amz-delete-marker", s3xml.BoolString(*out.DeleteMarker))
 	}
 	if out.StorageClass != "" {
 		w.Header().Set("x-amz-storage-class", string(out.StorageClass))
@@ -1053,7 +1053,7 @@ func (s *Server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket
 		w.Header().Set("x-amz-server-side-encryption-customer-key-MD5", *out.SSECustomerKeyMD5)
 	}
 	if out.BucketKeyEnabled != nil {
-		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", xmlhelper.BoolString(*out.BucketKeyEnabled))
+		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", s3xml.BoolString(*out.BucketKeyEnabled))
 	}
 	if out.Expiration != nil {
 		w.Header().Set("x-amz-expiration", *out.Expiration)
@@ -1157,13 +1157,13 @@ func parseObjectAttributesHeader(h http.Header) ([]types.ObjectAttributes, error
 func (s *Server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
 	attrs, err := parseObjectAttributesHeader(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-object-attributes")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-object-attributes")
 		return
 	}
 
@@ -1178,14 +1178,14 @@ func (s *Server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Reques
 	if mpStr := strings.TrimSpace(r.Header.Get("x-amz-max-parts")); mpStr != "" {
 		mp, err := strconv.ParseInt(mpStr, 10, 32)
 		if err != nil || mp <= 0 {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-max-parts")
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-max-parts")
 			return
 		}
 		in.MaxParts = aws.Int32(int32(mp))
 	}
 	if marker := strings.TrimSpace(r.Header.Get("x-amz-part-number-marker")); marker != "" {
 		if _, err := strconv.Atoi(marker); err != nil {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-part-number-marker")
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-part-number-marker")
 			return
 		}
 		in.PartNumberMarker = &marker
@@ -1193,7 +1193,7 @@ func (s *Server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Reques
 
 	out, err := s.up.GetObjectAttributes(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 
@@ -1207,10 +1207,10 @@ func (s *Server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Reques
 		w.Header().Set("x-amz-delete-marker", strconv.FormatBool(*out.DeleteMarker))
 	}
 
-	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-	defer xmlhelper.FlushXMLWriterResponse(xw)
+	xw := s3xml.BeginResponse(w, http.StatusOK)
+	defer s3xml.FlushResponse(xw)
 
-	xmlhelper.EncodeS3RootStart(xw, "GetObjectAttributesOutput")
+	s3xml.EncodeRootStart(xw, "GetObjectAttributesOutput")
 	if out.ETag != nil {
 		xw.Elem("ETag", *out.ETag)
 	}
@@ -1290,31 +1290,31 @@ func (s *Server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Reques
 func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
 	verifier, err := sigv4.ChunkSignatureVerifierFromRequest(r)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Unsupported or invalid streaming payload signature")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Unsupported or invalid streaming payload signature")
 		return
 	}
 
 	body, cl, err := sigv4.DecodeBodyForS3Write(r, verifier)
 	if err != nil {
 		if errors.Is(err, sigv4.ErrContentLengthRequired) || errors.Is(err, sigv4.ErrMissingDecodedContentLength) || errors.Is(err, sigv4.ErrInvalidDecodedContentLength) {
-			xmlhelper.WriteXMLError(w, http.StatusLengthRequired, "MissingContentLength", "Content-Length required")
+			s3xml.WriteError(w, http.StatusLengthRequired, "MissingContentLength", "Content-Length required")
 			return
 		}
 		if writeChunkedBodyError(w, err, nil) {
 			return
 		}
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Invalid request body")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Invalid request body")
 		return
 	}
 	defer body.Close()
 	if cl > maxSinglePutObjectSize {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "EntityTooLarge", "Use multipart upload for objects larger than 5 GiB")
+		s3xml.WriteError(w, http.StatusBadRequest, "EntityTooLarge", "Use multipart upload for objects larger than 5 GiB")
 		return
 	}
 
@@ -1322,40 +1322,40 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 	meta := extractAmzMeta(r.Header)
 	meta = ensureUploadedByMetadata(meta, UploaderFromRequest(r))
 	if missing := missingRequiredUploadMetadata(meta, s.cfg.RequiredUploadMetadataKeys); len(missing) > 0 {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
 		return
 	}
 	expires, err := parseExpiresHeader(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid Expires header")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid Expires header")
 		return
 	}
 	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
 	ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))
 	if ifMatch != "" && ifNoneMatch != "" {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "If-Match and If-None-Match cannot both be set")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "If-Match and If-None-Match cannot both be set")
 		return
 	}
 
-	sse, err := xmlhelper.ParseSSEWriteHeaders(r.Header)
+	sse, err := s3http.ParseSSEWriteHeaders(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid server-side encryption headers")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid server-side encryption headers")
 		return
 	}
-	checksum, err := xmlhelper.ParseChecksumWriteHeaders(r.Header)
+	checksum, err := s3http.ParseChecksumWriteHeaders(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum headers")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum headers")
 		return
 	}
 	contentMD5 := strings.TrimSpace(r.Header.Get("Content-MD5"))
 	if contentMD5 != "" && checksum.ChecksumAlgorithm != "" {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Content-MD5 cannot be combined with x-amz-checksum-algorithm")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Content-MD5 cannot be combined with x-amz-checksum-algorithm")
 		return
 	}
 	expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner"))
-	payer, err := xmlhelper.ParseRequestPayerHeader(r.Header)
+	payer, err := s3http.ParseRequestPayerHeader(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
 		return
 	}
 
@@ -1412,7 +1412,7 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		if writeChunkedBodyError(w, err, body) {
 			return
 		}
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	if out.ETag != nil {
@@ -1437,7 +1437,7 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		w.Header().Set("x-amz-server-side-encryption-customer-key-MD5", *out.SSECustomerKeyMD5)
 	}
 	if out.BucketKeyEnabled != nil {
-		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", xmlhelper.BoolString(*out.BucketKeyEnabled))
+		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", s3xml.BoolString(*out.BucketKeyEnabled))
 	}
 	if out.Expiration != nil {
 		w.Header().Set("x-amz-expiration", *out.Expiration)
@@ -1469,82 +1469,82 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
 	copySource := strings.TrimSpace(r.Header.Get("x-amz-copy-source"))
 	if copySource == "" {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "x-amz-copy-source is required")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "x-amz-copy-source is required")
 		return
 	}
-	sourceBucket, err := xmlhelper.SourceBucketFromCopySource(copySource)
+	sourceBucket, err := s3http.SourceBucketFromCopySource(copySource)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "invalid x-amz-copy-source")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "invalid x-amz-copy-source")
 		return
 	}
 	if !authz.CanRead(rules, sourceBucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
 	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
 	ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))
 	if ifMatch != "" && ifNoneMatch != "" {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "If-Match and If-None-Match cannot both be set")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "If-Match and If-None-Match cannot both be set")
 		return
 	}
 
-	sse, err := xmlhelper.ParseSSEWriteHeaders(r.Header)
+	sse, err := s3http.ParseSSEWriteHeaders(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid server-side encryption headers")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid server-side encryption headers")
 		return
 	}
-	copySSECAlgo, copySSECKey, copySSECMD5, hasCopySSEC, err := xmlhelper.ParseCopySourceSSECustomerHeaders(r.Header)
+	copySSECAlgo, copySSECKey, copySSECMD5, hasCopySSEC, err := s3http.ParseCopySourceSSECustomerHeaders(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source SSE-C headers")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source SSE-C headers")
 		return
 	}
-	checksumAlgorithm, err := xmlhelper.ParseChecksumAlgorithmHeader(r.Header.Get("x-amz-checksum-algorithm"))
+	checksumAlgorithm, err := s3http.ParseChecksumAlgorithmHeader(r.Header.Get("x-amz-checksum-algorithm"))
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum algorithm")
-		return
-	}
-
-	metadataDirective, err := xmlhelper.ParseMetadataDirective(r.Header.Get("x-amz-metadata-directive"))
-	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-metadata-directive header")
-		return
-	}
-	taggingDirective, err := xmlhelper.ParseTaggingDirective(r.Header.Get("x-amz-tagging-directive"))
-	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-tagging-directive header")
-		return
-	}
-	storageClass, err := xmlhelper.ParseStorageClass(r.Header.Get("x-amz-storage-class"))
-	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-storage-class header")
-		return
-	}
-	acl, err := xmlhelper.ParseObjectCannedACL(r.Header.Get("x-amz-acl"))
-	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-acl header")
-		return
-	}
-	payer, err := xmlhelper.ParseRequestPayerHeader(r.Header)
-	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum algorithm")
 		return
 	}
 
-	copyIfMatch, copyIfNoneMatch, copyIfModifiedSince, copyIfUnmodifiedSince, err := xmlhelper.ParseCopySourceConditionalHeaders(r.Header)
+	metadataDirective, err := s3http.ParseMetadataDirective(r.Header.Get("x-amz-metadata-directive"))
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source conditional header")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-metadata-directive header")
+		return
+	}
+	taggingDirective, err := s3http.ParseTaggingDirective(r.Header.Get("x-amz-tagging-directive"))
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-tagging-directive header")
+		return
+	}
+	storageClass, err := s3http.ParseStorageClass(r.Header.Get("x-amz-storage-class"))
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-storage-class header")
+		return
+	}
+	acl, err := s3http.ParseObjectCannedACL(r.Header.Get("x-amz-acl"))
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-acl header")
+		return
+	}
+	payer, err := s3http.ParseRequestPayerHeader(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	}
+
+	copyIfMatch, copyIfNoneMatch, copyIfModifiedSince, copyIfUnmodifiedSince, err := s3http.ParseCopySourceConditionalHeaders(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source conditional header")
 		return
 	}
 	expires, err := parseExpiresHeader(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid Expires header")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid Expires header")
 		return
 	}
 
@@ -1558,7 +1558,7 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 	if metadataDirective == types.MetadataDirectiveReplace {
 		meta = ensureUploadedByMetadata(meta, UploaderFromRequest(r))
 		if missing := missingRequiredUploadMetadata(meta, s.cfg.RequiredUploadMetadataKeys); len(missing) > 0 {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Missing required metadata header(s): "+strings.Join(missing, ", "))
 			return
 		}
 	}
@@ -1649,7 +1649,7 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 
 	out, err := s.up.CopyObject(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 
@@ -1675,7 +1675,7 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 		w.Header().Set("x-amz-server-side-encryption-customer-key-MD5", *out.SSECustomerKeyMD5)
 	}
 	if out.BucketKeyEnabled != nil {
-		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", xmlhelper.BoolString(*out.BucketKeyEnabled))
+		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", s3xml.BoolString(*out.BucketKeyEnabled))
 	}
 	if out.Expiration != nil {
 		w.Header().Set("x-amz-expiration", *out.Expiration)
@@ -1684,13 +1684,13 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-	defer xmlhelper.FlushXMLWriterResponse(xw)
+	xw := s3xml.BeginResponse(w, http.StatusOK)
+	defer s3xml.FlushResponse(xw)
 
-	xmlhelper.EncodeS3RootStart(xw, "CopyObjectResult")
+	s3xml.EncodeRootStart(xw, "CopyObjectResult")
 	if out.CopyObjectResult != nil {
 		if out.CopyObjectResult.LastModified != nil {
-			xw.Elem("LastModified", xmlhelper.FormatS3Time(*out.CopyObjectResult.LastModified))
+			xw.Elem("LastModified", s3xml.FormatTime(*out.CopyObjectResult.LastModified))
 		}
 		if out.CopyObjectResult.ETag != nil {
 			xw.Elem("ETag", *out.CopyObjectResult.ETag)
@@ -1720,43 +1720,43 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 func (s *Server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string, partNumber int32) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
 	copySource := strings.TrimSpace(r.Header.Get("x-amz-copy-source"))
 	if copySource == "" {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "x-amz-copy-source is required")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "x-amz-copy-source is required")
 		return
 	}
-	sourceBucket, err := xmlhelper.SourceBucketFromCopySource(copySource)
+	sourceBucket, err := s3http.SourceBucketFromCopySource(copySource)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "invalid x-amz-copy-source")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "invalid x-amz-copy-source")
 		return
 	}
 	if !authz.CanRead(rules, sourceBucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
-	copyIfMatch, copyIfNoneMatch, copyIfModifiedSince, copyIfUnmodifiedSince, err := xmlhelper.ParseCopySourceConditionalHeaders(r.Header)
+	copyIfMatch, copyIfNoneMatch, copyIfModifiedSince, copyIfUnmodifiedSince, err := s3http.ParseCopySourceConditionalHeaders(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source conditional header")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source conditional header")
 		return
 	}
-	copySSECAlgo, copySSECKey, copySSECMD5, hasCopySSEC, err := xmlhelper.ParseCopySourceSSECustomerHeaders(r.Header)
+	copySSECAlgo, copySSECKey, copySSECMD5, hasCopySSEC, err := s3http.ParseCopySourceSSECustomerHeaders(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source SSE-C headers")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source SSE-C headers")
 		return
 	}
-	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := xmlhelper.ParseSSECustomerHeaders(r.Header)
+	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := s3http.ParseSSECustomerHeaders(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
 		return
 	}
-	payer, err := xmlhelper.ParseRequestPayerHeader(r.Header)
+	payer, err := s3http.ParseRequestPayerHeader(r.Header)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
 		return
 	}
 
@@ -1804,7 +1804,7 @@ func (s *Server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bu
 
 	out, err := s.up.UploadPartCopy(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 
@@ -1824,19 +1824,19 @@ func (s *Server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bu
 		w.Header().Set("x-amz-server-side-encryption-customer-key-MD5", *out.SSECustomerKeyMD5)
 	}
 	if out.BucketKeyEnabled != nil {
-		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", xmlhelper.BoolString(*out.BucketKeyEnabled))
+		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", s3xml.BoolString(*out.BucketKeyEnabled))
 	}
 	if out.RequestCharged != "" {
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
-	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-	defer xmlhelper.FlushXMLWriterResponse(xw)
+	xw := s3xml.BeginResponse(w, http.StatusOK)
+	defer s3xml.FlushResponse(xw)
 
-	xmlhelper.EncodeS3RootStart(xw, "CopyPartResult")
+	s3xml.EncodeRootStart(xw, "CopyPartResult")
 	if out.CopyPartResult != nil {
 		if out.CopyPartResult.LastModified != nil {
-			xw.Elem("LastModified", xmlhelper.FormatS3Time(*out.CopyPartResult.LastModified))
+			xw.Elem("LastModified", s3xml.FormatTime(*out.CopyPartResult.LastModified))
 		}
 		if out.CopyPartResult.ETag != nil {
 			xw.Elem("ETag", *out.CopyPartResult.ETag)
@@ -1863,7 +1863,7 @@ func (s *Server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bu
 func (s *Server) handleDeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanDeleteObject(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -1880,14 +1880,14 @@ func (s *Server) handleDeleteObject(w http.ResponseWriter, r *http.Request, buck
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
-	if bypass, set, err := xmlhelper.ParseOptionalBool(r.Header.Get("x-amz-bypass-governance-retention")); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-bypass-governance-retention header")
+	if bypass, set, err := s3http.ParseOptionalBool(r.Header.Get("x-amz-bypass-governance-retention")); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-bypass-governance-retention header")
 		return
 	} else if set {
 		in.BypassGovernanceRetention = aws.Bool(bypass)
 	}
-	if payer, err := xmlhelper.ParseRequestPayerHeader(r.Header); err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+	if payer, err := s3http.ParseRequestPayerHeader(r.Header); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
 		return
 	} else if payer != "" {
 		in.RequestPayer = payer
@@ -1895,11 +1895,11 @@ func (s *Server) handleDeleteObject(w http.ResponseWriter, r *http.Request, buck
 
 	out, err := s.up.DeleteObject(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	if out.DeleteMarker != nil {
-		w.Header().Set("x-amz-delete-marker", xmlhelper.BoolString(*out.DeleteMarker))
+		w.Header().Set("x-amz-delete-marker", s3xml.BoolString(*out.DeleteMarker))
 	}
 	if out.VersionId != nil {
 		w.Header().Set("x-amz-version-id", *out.VersionId)

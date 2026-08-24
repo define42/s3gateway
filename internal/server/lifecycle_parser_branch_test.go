@@ -1,69 +1,13 @@
 package server
 
 import (
-	"net/http"
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/define42/s3gateway/internal/xmlhelper"
 )
-
-func TestParseMetadataDirective(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		want    types.MetadataDirective
-		wantErr bool
-	}{
-		{name: "empty", input: "", want: "", wantErr: false},
-		{name: "copy", input: "copy", want: types.MetadataDirective("COPY"), wantErr: false},
-		{name: "replace trimmed case insensitive", input: "  RePlAcE ", want: types.MetadataDirective("REPLACE"), wantErr: false},
-		{name: "unsupported", input: "merge", want: "", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := xmlhelper.ParseMetadataDirective(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("xmlhelper.ParseMetadataDirective() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if err == nil && got != tt.want {
-				t.Fatalf("xmlhelper.ParseMetadataDirective() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestParseOptionalObjectAttributesMatrix(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		wantLen int
-		wantErr bool
-	}{
-		{name: "empty", input: "", wantLen: 0, wantErr: false},
-		{name: "single restore status", input: "RestoreStatus", wantLen: 1, wantErr: false},
-		{name: "duplicate and whitespace", input: " RestoreStatus , RestoreStatus ", wantLen: 1, wantErr: false},
-		{name: "only commas and whitespace", input: " ,  , ", wantLen: 0, wantErr: true},
-		{name: "unsupported", input: "Checksum", wantLen: 0, wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := xmlhelper.ParseOptionalObjectAttributes(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("xmlhelper.ParseOptionalObjectAttributes() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if err == nil && len(got) != tt.wantLen {
-				t.Fatalf("xmlhelper.ParseOptionalObjectAttributes() len = %d, want %d", len(got), tt.wantLen)
-			}
-		})
-	}
-}
 
 func TestDecodeLifecycleFilterCoverage(t *testing.T) {
 	t.Run("nil filter", func(t *testing.T) {
@@ -244,31 +188,6 @@ func TestLifecycleRuleLegacyPrefixReflectionPath(t *testing.T) {
 	}
 	if *got != "legacy-prefix" {
 		t.Fatalf("lifecycleRuleLegacyPrefix() = %q, want %q", *got, "legacy-prefix")
-	}
-}
-
-func TestParseOptionalHTTPTime(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		wantNil bool
-		wantErr bool
-	}{
-		{name: "empty", input: "", wantNil: true, wantErr: false},
-		{name: "invalid", input: "not-a-time", wantNil: true, wantErr: true},
-		{name: "valid", input: time.Now().UTC().Format(http.TimeFormat), wantNil: false, wantErr: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := xmlhelper.ParseOptionalHTTPTime(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("xmlhelper.ParseOptionalHTTPTime() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if (got == nil) != tt.wantNil {
-				t.Fatalf("xmlhelper.ParseOptionalHTTPTime() nil = %v, want %v", got == nil, tt.wantNil)
-			}
-		})
 	}
 }
 

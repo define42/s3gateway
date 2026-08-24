@@ -1,4 +1,4 @@
-package upstream_test
+package s3http_test
 
 import (
 	"errors"
@@ -8,7 +8,7 @@ import (
 
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
-	"github.com/define42/s3gateway/internal/xmlhelper"
+	"github.com/define42/s3gateway/internal/s3http"
 )
 
 type stubAPIError struct {
@@ -110,7 +110,7 @@ func TestWriteUpstreamHeadError(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
-			xmlhelper.WriteUpstreamHeadError(rr, tc.err)
+			s3http.WriteUpstreamHeadError(rr, tc.err)
 
 			if rr.Code != tc.wantStatus {
 				t.Fatalf("status mismatch: got=%d want=%d", rr.Code, tc.wantStatus)

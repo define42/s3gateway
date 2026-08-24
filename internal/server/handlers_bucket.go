@@ -7,8 +7,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	authz "github.com/define42/s3gateway/internal/authz"
-	bucketxml "github.com/define42/s3gateway/internal/bucketxml"
-	"github.com/define42/s3gateway/internal/xmlhelper"
+	"github.com/define42/s3gateway/internal/s3http"
+	"github.com/define42/s3gateway/internal/s3xml"
 )
 
 func (s *Server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
@@ -16,14 +16,14 @@ func (s *Server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
 
 	out, err := s.up.ListBuckets(r.Context(), &s3.ListBucketsInput{})
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 
-	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-	defer xmlhelper.FlushXMLWriterResponse(xw)
+	xw := s3xml.BeginResponse(w, http.StatusOK)
+	defer s3xml.FlushResponse(xw)
 
-	xmlhelper.EncodeS3RootStart(xw, "ListAllMyBucketsResult")
+	s3xml.EncodeRootStart(xw, "ListAllMyBucketsResult")
 	xw.Start("Buckets")
 	for _, bk := range out.Buckets {
 		if bk.Name == nil {
@@ -42,12 +42,12 @@ func (s *Server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCreateBucket(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanCreateBucket(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 	_, err := s.up.CreateBucket(r.Context(), &s3.CreateBucketInput{Bucket: &bucket})
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -56,7 +56,7 @@ func (s *Server) handleCreateBucket(w http.ResponseWriter, r *http.Request, buck
 func (s *Server) handleHeadBucket(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -66,7 +66,7 @@ func (s *Server) handleHeadBucket(w http.ResponseWriter, r *http.Request, bucket
 	}
 	out, err := s.up.HeadBucket(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamHeadError(w, err)
+		s3http.WriteUpstreamHeadError(w, err)
 		return
 	}
 
@@ -83,7 +83,7 @@ func (s *Server) handleHeadBucket(w http.ResponseWriter, r *http.Request, bucket
 		w.Header().Set("x-amz-bucket-location-type", string(out.BucketLocationType))
 	}
 	if out.AccessPointAlias != nil {
-		w.Header().Set("x-amz-access-point-alias", xmlhelper.BoolString(*out.AccessPointAlias))
+		w.Header().Set("x-amz-access-point-alias", s3xml.BoolString(*out.AccessPointAlias))
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -94,7 +94,7 @@ func (s *Server) handleGetBucketLocation(w http.ResponseWriter, r *http.Request,
 	// rclone call GetBucketLocation before read *and* write operations, so
 	// requiring `r` would break write-only users.
 	if authz.BucketPerm(rules, bucket) == authz.PermNone {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -104,17 +104,17 @@ func (s *Server) handleGetBucketLocation(w http.ResponseWriter, r *http.Request,
 	}
 	out, err := s.up.GetBucketLocation(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 
-	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
-	defer xmlhelper.FlushXMLWriterResponse(xw)
+	xw := s3xml.BeginResponse(w, http.StatusOK)
+	defer s3xml.FlushResponse(xw)
 
-	xmlhelper.EncodeS3RootStart(xw, "LocationConstraint")
+	s3xml.EncodeRootStart(xw, "LocationConstraint")
 	// An empty LocationConstraint means us-east-1, matching AWS behavior.
 	if loc := string(out.LocationConstraint); loc != "" {
-		xw.RawString(xmlhelper.XMLEscape(loc))
+		xw.RawString(s3xml.Escape(loc))
 	}
 	xw.End("LocationConstraint")
 }
@@ -122,7 +122,7 @@ func (s *Server) handleGetBucketLocation(w http.ResponseWriter, r *http.Request,
 func (s *Server) handleDeleteBucket(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanDeleteBucket(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -132,7 +132,7 @@ func (s *Server) handleDeleteBucket(w http.ResponseWriter, r *http.Request, buck
 	}
 	_, err := s.up.DeleteBucket(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -141,13 +141,13 @@ func (s *Server) handleDeleteBucket(w http.ResponseWriter, r *http.Request, buck
 func (s *Server) handlePutBucketVersioning(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
-	cfg, err := bucketxml.DecodeVersioningConfigXML(r.Body)
+	cfg, err := s3xml.DecodeVersioningConfig(r.Body)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid versioning configuration")
+		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid versioning configuration")
 		return
 	}
 	in := &s3.PutBucketVersioningInput{
@@ -165,7 +165,7 @@ func (s *Server) handlePutBucketVersioning(w http.ResponseWriter, r *http.Reques
 	}
 	_, err = s.up.PutBucketVersioning(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -174,7 +174,7 @@ func (s *Server) handlePutBucketVersioning(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleGetBucketVersioning(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -184,13 +184,13 @@ func (s *Server) handleGetBucketVersioning(w http.ResponseWriter, r *http.Reques
 	}
 	out, err := s.up.GetBucketVersioning(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 
-	body, err := bucketxml.EncodeVersioningConfigXML(out.Status, out.MFADelete)
+	body, err := s3xml.EncodeVersioningConfig(out.Status, out.MFADelete)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/xml")
@@ -201,18 +201,18 @@ func (s *Server) handleGetBucketVersioning(w http.ResponseWriter, r *http.Reques
 func (s *Server) handlePutBucketTagging(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
-	tagging, err := bucketxml.DecodeTaggingXML(r.Body)
+	tagging, err := s3xml.DecodeTagging(r.Body)
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "MalformedXML", "Invalid tagging payload")
+		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid tagging payload")
 		return
 	}
-	checksumAlgorithm, err := xmlhelper.ParseChecksumAlgorithmHeader(r.Header.Get("x-amz-checksum-algorithm"))
+	checksumAlgorithm, err := s3http.ParseChecksumAlgorithmHeader(r.Header.Get("x-amz-checksum-algorithm"))
 	if err != nil {
-		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum algorithm")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum algorithm")
 		return
 	}
 
@@ -231,7 +231,7 @@ func (s *Server) handlePutBucketTagging(w http.ResponseWriter, r *http.Request, 
 	}
 
 	if _, err := s.up.PutBucketTagging(r.Context(), in); err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -240,7 +240,7 @@ func (s *Server) handlePutBucketTagging(w http.ResponseWriter, r *http.Request, 
 func (s *Server) handleGetBucketTagging(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanRead(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -253,16 +253,16 @@ func (s *Server) handleGetBucketTagging(w http.ResponseWriter, r *http.Request, 
 
 	out, err := s.up.GetBucketTagging(r.Context(), in)
 	if err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
-	bucketxml.WriteTaggingXMLResponse(w, http.StatusOK, out.TagSet)
+	s3xml.WriteTaggingResponse(w, http.StatusOK, out.TagSet)
 }
 
 func (s *Server) handleDeleteBucketTagging(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
-		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
 
@@ -274,7 +274,7 @@ func (s *Server) handleDeleteBucketTagging(w http.ResponseWriter, r *http.Reques
 	}
 
 	if _, err := s.up.DeleteBucketTagging(r.Context(), in); err != nil {
-		xmlhelper.WriteUpstreamError(w, err)
+		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

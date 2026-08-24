@@ -18,8 +18,8 @@ import (
 	"github.com/define42/s3gateway/internal/groupcache"
 	ldapinternal "github.com/define42/s3gateway/internal/ldap"
 	"github.com/define42/s3gateway/internal/s3credentials"
+	"github.com/define42/s3gateway/internal/s3xml"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
-	"github.com/define42/s3gateway/internal/xmlhelper"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -116,28 +116,28 @@ func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Han
 
 		auth, err := sigv4.ParseSigV4Authorization(r)
 		if err != nil || auth.Service != "s3" {
-			xmlhelper.WriteXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
+			s3xml.WriteError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
 		if err := sigv4.ValidateSigV4RequestTime(auth, time.Now(), s.cfg.SigV4MaxSkew); err != nil {
-			xmlhelper.WriteXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
+			s3xml.WriteError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
 
 		upn, pass, secretKey, err := s3credentials.Decode(auth.AccessKey, s.cfg.S3GatewayPrivateX25519Key)
 		if err != nil {
-			xmlhelper.WriteXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
+			s3xml.WriteError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
 
 		if err := sigv4.VerifySigV4(r, auth, secretKey); err != nil {
-			xmlhelper.WriteXMLError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
+			s3xml.WriteError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
 
 		grps, err := s.GroupsForCredentials(upn, pass)
 		if err != nil {
-			xmlhelper.WriteXMLError(w, http.StatusUnauthorized, "AccessDenied", "Bad credentials")
+			s3xml.WriteError(w, http.StatusUnauthorized, "AccessDenied", "Bad credentials")
 			return
 		}
 
@@ -249,7 +249,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if sub := firstUnsupportedSubresource(r.URL.Query()); sub != "" {
-		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented: "+sub)
+		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented: "+sub)
 		return
 	}
 
@@ -260,7 +260,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	rest := strings.TrimPrefix(p, "/")
 	if rest == "" {
-		xmlhelper.WriteXMLError(w, http.StatusNotFound, "NoSuchKey", "Not Found")
+		s3xml.WriteError(w, http.StatusNotFound, "NoSuchKey", "Not Found")
 		return
 	}
 	parts := strings.SplitN(rest, "/", 2)
@@ -284,7 +284,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.handleDeleteBucketLifecycleConfiguration(w, r, bucket)
 				return
 			default:
-				xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+				s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 				return
 			}
 		}
@@ -297,7 +297,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.handleGetBucketVersioning(w, r, bucket)
 				return
 			default:
-				xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+				s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 				return
 			}
 		}
@@ -313,7 +313,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.handleDeleteBucketTagging(w, r, bucket)
 				return
 			default:
-				xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+				s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 				return
 			}
 		}
@@ -326,7 +326,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.handlePutBucketACL(w, r, bucket)
 				return
 			default:
-				xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+				s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 				return
 			}
 		}
@@ -342,7 +342,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.handleDeleteBucketEncryption(w, r, bucket)
 				return
 			default:
-				xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+				s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 				return
 			}
 		}
@@ -354,7 +354,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.handleBucketConfigRead(w, r, bucket, cfgKey)
 				return
 			}
-			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 			return
 		}
 		if _, ok := q["delete"]; ok {
@@ -362,7 +362,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.handleDeleteObjects(w, r, bucket)
 				return
 			}
-			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 			return
 		}
 		if _, ok := q["location"]; ok {
@@ -370,7 +370,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.handleGetBucketLocation(w, r, bucket)
 				return
 			}
-			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 			return
 		}
 		if _, ok := q["versions"]; ok {
@@ -378,7 +378,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.handleListObjectVersions(w, r, bucket)
 				return
 			}
-			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 			return
 		}
 		if _, ok := q["uploads"]; ok {
@@ -386,7 +386,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				s.handleListMultipartUploads(w, r, bucket)
 				return
 			}
-			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 			return
 		}
 		if r.Method == http.MethodPut {
@@ -404,7 +404,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			if lt := q.Get("list-type"); lt != "" {
 				if lt != "2" {
-					xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "Invalid List Type")
+					s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "Invalid List Type")
 					return
 				}
 				s.handleListObjectsV2(w, r, bucket)
@@ -413,7 +413,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.handleListObjects(w, r, bucket)
 			return
 		}
-		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 		return
 	}
 
@@ -423,7 +423,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	for subresource := range q {
 		if _, ok := bucketOnlySubresources[subresource]; ok {
-			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented: "+subresource)
+			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented: "+subresource)
 			return
 		}
 	}
@@ -437,7 +437,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.handlePutObjectACL(w, r, bucket, key)
 			return
 		default:
-			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 			return
 		}
 	}
@@ -454,7 +454,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.handleDeleteObjectTagging(w, r, bucket, key)
 			return
 		default:
-			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 			return
 		}
 	}
@@ -465,7 +465,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.handleCreateMultipart(w, r, bucket, key)
 			return
 		}
-		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 		return
 	}
 	if _, ok := q["attributes"]; ok {
@@ -473,7 +473,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.handleGetObjectAttributes(w, r, bucket, key)
 			return
 		}
-		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 		return
 	}
 	if uploadID := q.Get("uploadId"); uploadID != "" {
@@ -485,7 +485,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			pnStr := q.Get("partNumber")
 			pn, err := strconv.ParseInt(pnStr, 10, 32)
 			if err != nil || pn <= 0 {
-				xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "partNumber required")
+				s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "partNumber required")
 				return
 			}
 			partNum := int32(pn)
@@ -502,7 +502,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.handleAbortMultipart(w, r, bucket, key, uploadID)
 			return
 		default:
-			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 			return
 		}
 	}
@@ -525,7 +525,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleDeleteObject(w, r, bucket, key)
 		return
 	default:
-		xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 		return
 	}
 }
