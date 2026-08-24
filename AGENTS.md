@@ -8,7 +8,7 @@ Example clients are in `example_s3_client/python/` and `example_s3_client/java/`
 Most tests are root-level `*_test.go` files, with dedicated integration and benchmark files such as `main_integration_test.go` and `main_benchmark_test.go`.
 
 ## Build, Test, and Development Commands
-- `go run .`: run the gateway locally.
+- `go run ./cmd/s3gateway`: run the gateway locally.
 - `make lint`: run `golangci-lint`.
 - `make test`: run all tests with package-wide coverage (`go test ./... -coverpkg=./...`).
 - `go test -race ./...`: run race detection.

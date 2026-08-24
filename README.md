@@ -162,7 +162,7 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 ## Run
 
 ```bash
-go run .
+go run ./cmd/s3gateway
 ```
 
 The server supports graceful shutdown on `SIGINT`/`SIGTERM`.
@@ -175,7 +175,7 @@ Minimal setup:
 
 ```bash
 export ACME_DOMAINS="s3gw.example.com"
-go run .
+go run ./cmd/s3gateway
 ```
 
 Optional overrides:

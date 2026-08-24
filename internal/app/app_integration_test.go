@@ -1,4 +1,4 @@
-package main_test
+package app_test
 
 import (
 	"bytes"
@@ -18,8 +18,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
-	s3gateway "github.com/define42/s3gateway"
+	gatewayapp "github.com/define42/s3gateway/internal/app"
 	"github.com/define42/s3gateway/internal/s3credentials"
+	"github.com/define42/s3gateway/internal/testutil"
 	minio "github.com/minio/minio-go/v7"
 	minioCredentials "github.com/minio/minio-go/v7/pkg/credentials"
 )
@@ -28,11 +29,11 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	ldapCfgPath := s3gateway.WriteGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := s3gateway.StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := testutil.StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
 	defer stopLDAP()
 
-	minioURL, stopMinio := s3gateway.StartMinio(ctx, t, "minioadmin", "minioadmin")
+	minioURL, stopMinio := testutil.StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
 	t.Setenv("LISTEN_ADDR", "127.0.0.1:0")
@@ -58,7 +59,7 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	}
 	t.Setenv("S3GATEWAY_PRIVATE_X25519_KEY", s3gatewayPrivateKey)
 
-	httpSrv, cfg, err := s3gateway.BootS3Gateway()
+	httpSrv, cfg, err := gatewayapp.Boot()
 	if err != nil {
 		t.Fatalf("bootS3Gateway returned error: %v", err)
 	}
@@ -145,9 +146,9 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	rwAccessKey, rwSecretKey, _ := s3credentials.GenerateKeysBase64Encoded("testuser", "dogood")
 	roAccessKey, roSecretKey, _ := s3credentials.GenerateKeysX25519("readonly", "dogood", s3gatewayPublicKey)
 
-	rwClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, rwSecretKey)
-	roClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", roAccessKey, roSecretKey)
-	upstreamClient := s3gateway.NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
+	rwClient := testutil.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, rwSecretKey)
+	roClient := testutil.NewS3Client(t, ctx, gatewayURL, "us-east-1", roAccessKey, roSecretKey)
+	upstreamClient := testutil.NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 	parsedGatewayURL, err := url.Parse(gatewayURL)
 	if err != nil {
 		t.Fatalf("parse gateway url %q: %v", gatewayURL, err)

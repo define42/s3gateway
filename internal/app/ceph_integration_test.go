@@ -1,4 +1,4 @@
-package main_test
+package app_test
 
 import (
 	"bytes"
@@ -17,8 +17,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
-	s3gateway "github.com/define42/s3gateway"
+	gatewayapp "github.com/define42/s3gateway/internal/app"
 	"github.com/define42/s3gateway/internal/s3credentials"
+	"github.com/define42/s3gateway/internal/testutil"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -184,8 +185,8 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	bucket := fmt.Sprintf("team2-cephgw-%d", time.Now().UnixNano())
 	createCephBucketViaS3cmd(ctx, t, container, bucket)
 
-	ldapCfgPath := s3gateway.WriteGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := s3gateway.StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := testutil.StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
 	defer stopLDAP()
 
 	t.Setenv("LISTEN_ADDR", "127.0.0.1:0")
@@ -198,7 +199,7 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	t.Setenv("S3_SECRET_KEY", upstreamSecretKey)
 	t.Setenv("S3_FORCE_PATH_STYLE", "true")
 
-	httpSrv, _, err := s3gateway.BootS3Gateway()
+	httpSrv, _, err := gatewayapp.Boot()
 	if err != nil {
 		t.Fatalf("boot s3gateway with ceph upstream: %v", err)
 	}
@@ -234,7 +235,7 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate gateway rw credentials: %v", err)
 	}
-	gatewayClient := s3gateway.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, rwSecretKey)
+	gatewayClient := testutil.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, rwSecretKey)
 
 	createdBucket := fmt.Sprintf("team2-cephgw-created-%d", time.Now().UnixNano())
 	if _, err := gatewayClient.CreateBucket(ctx, &s3.CreateBucketInput{

@@ -1,4 +1,4 @@
-package main_test
+package app_test
 
 import (
 	"bytes"
@@ -18,8 +18,9 @@ import (
 	"github.com/minio/minio-go/v7/pkg/lifecycle"
 	"github.com/minio/minio-go/v7/pkg/tags"
 
-	s3gateway "github.com/define42/s3gateway"
+	gatewayapp "github.com/define42/s3gateway/internal/app"
 	"github.com/define42/s3gateway/internal/s3credentials"
+	"github.com/define42/s3gateway/internal/testutil"
 )
 
 // TestMinioClientIntegration validates that the s3gateway works correctly when
@@ -29,11 +30,11 @@ func TestMinioClientIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	ldapCfgPath := s3gateway.WriteGatewayGlauthConfig(t)
-	ldapURL, stopLDAP := s3gateway.StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
+	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)
+	ldapURL, stopLDAP := testutil.StartGlauthWithConfig(ctx, t, ldapCfgPath, "ldap")
 	defer stopLDAP()
 
-	minioURL, stopMinio := s3gateway.StartMinio(ctx, t, "minioadmin", "minioadmin")
+	minioURL, stopMinio := testutil.StartMinio(ctx, t, "minioadmin", "minioadmin")
 	defer stopMinio()
 
 	t.Setenv("LISTEN_ADDR", "127.0.0.1:0")
@@ -46,7 +47,7 @@ func TestMinioClientIntegration(t *testing.T) {
 	t.Setenv("S3_SECRET_KEY", "minioadmin")
 	t.Setenv("S3_FORCE_PATH_STYLE", "true")
 
-	httpSrv, _, err := s3gateway.BootS3Gateway()
+	httpSrv, _, err := gatewayapp.Boot()
 	if err != nil {
 		t.Fatalf("boot s3gateway: %v", err)
 	}
@@ -400,7 +401,7 @@ func TestMinioClientIntegration(t *testing.T) {
 	// Test multipart upload: set PartSize below object size to force multipart.
 	// S3 requires parts to be at least 5 MiB except for the final part.
 	mpKey := "minioclient/multipart.bin"
-	const mpPartSize = 5 * 1024 * 1024               // 5 MiB — minimum S3 non-final part size
+	const mpPartSize = 5 * 1024 * 1024                     // 5 MiB — minimum S3 non-final part size
 	mpPayload := bytes.Repeat([]byte("m"), mpPartSize+512) // just over one part → two parts
 	t.Cleanup(func() {
 		_ = minioClient.RemoveObject(ctx, bucket, mpKey, minio.RemoveObjectOptions{})
