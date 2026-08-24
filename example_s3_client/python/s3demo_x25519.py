@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 S3_REGION = "eu-west-1"
 S3_ENDPOINT_URL = "http://localhost:8080"
-S3GATEWAY_PUBLIC_X25519_KEY = "b0b5d6c181c25c6d8d49aa68ecc85a9f8a0ab0f776680eca733ded24dd95ea31"
+S3GATEWAY_PUBLIC_X25519_KEY = os.environ["S3GATEWAY_PUBLIC_X25519_KEY"]
 
 HKDF_INFO = b"s3gateway-x25519-v1"
 HKDF_SALT_SIZE = 32

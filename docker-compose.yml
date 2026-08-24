@@ -29,6 +29,7 @@ services:
       S3_ACCESS_KEY: minioadmin
       S3_SECRET_KEY: minioadmin
       S3_FORCE_PATH_STYLE: "true"
+      S3GATEWAY_PRIVATE_X25519_KEY: ${S3GATEWAY_PRIVATE_X25519_KEY:-}
     depends_on:
       - minio
       - ldapserver
