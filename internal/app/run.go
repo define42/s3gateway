@@ -21,11 +21,12 @@ import (
 func Run() int {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
-	httpServer, cfg, err := Boot()
+	httpServer, cfg, cleanup, err := boot()
 	if err != nil {
 		slog.Error("failed to boot s3 gateway", "error", err)
 		return 1
 	}
+	defer cleanup()
 
 	serverErr := make(chan error, 1)
 

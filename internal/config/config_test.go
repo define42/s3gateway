@@ -74,6 +74,28 @@ func TestConfigValidateMatrix(t *testing.T) {
 			},
 			wantMsg: "COOKIE_SECRET",
 		},
+		{
+			name: "kafka topic without brokers",
+			mutate: func(c *Config) {
+				c.KafkaTopic = "uploads"
+			},
+			wantMsg: "KAFKA_TOPIC",
+		},
+		{
+			name: "kafka notification timeout",
+			mutate: func(c *Config) {
+				c.KafkaBrokers = []string{"kafka:9092"}
+			},
+			wantMsg: "KAFKA_NOTIFICATION_TIMEOUT",
+		},
+		{
+			name: "empty kafka broker",
+			mutate: func(c *Config) {
+				c.KafkaBrokers = []string{"kafka:9092", " "}
+				c.KafkaNotificationTimeout = time.Second
+			},
+			wantMsg: "KAFKA_BROKERS",
+		},
 	}
 
 	for _, tc := range tests {
@@ -122,11 +144,37 @@ func TestEnvCSVMetadataKeys(t *testing.T) {
 	}
 }
 
+func TestEnvCSV(t *testing.T) {
+	t.Setenv("KAFKA_BROKERS", "")
+	if got := envCSV("KAFKA_BROKERS"); got != nil {
+		t.Fatalf("expected nil for empty env, got=%v", got)
+	}
+
+	t.Setenv("KAFKA_BROKERS", " kafka-1:9092, kafka-2:9092, kafka-1:9092 ,, ")
+	got := envCSV("KAFKA_BROKERS")
+	want := []string{"kafka-1:9092", "kafka-2:9092"}
+	if len(got) != len(want) {
+		t.Fatalf("CSV value count mismatch: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("CSV value mismatch at %d: got=%q want=%q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestApplyDefaultsDoesNotInjectPrivateX25519Key(t *testing.T) {
 	cfg := Config{}
 	cfg.ApplyDefaults()
 	if cfg.S3GatewayPrivateX25519Key != nil {
 		t.Fatalf("expected no default private key to be injected")
+	}
+	if cfg.KafkaNotificationTimeout != defaultKafkaNotificationTimeout {
+		t.Fatalf(
+			"kafka notification timeout mismatch: got=%s want=%s",
+			cfg.KafkaNotificationTimeout,
+			defaultKafkaNotificationTimeout,
+		)
 	}
 }
 

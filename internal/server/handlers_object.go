@@ -19,6 +19,7 @@ import (
 	"github.com/define42/s3gateway/internal/s3http"
 	"github.com/define42/s3gateway/internal/s3xml"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
+	"github.com/define42/s3gateway/internal/uploadnotify"
 )
 
 const maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
@@ -1463,6 +1464,13 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 	if out.ChecksumType != "" {
 		w.Header().Set("x-amz-checksum-type", string(out.ChecksumType))
 	}
+	s.notifyUpload(r, uploadnotify.Event{
+		EventName: uploadnotify.EventObjectCreatedPut,
+		Bucket:    bucket,
+		Key:       key,
+		ETag:      strings.Trim(aws.ToString(out.ETag), `"`),
+		VersionID: aws.ToString(out.VersionId),
+	})
 	w.WriteHeader(http.StatusOK)
 }
 

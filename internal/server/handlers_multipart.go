@@ -16,6 +16,7 @@ import (
 	"github.com/define42/s3gateway/internal/s3http"
 	"github.com/define42/s3gateway/internal/s3xml"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
+	"github.com/define42/s3gateway/internal/uploadnotify"
 )
 
 func (s *Server) handleListMultipartUploads(w http.ResponseWriter, r *http.Request, bucket string) {
@@ -388,6 +389,15 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		s3http.WriteUpstreamError(w, err)
 		return
 	}
+
+	s.notifyUpload(r, uploadnotify.Event{
+		EventName: uploadnotify.EventObjectCreatedCompleteMultipartUpload,
+		Bucket:    bucket,
+		Key:       key,
+		ETag:      strings.Trim(aws.ToString(out.ETag), `"`),
+		VersionID: aws.ToString(out.VersionId),
+		UploadID:  uploadID,
+	})
 
 	xw := s3xml.BeginResponse(w, http.StatusOK)
 	defer s3xml.FlushResponse(xw)

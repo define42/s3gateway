@@ -20,6 +20,7 @@ import (
 	"github.com/define42/s3gateway/internal/s3credentials"
 	"github.com/define42/s3gateway/internal/s3xml"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
+	"github.com/define42/s3gateway/internal/uploadnotify"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -50,21 +51,42 @@ type ctxKey string
 const ctxUploaderKey ctxKey = "uploader-upn"
 
 type Server struct {
-	cfg           config.Config
-	up            *s3.Client
-	gcache        *groupcache.Cache
-	groupLookupSF singleflight.Group
-	fetchGroups   func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
+	cfg            config.Config
+	up             *s3.Client
+	uploadNotifier UploadNotifier
+	gcache         *groupcache.Cache
+	groupLookupSF  singleflight.Group
+	fetchGroups    func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
 }
 
-func New(cfg config.Config, up *s3.Client) *Server {
+// UploadNotifier receives events only after the upstream S3 operation has
+// successfully created an object.
+type UploadNotifier interface {
+	Notify(context.Context, uploadnotify.Event) error
+}
+
+type Option func(*Server)
+
+func WithUploadNotifier(notifier UploadNotifier) Option {
+	return func(s *Server) {
+		s.uploadNotifier = notifier
+	}
+}
+
+func New(cfg config.Config, up *s3.Client, opts ...Option) *Server {
 	cfg.ApplyDefaults()
-	return &Server{
+	s := &Server{
 		cfg:         cfg,
 		up:          up,
 		gcache:      groupcache.New(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
 		fetchGroups: ldapinternal.FetchGroupsUPN,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 func (s *Server) GroupsForCredentials(upn, pass string) (map[string]struct{}, error) {

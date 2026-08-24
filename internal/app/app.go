@@ -5,23 +5,45 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/define42/s3gateway/internal/adminpage"
 	"github.com/define42/s3gateway/internal/config"
 	"github.com/define42/s3gateway/internal/server"
+	"github.com/define42/s3gateway/internal/uploadnotify"
 	"github.com/define42/s3gateway/internal/upstream"
 )
 
 // Boot constructs the configured gateway HTTP server.
 func Boot() (*http.Server, config.Config, error) {
+	httpServer, cfg, _, err := boot()
+	return httpServer, cfg, err
+}
+
+func boot() (*http.Server, config.Config, func(), error) {
 	cfg := config.LoadConfig()
 
 	up, err := upstream.New(context.Background(), cfg)
 	if err != nil {
-		return nil, cfg, fmt.Errorf("init upstream s3: %w", err)
+		return nil, cfg, func() {}, fmt.Errorf("init upstream s3: %w", err)
 	}
 
-	gateway := server.New(cfg, up)
+	var serverOptions []server.Option
+	cleanup := func() {}
+	if len(cfg.KafkaBrokers) > 0 {
+		publisher, err := uploadnotify.NewKafkaPublisher(
+			cfg.KafkaBrokers,
+			cfg.KafkaTopic,
+			cfg.KafkaNotificationTimeout,
+		)
+		if err != nil {
+			return nil, cfg, cleanup, fmt.Errorf("init kafka upload notifier: %w", err)
+		}
+		cleanup = sync.OnceFunc(publisher.Close)
+		serverOptions = append(serverOptions, server.WithUploadNotifier(publisher))
+	}
+
+	gateway := server.New(cfg, up, serverOptions...)
 	adminHandler := adminpage.NewHandler(
 		up,
 		cfg.CookieSecret,
@@ -33,5 +55,6 @@ func Boot() (*http.Server, config.Config, error) {
 		cfg,
 		gateway.WithAuth(gateway, adminHandler),
 	)
-	return httpServer, cfg, nil
+	httpServer.RegisterOnShutdown(cleanup)
+	return httpServer, cfg, cleanup, nil
 }

@@ -33,6 +33,10 @@ type Config struct {
 
 	RequiredUploadMetadataKeys []string // metadata keys required for upload requests (without x-amz-meta- prefix, lowercase)
 
+	KafkaBrokers             []string
+	KafkaTopic               string // shared upload topic; when empty, the bucket name is used as the topic
+	KafkaNotificationTimeout time.Duration
+
 	ReadHeaderTimeout         time.Duration
 	ReadTimeout               time.Duration
 	WriteTimeout              time.Duration
@@ -48,10 +52,11 @@ type Config struct {
 }
 
 const (
-	defaultSigV4MaxSkew      = 15 * time.Minute
-	defaultReadTimeout        = 0 * time.Second
-	defaultWriteTimeout       = 0 * time.Second
-	defaultShutdownTimeout    = 20 * time.Second
+	defaultSigV4MaxSkew             = 15 * time.Minute
+	defaultReadTimeout              = 0 * time.Second
+	defaultWriteTimeout             = 0 * time.Second
+	defaultShutdownTimeout          = 20 * time.Second
+	defaultKafkaNotificationTimeout = 5 * time.Second
 
 	DefaultGroupCacheMaxEntries = 10000
 	DefaultReadHeaderTimeout    = 10 * time.Second
@@ -74,6 +79,9 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.SigV4MaxSkew == 0 {
 		cfg.SigV4MaxSkew = defaultSigV4MaxSkew
+	}
+	if cfg.KafkaNotificationTimeout == 0 {
+		cfg.KafkaNotificationTimeout = defaultKafkaNotificationTimeout
 	}
 	if cfg.ReadHeaderTimeout == 0 {
 		cfg.ReadHeaderTimeout = DefaultReadHeaderTimeout
@@ -110,6 +118,19 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.CookieSecret != "" && len(cfg.CookieSecret) < 32 {
 		return errors.New("COOKIE_SECRET must be at least 32 characters when set")
+	}
+	if len(cfg.KafkaBrokers) == 0 && strings.TrimSpace(cfg.KafkaTopic) != "" {
+		return errors.New("KAFKA_TOPIC requires KAFKA_BROKERS")
+	}
+	if len(cfg.KafkaBrokers) > 0 {
+		if cfg.KafkaNotificationTimeout <= 0 {
+			return errors.New("KAFKA_NOTIFICATION_TIMEOUT must be > 0")
+		}
+		for _, broker := range cfg.KafkaBrokers {
+			if strings.TrimSpace(broker) == "" {
+				return errors.New("KAFKA_BROKERS must not contain empty addresses")
+			}
+		}
 	}
 	return nil
 }
@@ -170,6 +191,32 @@ func envInt(key string, def int) int {
 	return n
 }
 
+func envCSV(key string) []string {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return nil
+	}
+
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // NormalizeRequiredMetadataKey lowercases and strips the x-amz-meta- prefix
 // from a metadata key, trimming surrounding whitespace.
 func NormalizeRequiredMetadataKey(raw string) string {
@@ -223,6 +270,10 @@ func LoadConfig() Config {
 		SigV4MaxSkew: envDuration("SIGV4_MAX_SKEW", defaultSigV4MaxSkew),
 
 		RequiredUploadMetadataKeys: envCSVMetadataKeys("REQUIRED_UPLOAD_METADATA_KEYS"),
+
+		KafkaBrokers:             envCSV("KAFKA_BROKERS"),
+		KafkaTopic:               env("KAFKA_TOPIC", ""),
+		KafkaNotificationTimeout: envDuration("KAFKA_NOTIFICATION_TIMEOUT", defaultKafkaNotificationTimeout),
 
 		ReadHeaderTimeout:         envDuration("HTTP_READ_HEADER_TIMEOUT", DefaultReadHeaderTimeout),
 		ReadTimeout:               envDuration("HTTP_READ_TIMEOUT", defaultReadTimeout),
