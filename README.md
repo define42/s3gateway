@@ -87,6 +87,18 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 | Bucket | `GET /<bucket>?tagging` | Get bucket tagging | `r` on target bucket prefix |
 | Bucket | `DELETE /<bucket>?tagging` | Delete bucket tagging | `w` on target bucket prefix |
 | Bucket | `GET /<bucket>?uploads` | List multipart uploads | `r` on target bucket prefix |
+| Bucket | `GET /<bucket>?acl` | Get bucket ACL (canned owner `FULL_CONTROL` response) | `r` on target bucket prefix |
+| Bucket | `PUT /<bucket>?acl` | Put bucket ACL (accepted as no-op for the `private` canned ACL only) | `w` on target bucket prefix |
+| Bucket | `PUT /<bucket>?encryption` | Put bucket encryption configuration | `c` on target bucket prefix |
+| Bucket | `GET /<bucket>?encryption` | Get bucket encryption configuration | `r` on target bucket prefix |
+| Bucket | `DELETE /<bucket>?encryption` | Delete bucket encryption configuration | `b` on target bucket prefix |
+| Bucket | `GET /<bucket>?policy`, `?policyStatus` | Answered locally with `NoSuchBucketPolicy` (the gateway has no bucket policies) | `r` on target bucket prefix |
+| Bucket | `GET /<bucket>?cors`, `?website`, `?replication` | Answered locally with the matching not-configured error | `r` on target bucket prefix |
+| Bucket | `GET /<bucket>?logging`, `?notification`, `?accelerate` | Answered locally with an empty (disabled) configuration | `r` on target bucket prefix |
+| Bucket | `GET /<bucket>?requestPayment` | Answered locally with `BucketOwner` | `r` on target bucket prefix |
+| Bucket | `GET /<bucket>?publicAccessBlock` | Answered locally with all public access blocked (every request is authenticated) | `r` on target bucket prefix |
+| Object | `GET /<bucket>/<key>?acl` | Get object ACL (canned owner `FULL_CONTROL` response) | `r` on target bucket prefix |
+| Object | `PUT /<bucket>/<key>?acl` | Put object ACL (accepted as no-op for `private`, `bucket-owner-read`, `bucket-owner-full-control`) | `w` on target bucket prefix |
 | Object | `GET /<bucket>/<key>` | Get object | `r` on target bucket prefix |
 | Object | `HEAD /<bucket>/<key>` | Head object | `r` on target bucket prefix |
 | Object | `PUT /<bucket>/<key>` | Put object | `w` on target bucket prefix; if `REQUIRED_UPLOAD_METADATA_KEYS` is set, all listed `x-amz-meta-*` keys must be present |
@@ -111,7 +123,8 @@ Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
 - Path-style requests only.
 - Header-based SigV4 auth only (no presigned URL flow).
 - Only implemented operations are supported; unsupported routes return `NotImplemented`.
-- Requests carrying a sub-resource of an unimplemented operation (for example `?acl`, `?policy`, `?retention`) are rejected with `NotImplemented` before any bucket/object handler runs, so they can never be misinterpreted as a plain `GET`/`PUT`/`DELETE`.
+- Requests carrying a sub-resource of an unimplemented operation (for example `?retention`, `?object-lock`, `?select`) are rejected with `NotImplemented` before any bucket/object handler runs, so they can never be misinterpreted as a plain `GET`/`PUT`/`DELETE`.
+- ACL and bucket-policy *writes* that would grant access are unimplemented by design: authorization is decided exclusively by LDAP groups. ACL reads return a canned owner-`FULL_CONTROL` document, and only owner-retaining canned ACL writes are accepted (as no-ops) for client compatibility.
 
 ## Configuration
 

@@ -114,35 +114,33 @@ func TestUnsupportedSubresourcesAreRejected(t *testing.T) {
 		target string
 	}{
 		// Real operations that previously fell through to destructive handlers.
-		{http.MethodPut, "/team2-bucket/key.txt?acl"},                   // PutObjectAcl -> was PutObject overwrite
 		{http.MethodPut, "/team2-bucket/key.txt?retention"},             // PutObjectRetention -> was PutObject overwrite
 		{http.MethodPut, "/team2-bucket/key.txt?legal-hold"},            // PutObjectLegalHold -> was PutObject overwrite
-		{http.MethodGet, "/team2-bucket/key.txt?acl"},                   // GetObjectAcl -> was GetObject body
+		{http.MethodPut, "/team2-bucket/key.txt?policy"},                // bucket-only sub-resource on an object path
+		{http.MethodPut, "/team2-bucket/key.txt?lifecycle"},             // bucket-only sub-resource on an object path
 		{http.MethodGet, "/team2-bucket/key.txt?torrent"},               // GetObjectTorrent -> was GetObject body
 		{http.MethodPost, "/team2-bucket/key.txt?restore"},              // RestoreObject
 		{http.MethodPost, "/team2-bucket/key.txt?select&select-type=2"}, // SelectObjectContent
-		{http.MethodDelete, "/team2-bucket?policy"},                     // DeleteBucketPolicy -> was DeleteBucket
-		{http.MethodDelete, "/team2-bucket?cors"},                       // DeleteBucketCors -> was DeleteBucket
-		{http.MethodDelete, "/team2-bucket?encryption"},                 // DeleteBucketEncryption -> was DeleteBucket
-		{http.MethodDelete, "/team2-bucket?replication"},                // DeleteBucketReplication -> was DeleteBucket
-		{http.MethodDelete, "/team2-bucket?website"},                    // DeleteBucketWebsite -> was DeleteBucket
-		{http.MethodPut, "/team2-bucket?acl"},                           // PutBucketAcl -> was CreateBucket
-		{http.MethodPut, "/team2-bucket?policy"},                        // PutBucketPolicy -> was CreateBucket
 		{http.MethodPut, "/team2-bucket?object-lock"},                   // PutObjectLockConfiguration
-		{http.MethodGet, "/team2-bucket?acl"},
-		{http.MethodGet, "/team2-bucket?policy"},
-		{http.MethodGet, "/team2-bucket?policyStatus"},
-		{http.MethodGet, "/team2-bucket?publicAccessBlock"},
+		{http.MethodGet, "/team2-bucket?object-lock"},
 		{http.MethodGet, "/team2-bucket?ownershipControls"},
-		{http.MethodGet, "/team2-bucket?logging"},
-		{http.MethodGet, "/team2-bucket?notification"},
-		{http.MethodGet, "/team2-bucket?requestPayment"},
-		{http.MethodGet, "/team2-bucket?accelerate"},
 		{http.MethodGet, "/team2-bucket?intelligent-tiering"},
 		{http.MethodGet, "/team2-bucket?inventory"},
 		{http.MethodGet, "/team2-bucket?metrics"},
 		{http.MethodGet, "/team2-bucket?analytics"},
 		{http.MethodGet, "/?session"}, // S3 Express CreateSession
+		// Implemented sub-resources still reject methods they do not support,
+		// instead of falling through to plain bucket handlers.
+		{http.MethodDelete, "/team2-bucket?policy"}, // DeleteBucketPolicy -> was DeleteBucket
+		{http.MethodDelete, "/team2-bucket?cors"},   // DeleteBucketCors -> was DeleteBucket
+		{http.MethodDelete, "/team2-bucket?replication"},
+		{http.MethodDelete, "/team2-bucket?website"},
+		{http.MethodPut, "/team2-bucket?policy"}, // PutBucketPolicy -> was CreateBucket
+		{http.MethodPut, "/team2-bucket?cors"},
+		{http.MethodPut, "/team2-bucket?website"},
+		{http.MethodPut, "/team2-bucket?publicAccessBlock"},
+		{http.MethodDelete, "/team2-bucket?acl"},
+		{http.MethodPost, "/team2-bucket?encryption"},
 	}
 
 	for _, tc := range cases {

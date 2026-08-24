@@ -166,33 +166,43 @@ func UploaderFromRequest(r *http.Request) string {
 // overwrite the object via PutObject, and DeleteBucketPolicy
 // `DELETE /b?policy` would delete the bucket).
 var unsupportedSubresources = map[string]struct{}{
-	"accelerate":            {},
-	"acl":                   {},
 	"analytics":             {},
-	"cors":                  {},
-	"encryption":            {},
 	"intelligent-tiering":   {},
 	"inventory":             {},
 	"legal-hold":            {},
-	"logging":               {},
 	"metadataConfiguration": {},
 	"metadataTable":         {},
 	"metrics":               {},
-	"notification":          {},
 	"object-lock":           {},
 	"ownershipControls":     {},
-	"policy":                {},
-	"policyStatus":          {},
-	"publicAccessBlock":     {},
 	"renameObject":          {},
-	"replication":           {},
-	"requestPayment":        {},
 	"restore":               {},
 	"retention":             {},
 	"select":                {},
 	"session":               {},
 	"torrent":               {},
-	"website":               {},
+}
+
+// bucketOnlySubresources are implemented bucket-level sub-resources that have
+// no meaning on an object path. They must be rejected there explicitly so a
+// request like `PUT /bucket/key?policy` can never fall through to PutObject.
+var bucketOnlySubresources = map[string]struct{}{
+	"accelerate":        {},
+	"cors":              {},
+	"delete":            {},
+	"encryption":        {},
+	"lifecycle":         {},
+	"location":          {},
+	"logging":           {},
+	"notification":      {},
+	"policy":            {},
+	"policyStatus":      {},
+	"publicAccessBlock": {},
+	"replication":       {},
+	"requestPayment":    {},
+	"versioning":        {},
+	"versions":          {},
+	"website":           {},
 }
 
 func firstUnsupportedSubresource(q url.Values) string {
@@ -307,6 +317,46 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if _, ok := q["acl"]; ok {
+			switch r.Method {
+			case http.MethodGet:
+				s.handleGetBucketACL(w, r, bucket)
+				return
+			case http.MethodPut:
+				s.handlePutBucketACL(w, r, bucket)
+				return
+			default:
+				xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+				return
+			}
+		}
+		if _, ok := q["encryption"]; ok {
+			switch r.Method {
+			case http.MethodPut:
+				s.handlePutBucketEncryption(w, r, bucket)
+				return
+			case http.MethodGet:
+				s.handleGetBucketEncryption(w, r, bucket)
+				return
+			case http.MethodDelete:
+				s.handleDeleteBucketEncryption(w, r, bucket)
+				return
+			default:
+				xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+				return
+			}
+		}
+		for _, cfgKey := range bucketConfigReadKeys {
+			if _, ok := q[cfgKey]; !ok {
+				continue
+			}
+			if r.Method == http.MethodGet {
+				s.handleBucketConfigRead(w, r, bucket, cfgKey)
+				return
+			}
+			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			return
+		}
 		if _, ok := q["delete"]; ok {
 			if r.Method == http.MethodPost {
 				s.handleDeleteObjects(w, r, bucket)
@@ -370,6 +420,27 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// /bucket/key
 	key := parts[1]
 	q := r.URL.Query()
+
+	for subresource := range q {
+		if _, ok := bucketOnlySubresources[subresource]; ok {
+			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented: "+subresource)
+			return
+		}
+	}
+
+	if _, ok := q["acl"]; ok {
+		switch r.Method {
+		case http.MethodGet:
+			s.handleGetObjectACL(w, r, bucket, key)
+			return
+		case http.MethodPut:
+			s.handlePutObjectACL(w, r, bucket, key)
+			return
+		default:
+			xmlhelper.WriteXMLError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
+			return
+		}
+	}
 
 	if _, ok := q["tagging"]; ok {
 		switch r.Method {
