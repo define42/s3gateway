@@ -15,8 +15,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	authz "github.com/define42/s3gateway/internal/authz"
-	"github.com/define42/s3gateway/internal/config"
 	bucketxml "github.com/define42/s3gateway/internal/bucketxml"
+	"github.com/define42/s3gateway/internal/config"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 	"github.com/define42/s3gateway/internal/xmlhelper"
 )
@@ -412,6 +412,150 @@ func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 		xw.End("DeleteMarker")
 	}
 	xw.End("ListVersionsResult")
+}
+
+// writeChunkedBodyError writes the S3 error for an aws-chunked body validation
+// failure and reports whether it handled the error. The upstream SDK can mask
+// body-reader failures (e.g. behind retry-rewind errors), so the decoded
+// stream's own recorded validation error is consulted as well.
+func writeChunkedBodyError(w http.ResponseWriter, err error, body io.ReadCloser) bool {
+	for _, e := range []error{sigv4.StreamValidationError(body), err} {
+		if e == nil {
+			continue
+		}
+		if sigv4.IsTrailerChecksumMismatchError(e) {
+			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "BadDigest", "The aws-chunked payload does not match its trailing checksum")
+			return true
+		}
+		if sigv4.IsChunkSignatureValidationError(e) {
+			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "SignatureDoesNotMatch", "Invalid aws-chunked chunk signature")
+			return true
+		}
+	}
+	return false
+}
+
+// handleListObjects serves the legacy ListObjects (v1) API used by clients
+// that never adopted list-type=2 (s3cmd, older SDKs, boto2-era tooling).
+func (s *Server) handleListObjects(w http.ResponseWriter, r *http.Request, bucket string) {
+	rules := authz.RulesFromRequest(r)
+	if !authz.CanRead(rules, bucket) {
+		xmlhelper.WriteXMLError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	q := r.URL.Query()
+	in := &s3.ListObjectsInput{Bucket: &bucket}
+	if v := q.Get("prefix"); v != "" {
+		in.Prefix = &v
+	}
+	if v := q.Get("delimiter"); v != "" {
+		in.Delimiter = &v
+	}
+	if v := q.Get("marker"); v != "" {
+		in.Marker = &v
+	}
+	if v := q.Get("max-keys"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 32)
+		if err != nil || n < 0 {
+			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid max-keys")
+			return
+		}
+		in.MaxKeys = aws.Int32(int32(n))
+	}
+	if et, err := xmlhelper.ParseEncodingType(q.Get("encoding-type")); err != nil {
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid encoding-type")
+		return
+	} else if et != "" {
+		in.EncodingType = et
+	}
+	optionalObjectAttrs := q.Get("optional-object-attributes")
+	if optionalObjectAttrs == "" {
+		optionalObjectAttrs = strings.TrimSpace(r.Header.Get("x-amz-optional-object-attributes"))
+	}
+	if attrs, err := xmlhelper.ParseOptionalObjectAttributes(optionalObjectAttrs); err != nil {
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid optional-object-attributes")
+		return
+	} else if len(attrs) > 0 {
+		in.OptionalObjectAttributes = attrs
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if payer, err := xmlhelper.ParseRequestPayerHeader(r.Header); err != nil {
+		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	} else if payer != "" {
+		in.RequestPayer = payer
+	}
+
+	out, err := s.up.ListObjects(r.Context(), in)
+	if err != nil {
+		xmlhelper.WriteUpstreamError(w, err)
+		return
+	}
+	if out.RequestCharged != "" {
+		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
+	}
+
+	xw := xmlhelper.BeginXMLWriterResponse(w, http.StatusOK)
+	defer xmlhelper.FlushXMLWriterResponse(xw)
+
+	xmlhelper.EncodeS3RootStart(xw, "ListBucketResult")
+	if out.Name != nil {
+		xw.Elem("Name", *out.Name)
+	}
+	if out.Prefix != nil {
+		xw.Elem("Prefix", *out.Prefix)
+	}
+	if out.Marker != nil {
+		xw.Elem("Marker", *out.Marker)
+	}
+	if out.NextMarker != nil {
+		xw.Elem("NextMarker", *out.NextMarker)
+	}
+	if out.Delimiter != nil {
+		xw.Elem("Delimiter", *out.Delimiter)
+	}
+	if out.MaxKeys != nil {
+		xw.ElemInt("MaxKeys", int64(*out.MaxKeys))
+	}
+	if out.EncodingType != "" {
+		xw.Elem("EncodingType", string(out.EncodingType))
+	}
+	xw.ElemBool("IsTruncated", aws.ToBool(out.IsTruncated))
+	xmlhelper.EncodeCommonPrefixes(xw, out.CommonPrefixes)
+	for _, o := range out.Contents {
+		xw.Start("Contents")
+		if o.Key != nil {
+			xw.Elem("Key", *o.Key)
+		}
+		if o.LastModified != nil {
+			xw.Elem("LastModified", xmlhelper.FormatS3Time(*o.LastModified))
+		}
+		if o.ETag != nil {
+			xw.Elem("ETag", *o.ETag)
+		}
+		for _, c := range o.ChecksumAlgorithm {
+			if c == "" {
+				continue
+			}
+			xw.Elem("ChecksumAlgorithm", string(c))
+		}
+		if o.ChecksumType != "" {
+			xw.Elem("ChecksumType", string(o.ChecksumType))
+		}
+		if o.Size != nil {
+			xw.ElemInt("Size", *o.Size)
+		}
+		if o.StorageClass != "" {
+			xw.Elem("StorageClass", string(o.StorageClass))
+		}
+		xmlhelper.EncodeOwnerIDThenDisplayName(xw, o.Owner)
+		xmlhelper.EncodeRestoreStatus(xw, o.RestoreStatus)
+		xw.End("Contents")
+	}
+	xw.End("ListBucketResult")
 }
 
 func (s *Server) handleListObjectsV2(w http.ResponseWriter, r *http.Request, bucket string) {
@@ -1162,6 +1306,9 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 			xmlhelper.WriteXMLError(w, http.StatusLengthRequired, "MissingContentLength", "Content-Length required")
 			return
 		}
+		if writeChunkedBodyError(w, err, nil) {
+			return
+		}
 		xmlhelper.WriteXMLError(w, http.StatusBadRequest, "InvalidRequest", "Invalid request body")
 		return
 	}
@@ -1262,8 +1409,7 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		s3.WithAPIOptions(v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware),
 	)
 	if err != nil {
-		if sigv4.IsChunkSignatureValidationError(err) {
-			xmlhelper.WriteXMLError(w, http.StatusBadRequest, "SignatureDoesNotMatch", "Invalid aws-chunked chunk signature")
+		if writeChunkedBodyError(w, err, body) {
 			return
 		}
 		xmlhelper.WriteUpstreamError(w, err)

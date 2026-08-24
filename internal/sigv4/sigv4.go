@@ -5,10 +5,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/sha1" // #nosec G505 -- SHA-1 is one of the S3 trailing-checksum algorithms, not used for security
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
+	"hash/crc32"
+	"hash/crc64"
 	"io"
 	"net/http"
 	"net/url"
@@ -304,6 +309,22 @@ func constantTimeEq(a, b string) bool {
 	return v == 0
 }
 
+// Supported streaming payload modes (x-amz-content-sha256 values).
+const (
+	StreamingSignedPayload          = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
+	StreamingSignedPayloadTrailer   = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"
+	StreamingUnsignedPayloadTrailer = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
+)
+
+const (
+	// Chunk header lines are ~90 bytes (hex size + chunk-signature extension);
+	// trailer lines carry a base64 checksum or a 64-hex signature. The caps
+	// keep a malicious stream from accumulating unbounded header/trailer data.
+	maxChunkHeaderLineBytes = 4 * 1024
+	maxTrailerLineBytes     = 16 * 1024
+	maxTrailerLines         = 32
+)
+
 var (
 	ErrMissingDecodedContentLength = errors.New("missing x-amz-decoded-content-length")
 	ErrInvalidDecodedContentLength = errors.New("invalid x-amz-decoded-content-length")
@@ -314,6 +335,9 @@ var (
 	ErrMissingChunkSignature       = errors.New("missing aws-chunked chunk signature")
 	ErrInvalidChunkSignature       = errors.New("invalid aws-chunked chunk signature")
 	ErrInvalidChunkHeader          = errors.New("invalid aws-chunked chunk header")
+	ErrInvalidTrailer              = errors.New("invalid aws-chunked trailer")
+	ErrMissingTrailerSignature     = errors.New("missing x-amz-trailer-signature")
+	ErrTrailerChecksumMismatch     = errors.New("aws-chunked trailing checksum mismatch")
 )
 
 func isAWSChunkedPayload(h http.Header) bool {
@@ -380,6 +404,91 @@ func (v *AWSChunkSignatureVerifier) verifyChunk(signatureHex string, chunk []byt
 	return nil
 }
 
+// verifyTrailerSignature verifies the x-amz-trailer-signature that terminates
+// a STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER body. The signature chains from
+// the final (zero-byte) chunk signature and covers the canonicalized trailing
+// headers: "lowercase(name):trim(value)\n" per trailer, sorted by name.
+func (v *AWSChunkSignatureVerifier) verifyTrailerSignature(signatureHex string, trailers [][2]string) error {
+	sig := strings.ToLower(strings.TrimSpace(signatureHex))
+	if len(sig) != 64 {
+		return fmt.Errorf("%w: invalid trailer signature length", ErrInvalidChunkSignature)
+	}
+	if _, err := hex.DecodeString(sig); err != nil {
+		return fmt.Errorf("%w: invalid trailer signature encoding", ErrInvalidChunkSignature)
+	}
+
+	entries := make([]string, 0, len(trailers))
+	for _, kv := range trailers {
+		entries = append(entries, kv[0]+":"+kv[1]+"\n")
+	}
+	sort.Strings(entries)
+	blockHash := sha256.Sum256([]byte(strings.Join(entries, "")))
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256-TRAILER",
+		v.amzDate,
+		v.scope,
+		v.PrevSig,
+		hex.EncodeToString(blockHash[:]),
+	}, "\n")
+
+	expected := HmacSHA256Hex(v.signingKey, []byte(stringToSign))
+	if !constantTimeEq(sig, expected) {
+		return fmt.Errorf("%w: trailer signature mismatch", ErrInvalidChunkSignature)
+	}
+	v.PrevSig = sig
+	return nil
+}
+
+// crc64NVMEPolynomial is crc64.MakeTable's representation of the CRC64-NVME
+// polynomial (same constant the AWS SDK checksum package uses).
+const crc64NVMEPolynomial = 0x9a6c9329ac4bc9b5
+
+type trailerChecksum struct {
+	name string
+	hash hash.Hash
+}
+
+func newTrailerChecksumHash(name string) hash.Hash {
+	switch name {
+	case "x-amz-checksum-crc32":
+		return crc32.NewIEEE()
+	case "x-amz-checksum-crc32c":
+		return crc32.New(crc32.MakeTable(crc32.Castagnoli))
+	case "x-amz-checksum-crc64nvme":
+		return crc64.New(crc64.MakeTable(crc64NVMEPolynomial))
+	case "x-amz-checksum-sha1":
+		return sha1.New() // #nosec G401 -- S3 trailing-checksum algorithm mandated by clients, not used for security
+	case "x-amz-checksum-sha256":
+		return sha256.New()
+	default:
+		return nil
+	}
+}
+
+// trailerChecksumsForRequest returns a running hash per checksum algorithm the
+// client declared in x-amz-trailer, so the decoded payload can be verified
+// against the trailing checksum header. Unknown trailer names are ignored.
+func trailerChecksumsForRequest(h http.Header) []trailerChecksum {
+	var out []trailerChecksum
+	seen := map[string]struct{}{}
+	for _, v := range h.Values("x-amz-trailer") {
+		for _, name := range strings.Split(v, ",") {
+			name = strings.ToLower(strings.TrimSpace(name))
+			if name == "" {
+				continue
+			}
+			if _, dup := seen[name]; dup {
+				continue
+			}
+			seen[name] = struct{}{}
+			if hs := newTrailerChecksumHash(name); hs != nil {
+				out = append(out, trailerChecksum{name: name, hash: hs})
+			}
+		}
+	}
+	return out
+}
+
 // CtxKey is the type used for context keys in the sigv4 package.
 type CtxKey string
 
@@ -423,48 +532,166 @@ func ChunkSignatureVerifierFromRequest(r *http.Request) (*AWSChunkSignatureVerif
 		return nil, nil
 	}
 
-	mode := streamingPayloadMode(r.Header)
-	if mode != "STREAMING-AWS4-HMAC-SHA256-PAYLOAD" {
+	switch mode := streamingPayloadMode(r.Header); mode {
+	case StreamingSignedPayload, StreamingSignedPayloadTrailer:
+		auth := AuthFromRequest(r)
+		if auth == nil {
+			return nil, ErrMissingSigV4AuthContext
+		}
+		secret := SecretFromRequest(r)
+		if strings.TrimSpace(secret) == "" {
+			return nil, ErrMissingSigV4SecretContext
+		}
+		return NewAWSChunkSignatureVerifier(auth, secret), nil
+	case StreamingUnsignedPayloadTrailer:
+		// Chunks carry no signatures; integrity comes from TLS plus the
+		// trailing checksum, which the chunked reader verifies.
+		return nil, nil
+	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedStreamingMode, mode)
 	}
-
-	auth := AuthFromRequest(r)
-	if auth == nil {
-		return nil, ErrMissingSigV4AuthContext
-	}
-	secret := SecretFromRequest(r)
-	if strings.TrimSpace(secret) == "" {
-		return nil, ErrMissingSigV4SecretContext
-	}
-	return NewAWSChunkSignatureVerifier(auth, secret), nil
 }
 
 func IsChunkSignatureValidationError(err error) bool {
 	return errors.Is(err, ErrInvalidChunkSignature) ||
 		errors.Is(err, ErrMissingChunkSignature) ||
-		errors.Is(err, ErrInvalidChunkHeader)
+		errors.Is(err, ErrInvalidChunkHeader) ||
+		errors.Is(err, ErrMissingTrailerSignature) ||
+		errors.Is(err, ErrInvalidTrailer)
+}
+
+// IsTrailerChecksumMismatchError reports whether err means the decoded payload
+// did not match the client's trailing x-amz-checksum-* header (S3: BadDigest).
+func IsTrailerChecksumMismatchError(err error) bool {
+	return errors.Is(err, ErrTrailerChecksumMismatch)
 }
 
 type awsChunkedReadCloser struct {
-	io.Reader
-	c io.Closer
+	reader *awsChunkedReader
+	guard  trailerGuardReader
+	c      io.Closer
 }
+
+func (r *awsChunkedReadCloser) Read(p []byte) (int, error) { return r.guard.Read(p) }
 
 func (r *awsChunkedReadCloser) Close() error { return r.c.Close() }
 
-type awsChunkedReader struct {
-	br       *bufio.Reader
-	verifier *AWSChunkSignatureVerifier
-	buf      []byte
-	offset   int
-	done     bool
+// trailerGuardReader delays the final byte of the decoded stream until the
+// underlying chunked reader reports a clean EOF, i.e. until every
+// end-of-stream validation (final chunk signature, trailer signature,
+// trailing checksums) has passed. Without it the upstream would hold a
+// complete body — and could commit the object — before a bad trailer is
+// discovered; with it, a failed validation leaves the upstream one byte short
+// of Content-Length, so the upstream write is aborted instead of committed.
+type trailerGuardReader struct {
+	r         io.Reader
+	carry     byte
+	haveCarry bool
+	err       error
 }
 
-func newAWSChunkedReader(r io.Reader, verifier *AWSChunkSignatureVerifier) *awsChunkedReader {
-	return &awsChunkedReader{br: bufio.NewReader(r), verifier: verifier}
+func (g *trailerGuardReader) Read(p []byte) (int, error) {
+	if g.err != nil {
+		return 0, g.err
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	for {
+		n, err := g.r.Read(p)
+		if n > 0 {
+			if g.haveCarry {
+				if n == len(p) {
+					// No room to grow: emit the carry in front and retain the
+					// new final byte instead.
+					newCarry := p[n-1]
+					copy(p[1:], p[:n-1])
+					p[0] = g.carry
+					g.carry = newCarry
+					return n, nil
+				}
+				copy(p[1:n+1], p[:n])
+				p[0] = g.carry
+				g.haveCarry = false
+				n++
+			}
+			n--
+			g.carry = p[n]
+			g.haveCarry = true
+			if n > 0 {
+				return n, nil
+			}
+			if err == nil {
+				continue
+			}
+		}
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, io.EOF) && g.haveCarry {
+			// End-of-stream validation passed; release the held byte.
+			p[0] = g.carry
+			g.haveCarry = false
+			g.err = io.EOF
+			return 1, nil
+		}
+		g.err = err
+		return 0, err
+	}
+}
+
+// StreamValidationError returns the aws-chunked validation error the decoded
+// body hit while being streamed upstream, if any. The upstream SDK may mask
+// body-reader errors (e.g. behind "failed to rewind transport stream for
+// retry"), so handlers should consult this to classify the failure.
+func StreamValidationError(body io.ReadCloser) error {
+	rc, ok := body.(*awsChunkedReadCloser)
+	if !ok || rc.reader == nil {
+		return nil
+	}
+	return rc.reader.err
+}
+
+type awsChunkedReader struct {
+	br *bufio.Reader
+	// verifier is nil in unsigned-trailer mode, where chunk headers carry no
+	// signatures.
+	verifier *AWSChunkSignatureVerifier
+	// signedTrailer requires and verifies an x-amz-trailer-signature after the
+	// final chunk (STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER).
+	signedTrailer bool
+	// checksums are running hashes of the decoded payload, verified against
+	// the trailing x-amz-checksum-* header(s) in the trailer modes.
+	checksums []trailerChecksum
+
+	// Signed chunks are buffered so their signature is verified before any
+	// byte is handed out.
+	buf    []byte
+	offset int
+	// Unsigned chunks are streamed through without buffering (SDKs may send
+	// the whole payload as a single chunk); remaining counts the bytes left in
+	// the current chunk and needCRLF marks its unconsumed trailing CRLF.
+	remaining int64
+	needCRLF  bool
+	done      bool
+	// err records the first non-EOF error so callers can still classify the
+	// failure after the consuming SDK has wrapped or replaced it.
+	err error
+}
+
+func newAWSChunkedReader(r io.Reader, verifier *AWSChunkSignatureVerifier, signedTrailer bool, checksums []trailerChecksum) *awsChunkedReader {
+	return &awsChunkedReader{br: bufio.NewReader(r), verifier: verifier, signedTrailer: signedTrailer, checksums: checksums}
 }
 
 func (r *awsChunkedReader) Read(p []byte) (int, error) {
+	n, err := r.read(p)
+	if err != nil && r.err == nil && !errors.Is(err, io.EOF) {
+		r.err = err
+	}
+	return n, err
+}
+
+func (r *awsChunkedReader) read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -479,6 +706,25 @@ func (r *awsChunkedReader) Read(p []byte) (int, error) {
 			}
 			return n, nil
 		}
+		if r.remaining > 0 {
+			limit := len(p)
+			if int64(limit) > r.remaining {
+				limit = int(r.remaining)
+			}
+			n, err := r.br.Read(p[:limit])
+			if n > 0 {
+				r.remaining -= int64(n)
+				r.hashPayload(p[:n])
+				return n, nil
+			}
+			if err == nil {
+				continue
+			}
+			if errors.Is(err, io.EOF) {
+				err = io.ErrUnexpectedEOF
+			}
+			return 0, err
+		}
 		if r.done {
 			return 0, io.EOF
 		}
@@ -488,8 +734,20 @@ func (r *awsChunkedReader) Read(p []byte) (int, error) {
 	}
 }
 
+func (r *awsChunkedReader) hashPayload(b []byte) {
+	for _, cs := range r.checksums {
+		_, _ = cs.hash.Write(b)
+	}
+}
+
 func (r *awsChunkedReader) beginChunk() error {
-	line, err := r.br.ReadString('\n')
+	if r.needCRLF {
+		if err := r.consumeCRLF(); err != nil {
+			return err
+		}
+		r.needCRLF = false
+	}
+	line, err := readLineBounded(r.br, maxChunkHeaderLineBytes)
 	if err != nil {
 		return err
 	}
@@ -506,10 +764,17 @@ func (r *awsChunkedReader) beginChunk() error {
 				return err
 			}
 		}
-		if err := r.consumeTrailers(); err != nil {
+		if err := r.finishTrailers(); err != nil {
 			return err
 		}
 		r.done = true
+		return nil
+	}
+
+	if r.verifier == nil {
+		// Unsigned chunk: stream it through instead of buffering.
+		r.remaining = n
+		r.needCRLF = true
 		return nil
 	}
 
@@ -524,18 +789,37 @@ func (r *awsChunkedReader) beginChunk() error {
 		return err
 	}
 
-	if r.verifier != nil {
-		if sig == "" {
-			return ErrMissingChunkSignature
-		}
-		if err := r.verifier.verifyChunk(sig, chunk); err != nil {
-			return err
-		}
+	if sig == "" {
+		return ErrMissingChunkSignature
 	}
+	if err := r.verifier.verifyChunk(sig, chunk); err != nil {
+		return err
+	}
+	r.hashPayload(chunk)
 
 	r.buf = chunk
 	r.offset = 0
 	return nil
+}
+
+// readLineBounded reads up to and including a '\n', returning the line without
+// the '\n' (a trailing '\r' is kept for the caller to strip). Lines longer
+// than maxLen fail instead of accumulating unbounded data.
+func readLineBounded(br *bufio.Reader, maxLen int) (string, error) {
+	var b strings.Builder
+	for {
+		c, err := br.ReadByte()
+		if err != nil {
+			return b.String(), err
+		}
+		if c == '\n' {
+			return b.String(), nil
+		}
+		if b.Len() >= maxLen {
+			return "", fmt.Errorf("%w: line too long", ErrInvalidChunkHeader)
+		}
+		b.WriteByte(c)
+	}
 }
 
 func parseAWSChunkHeader(line string) (int64, string, error) {
@@ -586,35 +870,155 @@ func (r *awsChunkedReader) consumeCRLF() error {
 	return nil
 }
 
+// finishTrailers handles everything after the final zero-length chunk header.
+func (r *awsChunkedReader) finishTrailers() error {
+	if r.verifier != nil && !r.signedTrailer {
+		// Plain signed streaming: no declared trailers; skip padding lines
+		// until the terminating blank line, as before.
+		return r.consumeTrailers()
+	}
+
+	trailers, trailerSig, err := r.readTrailerSection()
+	if err != nil {
+		return err
+	}
+	if r.signedTrailer {
+		if trailerSig == "" {
+			return ErrMissingTrailerSignature
+		}
+		if err := r.verifier.verifyTrailerSignature(trailerSig, trailers); err != nil {
+			return err
+		}
+	}
+	return r.verifyTrailingChecksums(trailers)
+}
+
+// readTrailerSection parses "name:value" trailer lines after the final chunk.
+// It tolerates both CRLF and bare-LF line endings and a stream that ends at
+// EOF instead of a blank line (framings seen from the AWS SDKs and minio-go).
+func (r *awsChunkedReader) readTrailerSection() (trailers [][2]string, trailerSig string, err error) {
+	for i := 0; i < maxTrailerLines; i++ {
+		line, err := readLineBounded(r.br, maxTrailerLineBytes)
+		eof := false
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				return nil, "", err
+			}
+			eof = true
+		}
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" {
+			if !eof && r.signedTrailer && trailerSig == "" {
+				// minio-go writes a CRLF separator between the trailing
+				// headers and the x-amz-trailer-signature line.
+				continue
+			}
+			return trailers, trailerSig, nil
+		}
+		name, value, ok := strings.Cut(line, ":")
+		if !ok {
+			return nil, "", fmt.Errorf("%w: malformed trailer line", ErrInvalidTrailer)
+		}
+		name = strings.ToLower(strings.TrimSpace(name))
+		value = strings.TrimSpace(value)
+		if name == "x-amz-trailer-signature" {
+			trailerSig = value
+			if r.signedTrailer {
+				// The signature terminates the section; drain the optional
+				// final blank line so the body is fully consumed.
+				r.discardOptionalBlankLine()
+				return trailers, trailerSig, nil
+			}
+		} else {
+			trailers = append(trailers, [2]string{name, value})
+		}
+		if eof {
+			return trailers, trailerSig, nil
+		}
+	}
+	return nil, "", fmt.Errorf("%w: too many trailer lines", ErrInvalidTrailer)
+}
+
+func (r *awsChunkedReader) discardOptionalBlankLine() {
+	if b, err := r.br.Peek(2); err == nil && b[0] == '\r' && b[1] == '\n' {
+		_, _ = r.br.Discard(2)
+		return
+	}
+	if b, err := r.br.Peek(1); err == nil && b[0] == '\n' {
+		_, _ = r.br.Discard(1)
+	}
+}
+
+func (r *awsChunkedReader) verifyTrailingChecksums(trailers [][2]string) error {
+	for _, kv := range trailers {
+		for _, cs := range r.checksums {
+			if cs.name != kv[0] {
+				continue
+			}
+			want := base64.StdEncoding.EncodeToString(cs.hash.Sum(nil))
+			if kv[1] != want {
+				return fmt.Errorf("%w: %s", ErrTrailerChecksumMismatch, cs.name)
+			}
+		}
+	}
+	return nil
+}
+
 func (r *awsChunkedReader) consumeTrailers() error {
-	for {
-		line, err := r.br.ReadString('\n')
+	for i := 0; i < maxTrailerLines; i++ {
+		line, err := readLineBounded(r.br, maxTrailerLineBytes)
 		if err != nil {
 			return err
 		}
-		if line == "\r\n" || line == "\n" {
+		if line == "" || line == "\r" {
 			return nil
 		}
 	}
+	return fmt.Errorf("%w: too many trailer lines", ErrInvalidTrailer)
 }
 
 func DecodeBodyForS3Write(r *http.Request, verifier *AWSChunkSignatureVerifier) (io.ReadCloser, int64, error) {
 	if isAWSChunkedPayload(r.Header) {
 		mode := streamingPayloadMode(r.Header)
-		if mode != "STREAMING-AWS4-HMAC-SHA256-PAYLOAD" {
+		signedTrailer := false
+		var checksums []trailerChecksum
+		switch mode {
+		case StreamingSignedPayload:
+			if verifier == nil {
+				return nil, 0, ErrMissingSigV4AuthContext
+			}
+		case StreamingSignedPayloadTrailer:
+			if verifier == nil {
+				return nil, 0, ErrMissingSigV4AuthContext
+			}
+			signedTrailer = true
+			checksums = trailerChecksumsForRequest(r.Header)
+		case StreamingUnsignedPayloadTrailer:
+			verifier = nil
+			checksums = trailerChecksumsForRequest(r.Header)
+		default:
 			return nil, 0, fmt.Errorf("%w: %s", ErrUnsupportedStreamingMode, mode)
-		}
-		if verifier == nil {
-			return nil, 0, ErrMissingSigV4AuthContext
 		}
 		decodedLen, err := parseDecodedContentLength(r.Header)
 		if err != nil {
 			return nil, 0, err
 		}
-		return &awsChunkedReadCloser{
-			Reader: newAWSChunkedReader(r.Body, verifier),
+		reader := newAWSChunkedReader(r.Body, verifier, signedTrailer, checksums)
+		rc := &awsChunkedReadCloser{
+			reader: reader,
+			guard:  trailerGuardReader{r: reader},
 			c:      r.Body,
-		}, decodedLen, nil
+		}
+		if decodedLen == 0 {
+			// A zero-length payload has no byte the trailer guard could hold
+			// back, and the upstream request body is complete the moment it
+			// starts. Validate the whole (payload-free) stream up front so an
+			// invalid trailer fails before any upstream write begins.
+			if _, err := io.Copy(io.Discard, rc); err != nil {
+				return nil, 0, err
+			}
+		}
+		return rc, decodedLen, nil
 	}
 	if r.ContentLength < 0 {
 		return nil, 0, ErrContentLengthRequired
