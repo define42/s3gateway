@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -54,6 +56,9 @@ type Server struct {
 	cfg            config.Config
 	up             *s3.Client
 	uploadNotifier UploadNotifier
+	logger         *slog.Logger
+	auditHashKeys  [auditHashScopeCount][sha256.Size]byte
+	auditHashReady bool
 	gcache         *groupcache.Cache
 	groupLookupSF  singleflight.Group
 	fetchGroups    func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
@@ -75,11 +80,18 @@ func WithUploadNotifier(notifier UploadNotifier) Option {
 
 func New(cfg config.Config, up *s3.Client, opts ...Option) *Server {
 	cfg.ApplyDefaults()
+	auditHashKeys, auditHashReady := newAuditHashKeys(cfg.S3AuditHashKey)
 	s := &Server{
-		cfg:         cfg,
-		up:          up,
-		gcache:      groupcache.New(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
-		fetchGroups: ldapinternal.FetchGroupsUPN,
+		cfg:            cfg,
+		up:             up,
+		logger:         slog.Default(),
+		auditHashKeys:  auditHashKeys,
+		auditHashReady: auditHashReady,
+		gcache:         groupcache.New(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
+		fetchGroups:    ldapinternal.FetchGroupsUPN,
+	}
+	if !auditHashReady {
+		s.logger.Warn("S3 audit identifiers disabled: could not initialize hash key")
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -156,12 +168,14 @@ func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Han
 			s3xml.WriteError(w, http.StatusUnauthorized, "AccessDenied", "Unauthorized")
 			return
 		}
+		s.setS3AuditPrincipal(r, upn)
 
 		grps, err := s.GroupsForCredentials(upn, pass)
 		if err != nil {
 			s3xml.WriteError(w, http.StatusUnauthorized, "AccessDenied", "Bad credentials")
 			return
 		}
+		markS3AuditAuthenticated(r)
 
 		rules := authz.RulesFromGroups(grps)
 		ctx := authz.WithRules(r.Context(), rules)

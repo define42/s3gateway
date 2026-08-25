@@ -52,7 +52,7 @@ func boot(cfg config.Config) (*http.Server, func(), error) {
 	)
 	httpServer := server.NewHTTPServer(
 		cfg,
-		gateway.WithAuth(gateway, adminHandler),
+		gateway.WithS3Audit(gateway.WithAuth(gateway, adminHandler)),
 	)
 	httpServer.RegisterOnShutdown(cleanup)
 	return httpServer, cleanup, nil

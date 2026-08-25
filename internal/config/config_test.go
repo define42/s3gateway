@@ -105,6 +105,13 @@ func TestConfigValidateMatrix(t *testing.T) {
 			wantMsg: "SPLUNK_HEC_FLUSH_INTERVAL",
 		},
 		{
+			name: "audit hash key too short",
+			mutate: func(c *Config) {
+				c.S3AuditHashKey = "too-short"
+			},
+			wantMsg: "S3_AUDIT_HASH_KEY",
+		},
+		{
 			name: "splunk token without endpoint",
 			mutate: func(c *Config) {
 				c.SplunkHECToken = "token"
@@ -252,6 +259,7 @@ func TestLoadConfigSplunkHEC(t *testing.T) {
 	t.Setenv("SPLUNK_HEC_TOKEN", "hec-token")
 	t.Setenv("SPLUNK_HEC_INDEX", "gateway")
 	t.Setenv("SPLUNK_HEC_FLUSH_INTERVAL", "45s")
+	t.Setenv("S3_AUDIT_HASH_KEY", "1234567890abcdef1234567890abcdef")
 
 	cfg := LoadConfig()
 	if cfg.SplunkHECEndpoint != "https://splunk.example:8088/services/collector/event" {
@@ -265,6 +273,9 @@ func TestLoadConfigSplunkHEC(t *testing.T) {
 	}
 	if cfg.SplunkHECFlushInterval != 45*time.Second {
 		t.Fatalf("splunk HEC flush interval mismatch: got=%s want=45s", cfg.SplunkHECFlushInterval)
+	}
+	if cfg.S3AuditHashKey != "1234567890abcdef1234567890abcdef" {
+		t.Fatalf("S3 audit hash key mismatch")
 	}
 }
 

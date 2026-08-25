@@ -1,256 +1,48 @@
-# S3gateway
+# s3gateway
 
-[![codecov](https://codecov.io/gh/define42/s3gateway/graph/badge.svg?token=GVN99Z1NQC)](https://codecov.io/gh/define42/s3gateway)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/define42/s3gateway)](https://go.dev/) [![Go](https://github.com/define42/s3gateway/actions/workflows/go.yml/badge.svg)](https://github.com/define42/s3gateway/actions/workflows/go.yml) [![CodeQL](https://github.com/define42/s3gateway/actions/workflows/codeql.yml/badge.svg)](https://github.com/define42/s3gateway/actions/workflows/codeql.yml) [![Codecov](https://codecov.io/gh/define42/s3gateway/graph/badge.svg?token=GVN99Z1NQC)](https://codecov.io/gh/define42/s3gateway) [![Release](https://img.shields.io/github/v/release/define42/s3gateway)](https://github.com/define42/s3gateway/releases/latest)
 
-An S3-compatible gateway that:
+s3gateway is an HTTP gateway for path-style S3 clients. It authenticates AWS
+Signature Version 4 (SigV4) requests with LDAP credentials, derives bucket
+permissions from LDAP groups, and proxies permitted operations to an
+S3-compatible backend such as MinIO, Ceph Object Gateway, or Amazon S3.
 
-- Authenticates clients with AWS SigV4.
-- Supports two `AWS_ACCESS_KEY` credential formats:
-  - Unencrypted (legacy): `AWS_ACCESS_KEY` = `AD` + `base64("LdapUsername:LdapPassword")`
-  - Encrypted (recommended): `GenerateKeysX25519(LdapUsername, LdapPassword, s3gateway-publicKey)` output `AWS_ACCESS_KEY`
-- Validates credentials against LDAP.
-- Authorizes bucket access by LDAP group naming convention.
-- Proxies allowed requests to an upstream S3-compatible backend (for example MinIO, Ceph S3 or AWS S3).
+## Demo
 
-## Authentication Model (Two Modes)
+The included Python client creates a bucket, uploads and downloads an object,
+lists the result, and confirms that a read-only LDAP user cannot upload:
 
-S3gateway supports two ways to build `AWS_ACCESS_KEY`:
-
-| Mode | `AWS_ACCESS_KEY` format | Encryption | Python demo |
-| --- | --- | --- | --- |
-| Unencrypted (legacy) | `AD` + `base64("username:password")` | No | `example_s3_client/python/s3demo.py` |
-| Encrypted (X25519) | `X1` + `base64url(ephemeralPub || salt || nonce || ciphertext)` | Yes | `example_s3_client/python/s3demo_x25519.py` |
-
-For encrypted credentials, `ciphertext` is produced by ChaCha20-Poly1305. Its
-key is derived from the X25519 shared secret with HKDF-SHA256, and the version,
-ephemeral public key, and salt are bound as additional authenticated data.
-
-Both modes use the same secret access key derivation:
-
-- `secretKey = base64url(sha256("username:password"))`
-
-Request flow:
-
-- Client signs requests with SigV4.
-- Gateway verifies SigV4 signature and request time window (`SIGV4_MAX_SKEW`).
-- If `AWS_ACCESS_KEY` starts with `X1`, gateway decrypts it with `S3GATEWAY_PRIVATE_X25519_KEY`.
-- Gateway appends `@LDAP_DOMAIN` and binds to LDAP with `<username>@<LDAP_DOMAIN>`.
-
-Important:
-
-- Legacy base64 mode is not encryption. Always use TLS in production.
-
-## Authorization Model
-
-LDAP groups define bucket prefix permissions:
-
-- `<prefix>-r` -> read access
-- `<prefix>-w` -> write access
-- `<prefix>-c` -> create bucket
-- `<prefix>-d` -> delete object(s)
-- `<prefix>-b` -> delete bucket
-
-You can combine permission letters in one group, for example:
-
-- `<prefix>-rwcdb` -> full access for this gateway's operations
-
-Gateway maps each group to bucket prefix `<prefix>-` and combines matching permissions.
-
-Examples:
-
-- `team2-r` can read buckets like `team2-logs`, `team2-data`.
-- `team2-rwcdb` can read, write, create buckets, delete objects, and delete buckets.
-- `ListBuckets` shows buckets when you have `r` or `w` for the matching bucket prefix.
-
-For copy operations (`CopyObject`, `UploadPartCopy`):
-
-- Destination bucket requires write permission.
-- Source bucket requires read permission.
-
-## Supported Capabilities
-
-Path-style S3 API is supported (`/<bucket>/<key>`). Virtual-hosted-style is not.
-
-| Scope | Route / Request | Capability | Required group rule |
-| --- | --- | --- | --- |
-| Bucket | `GET /` | List buckets | Any permission on bucket prefix (`r`, `w`, `c`, `d`, or `b`); only matching buckets are returned |
-| Bucket | `PUT /<bucket>` | Create bucket | `c` on target bucket prefix |
-| Bucket | `HEAD /<bucket>` | Head bucket | `r` on target bucket prefix |
-| Bucket | `DELETE /<bucket>` | Delete bucket | `b` on target bucket prefix |
-| Bucket | `GET /<bucket>?location` | Get bucket location | Any permission on target bucket prefix |
-| Bucket | `GET /<bucket>` | List objects (v1) | `r` on target bucket prefix |
-| Bucket | `GET /<bucket>?list-type=2` | List objects v2 | `r` on target bucket prefix |
-| Bucket | `GET /<bucket>?versions` | List object versions | `r` on target bucket prefix |
-| Bucket | `POST /<bucket>?delete` | Multi-object delete | `d` on target bucket prefix |
-| Bucket | `PUT /<bucket>?versioning` | Put bucket versioning | `w` on target bucket prefix |
-| Bucket | `GET /<bucket>?versioning` | Get bucket versioning | `r` on target bucket prefix |
-| Bucket | `PUT /<bucket>?lifecycle` | Put lifecycle configuration | `c` on target bucket prefix |
-| Bucket | `GET /<bucket>?lifecycle` | Get lifecycle configuration | `r` on target bucket prefix |
-| Bucket | `DELETE /<bucket>?lifecycle` | Delete lifecycle configuration | `b` on target bucket prefix |
-| Bucket | `PUT /<bucket>?tagging` | Put bucket tagging | `w` on target bucket prefix |
-| Bucket | `GET /<bucket>?tagging` | Get bucket tagging | `r` on target bucket prefix |
-| Bucket | `DELETE /<bucket>?tagging` | Delete bucket tagging | `w` on target bucket prefix |
-| Bucket | `GET /<bucket>?uploads` | List multipart uploads | `r` on target bucket prefix |
-| Bucket | `GET /<bucket>?acl` | Get bucket ACL (canned owner `FULL_CONTROL` response) | `r` on target bucket prefix |
-| Bucket | `PUT /<bucket>?acl` | Put bucket ACL (accepted as no-op for the `private` canned ACL only) | `w` on target bucket prefix |
-| Bucket | `PUT /<bucket>?encryption` | Put bucket encryption configuration | `c` on target bucket prefix |
-| Bucket | `GET /<bucket>?encryption` | Get bucket encryption configuration | `r` on target bucket prefix |
-| Bucket | `DELETE /<bucket>?encryption` | Delete bucket encryption configuration | `b` on target bucket prefix |
-| Bucket | `GET /<bucket>?policy`, `?policyStatus` | Answered locally with `NoSuchBucketPolicy` (the gateway has no bucket policies) | `r` on target bucket prefix |
-| Bucket | `GET /<bucket>?cors`, `?website`, `?replication` | Answered locally with the matching not-configured error | `r` on target bucket prefix |
-| Bucket | `GET /<bucket>?logging`, `?notification`, `?accelerate` | Answered locally with an empty (disabled) configuration | `r` on target bucket prefix |
-| Bucket | `GET /<bucket>?requestPayment` | Answered locally with `BucketOwner` | `r` on target bucket prefix |
-| Bucket | `GET /<bucket>?publicAccessBlock` | Answered locally with all public access blocked (every request is authenticated) | `r` on target bucket prefix |
-| Object | `GET /<bucket>/<key>?acl` | Get object ACL (canned owner `FULL_CONTROL` response) | `r` on target bucket prefix |
-| Object | `PUT /<bucket>/<key>?acl` | Put object ACL (accepted as no-op for `private`, `bucket-owner-read`, `bucket-owner-full-control`) | `w` on target bucket prefix |
-| Object | `GET /<bucket>/<key>` | Get object | `r` on target bucket prefix |
-| Object | `HEAD /<bucket>/<key>` | Head object | `r` on target bucket prefix |
-| Object | `PUT /<bucket>/<key>` | Put object | `w` on target bucket prefix; if `REQUIRED_UPLOAD_METADATA_KEYS` is set, all listed `x-amz-meta-*` keys must be present |
-| Object | `PUT /<bucket>/<key>` with `x-amz-copy-source` | Copy object | Destination bucket: `w`; source bucket: `r` |
-| Object | `GET /<bucket>/<key>?attributes` | Get object attributes | `r` on target bucket prefix |
-| Object | `DELETE /<bucket>/<key>` | Delete object | `d` on target bucket prefix |
-| Object | `PUT /<bucket>/<key>?tagging` | Put object tagging | `w` on target bucket prefix |
-| Object | `GET /<bucket>/<key>?tagging` | Get object tagging | `r` on target bucket prefix |
-| Object | `DELETE /<bucket>/<key>?tagging` | Delete object tagging | `w` on target bucket prefix |
-| Multipart | `POST /<bucket>/<key>?uploads` | Create multipart upload | `w` on target bucket prefix; if `REQUIRED_UPLOAD_METADATA_KEYS` is set, all listed `x-amz-meta-*` keys must be present |
-| Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` | Upload part | `w` on target bucket prefix |
-| Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` with `x-amz-copy-source` | Upload part copy | Destination bucket: `w`; source bucket: `r` |
-| Multipart | `GET /<bucket>/<key>?uploadId=...` | List parts | `r` on target bucket prefix |
-| Multipart | `POST /<bucket>/<key>?uploadId=...` | Complete multipart upload | `w` on target bucket prefix |
-| Multipart | `DELETE /<bucket>/<key>?uploadId=...` | Abort multipart upload | `w` on target bucket prefix |
-| Streaming | `PUT` object/part with `x-amz-content-sha256: STREAMING-AWS4-HMAC-SHA256-PAYLOAD` | `aws-chunked` streaming uploads | Same as underlying write route (`w`); requires `x-amz-decoded-content-length` and per-chunk signature chain |
-| Streaming | `PUT` object/part with `x-amz-content-sha256: STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER` | `aws-chunked` streaming uploads with signed trailing checksum | Same as `STREAMING-AWS4-HMAC-SHA256-PAYLOAD`, plus `x-amz-trailer-signature` verification and trailing `x-amz-checksum-*` validation |
-| Streaming | `PUT` object/part with `x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER` | `aws-chunked` streaming uploads with unsigned trailing checksum (current AWS SDK/CLI default over TLS) | Same as underlying write route (`w`); requires `x-amz-decoded-content-length`; trailing `x-amz-checksum-*` (crc32, crc32c, crc64nvme, sha1, sha256) is validated against the payload |
-
-## Notable Limits / Non-Goals
-
-- Path-style requests only.
-- Header-based SigV4 auth only (no presigned URL flow).
-- Only implemented operations are supported; unsupported routes return `NotImplemented`.
-- Requests carrying a sub-resource of an unimplemented operation (for example `?retention`, `?object-lock`, `?select`) are rejected with `NotImplemented` before any bucket/object handler runs, so they can never be misinterpreted as a plain `GET`/`PUT`/`DELETE`.
-- ACL and bucket-policy *writes* that would grant access are unimplemented by design: authorization is decided exclusively by LDAP groups. ACL reads return a canned owner-`FULL_CONTROL` document, and only owner-retaining canned ACL writes are accepted (as no-ops) for client compatibility.
-
-## Configuration
-
-### Required
-
-- `LDAP_URL` (example: `ldaps://ldap.example.com:636`)
-- `LDAP_BASE_DN` (example: `dc=example,dc=com`)
-- `S3_ENDPOINT` (example: `http://minio:9000`)
-- `S3_ACCESS_KEY`
-- `S3_SECRET_KEY`
-
-### Optional
-
-- `LISTEN_ADDR` (default `:8080`)
-- `LDAP_DOMAIN` (default `example.com`)
-- `LDAP_GROUP_TTL` (default `2m`)
-- `LDAP_GROUP_CACHE_MAX_ENTRIES` (default `10000`)
-- `S3_REGION` (default `us-east-1`)
-- `S3_FORCE_PATH_STYLE` (default `true`)
-- `SIGV4_MAX_SKEW` (default `15m`)
-- `S3GATEWAY_PRIVATE_X25519_KEY` (default empty): hex-encoded X25519 private key used to decrypt encrypted `AWS_ACCESS_KEY` (`X1...`) values generated by `GenerateKeysX25519`.
-- `REQUIRED_UPLOAD_METADATA_KEYS` (default empty): comma-separated required upload metadata keys (for example `legal-ingest-timestamp,case-id`). Keys may be provided with or without `x-amz-meta-` prefix.
-- `KAFKA_BROKERS` (default empty): comma-separated Kafka bootstrap broker addresses (for example `kafka-1:9092,kafka-2:9092`). Upload notifications are disabled when this is empty.
-- `KAFKA_TOPIC` (default empty): shared topic for all upload notifications. When empty and `KAFKA_BROKERS` is configured, each notification is sent to the topic whose name matches the bucket name.
-- `KAFKA_NOTIFICATION_TIMEOUT` (default `5s`): maximum time the request waits for Kafka to acknowledge an upload notification.
-- `SPLUNK_HEC_ENDPOINT` (default empty): complete Splunk HEC JSON event URL, for example `https://splunk.example:8088/services/collector/event`. Splunk forwarding is disabled when this is empty.
-- `SPLUNK_HEC_TOKEN` (default empty): HEC authentication token. Required with `SPLUNK_HEC_ENDPOINT`; provide it through a secret manager or protected environment variable.
-- `SPLUNK_HEC_INDEX` (default empty): destination Splunk index. Required with `SPLUNK_HEC_ENDPOINT`.
-- `SPLUNK_HEC_FLUSH_INTERVAL` (default `30s`): interval used to bundle structured log events into HEC requests.
-- `COOKIE_SECRET` (default empty): secret seed used to sign and encrypt admin web-session cookies. When set, it must contain at least 32 characters. When not set, ephemeral random keys are generated at startup. Admin sessions are stored in memory, so they are invalidated on every restart and are not shared across multiple instances even when this value is set. **Set this to a strong random value of at least 32 characters in production.**
-- `HTTP_READ_HEADER_TIMEOUT` (default `10s`)
-- `HTTP_READ_TIMEOUT` (default `0s`)
-- `HTTP_WRITE_TIMEOUT` (default `0s`)
-- `HTTP_IDLE_TIMEOUT` (default `120s`)
-- `HTTP_SHUTDOWN_TIMEOUT` (default `20s`)
-- `HTTP_MAX_HEADER_BYTES` (default `1048576`)
-- `ACME_DOMAINS` (default empty): comma-separated domain list. When set, gateway enables automatic HTTPS certificate management via ACME/certmagic.
-- `ACME_SERVER` (default `https://acme-v02.api.letsencrypt.org/directory`): ACME directory URL.
-- `ACME_DATA_DIR` (default `./certs`): directory used to store ACME account and certificate data.
-- `ACME_CA_DIR` (default empty): directory of PEM CA certificate file(s) trusted for TLS when connecting to the ACME server (useful for private ACME endpoints).
-
-### Splunk HEC logging
-
-Set all three HEC connection values to enable forwarding:
-
-```text
-SPLUNK_HEC_ENDPOINT=https://splunk.example:8088/services/collector/event
-SPLUNK_HEC_TOKEN=<secret-token>
-SPLUNK_HEC_INDEX=s3gateway
-SPLUNK_HEC_FLUSH_INTERVAL=30s
+```console
+$ python3 example_s3_client/python/s3demo.py
+Created bucket: team2-data
+Uploaded object to s3://team2-data/...
+Validation passed: uploaded and downloaded file contents are identical
+Readonly check passed: upload denied with AccessDenied
 ```
 
-Logs continue to be emitted as JSON on stdout. In parallel, the gateway wraps
-each structured log record in a Splunk HEC event, groups records until the
-flush interval, and sends them in batched POST requests. Failed batches remain
-buffered for the next interval, subject to a 64 MiB in-memory safety limit, and
-pending logs are flushed during graceful shutdown. If that limit is reached,
-local stdout logging continues and the number of dropped HEC events is reported
-on stderr. HEC transport failures are also written to stderr without exposing
-the token. A response lost after successful ingestion can cause a batch to be
-retried, so duplicate events are possible. Use an HTTPS endpoint in production.
-
-### Kafka upload notifications
-
-When `KAFKA_BROKERS` is configured, the gateway publishes a JSON event after
-the upstream S3 service confirms a `PutObject` or `CompleteMultipartUpload`
-operation. Multipart initiation and individual part uploads do not produce
-events, so a multipart object is first announced only after completion.
-
-Set `KAFKA_TOPIC` to route every event to one shared topic:
-
-```text
-KAFKA_BROKERS=kafka-1:9092,kafka-2:9092
-KAFKA_TOPIC=all-uploads
-```
-
-Leave `KAFKA_TOPIC` empty to route each event to the topic matching its bucket:
-
-```text
-KAFKA_BROKERS=kafka-1:9092,kafka-2:9092
-KAFKA_TOPIC=
-```
-
-The producer requests automatic topic creation. The Kafka cluster must permit
-it, or bucket-named topics must be created in advance. Events use the
-`<bucket>/<key>` Kafka record key and an `application/json` value such as:
-
-```json
-{
-  "schema_version": 1,
-  "event_name": "ObjectCreated:CompleteMultipartUpload",
-  "bucket": "evidence",
-  "key": "cases/42/document.pdf",
-  "etag": "98f13708210194c475687be6106a3b84-2",
-  "version_id": "3Lg...",
-  "upload_id": "VXBsb2FkIElE...",
-  "uploader": "alice@example.com",
-  "occurred_at": "2026-08-24T12:30:00Z"
-}
-```
-
-Delivery is best effort and bounded by `KAFKA_NOTIFICATION_TIMEOUT`. A Kafka
-failure is logged but does not change the successful S3 response because the
-object is already stored upstream. A timeout can leave delivery status
-unknown, so consumers should tolerate duplicate events.
-
-## Getting Started
+## Getting started
 
 ### Local Docker Compose stack
 
-The included stack starts MinIO, the test LDAP server, and S3gateway. It requires
-Docker with the Compose plugin:
+The local stack requires Docker with the Compose plugin. It starts MinIO, a
+test LDAP server, and s3gateway:
 
 ```bash
 docker compose up --build -d
 ```
 
-The gateway is available at `http://localhost:8080`, and the MinIO console is
-available at `http://localhost:9001`. The test LDAP users are `testuser` and
-`readonly`, both with password `dogood`.
+The services are available at:
 
-To run the legacy Python client example:
+| Service | URL | Credentials |
+| --- | --- | --- |
+| s3gateway S3 endpoint | `http://localhost:8080` | Generated from an LDAP username and password |
+| s3gateway admin console | `http://localhost:8080/login` | `testuser` / `dogood` or `readonly` / `dogood` |
+| MinIO console | `http://localhost:9001` | `minioadmin` / `minioadmin` |
+
+`testuser` has full access to the `team2` and `team8` bucket namespaces.
+`readonly` has read-only access to `team2`.
+
+Run the legacy credential demo:
 
 ```bash
 python3 -m venv .venv
@@ -259,16 +51,109 @@ python3 -m pip install boto3 cryptography
 python3 example_s3_client/python/s3demo.py
 ```
 
-Stop the stack with:
+Stop the stack when finished:
 
 ```bash
 docker compose down
 ```
 
-### Encrypted client setup
+### Published container
 
-Generate an X25519 key pair in your current shell. The private key is passed to
-the gateway; clients receive only the public key:
+Images are published to GitHub Container Registry. Create an environment file
+containing at least the five required settings listed under
+[Configuration](#configuration), then run:
+
+```bash
+docker pull ghcr.io/define42/s3gateway:latest
+docker run --rm -p 8080:8080 \
+  --env-file ./s3gateway.env \
+  ghcr.io/define42/s3gateway:latest
+```
+
+Versioned images use the generated `v*` release tag; commit images use the full
+Git commit SHA.
+
+### From source
+
+Building from source requires Go 1.24 or later and reachable LDAP and upstream
+S3 services:
+
+```bash
+export LDAP_URL="ldaps://ldap.example.com:636"
+export LDAP_BASE_DN="dc=example,dc=com"
+export LDAP_DOMAIN="example.com"
+export S3_ENDPOINT="https://s3.example.com"
+export S3_ACCESS_KEY="upstream-access-key"
+export S3_SECRET_KEY="upstream-secret-key"
+
+go run ./cmd/s3gateway
+```
+
+To install the binary first:
+
+```bash
+go install github.com/define42/s3gateway/cmd/s3gateway@latest
+s3gateway
+```
+
+The process emits structured JSON logs and shuts down gracefully on `SIGINT`
+or `SIGTERM`.
+
+## Features and reference
+
+- AWS SigV4 authentication backed by LDAP credentials.
+- Encrypted X25519 and legacy base64 client credential formats.
+- LDAP-group authorization for bucket namespaces and individual operation types.
+- Path-style bucket, object, multipart, versioning, lifecycle, tagging,
+  encryption, and compatibility operations.
+- Browser-based administration using the same LDAP groups.
+- Required upload metadata and authenticated-uploader stamping.
+- Structured S3 audit events with pseudonymized identifiers.
+- Optional Kafka upload events and Splunk HEC log forwarding.
+- Optional ACME-managed HTTPS and unauthenticated health endpoints.
+
+### Authentication
+
+The client's SigV4 access key ID carries the LDAP username and password in one
+of two formats. The SigV4 secret access key is derived from the same credentials:
+
+```text
+secret access key = base64url(SHA-256("username:password"))
+```
+
+| Mode | SigV4 access key ID | Credential protection | Example |
+| --- | --- | --- | --- |
+| X25519 (recommended) | `X1` + unpadded `base64url(concat(ephemeral_public_key, salt, nonce, ciphertext))` | X25519, HKDF-SHA256, and ChaCha20-Poly1305 | [`s3demo_x25519.py`](example_s3_client/python/s3demo_x25519.py) |
+| Legacy | `AD` + `base64("username:password")` | None; base64 is reversible | [`s3demo.py`](example_s3_client/python/s3demo.py) |
+
+A legacy Java client is also available in
+[`S3Demo.java`](example_s3_client/java/src/main/java/S3Demo.java).
+
+For X25519 credentials, the version, ephemeral public key, and salt are bound
+to the ciphertext as additional authenticated data. Configure
+`S3GATEWAY_PRIVATE_X25519_KEY` on the gateway before using an `X1...` access key
+ID. Configuring that key does not disable the legacy `AD...` format.
+
+LDAP usernames must be supplied without the domain suffix: the gateway appends
+`@LDAP_DOMAIN` before binding and searching. Usernames cannot contain `:`
+because that character separates the username and password in the credential
+payload.
+
+For each S3 request, the gateway:
+
+1. Parses the SigV4 authorization data and validates the request timestamp.
+2. Decodes or decrypts the access key ID and derives the SigV4 secret access key.
+3. Verifies the SigV4 request signature.
+4. Binds to LDAP as `<username>@<LDAP_DOMAIN>` and loads the user's groups.
+5. Applies the group-derived bucket policy and proxies an allowed request.
+
+Always use TLS in production. In legacy mode, anyone who obtains the access key
+ID can recover the LDAP username and password.
+
+#### Encrypted client setup
+
+Generate an X25519 key pair. The gateway receives the private key; clients
+receive only the public key:
 
 ```bash
 eval "$(
@@ -297,50 +182,246 @@ PY
 )"
 ```
 
-For the local stack, start Compose from the same shell so it can pass the
-private key into the gateway, then run the encrypted demo with the public key:
+Start the local stack from the same shell so Compose passes the private key to
+the gateway, then run the encrypted demo with the public key:
 
 ```bash
 docker compose up --build -d
 python3 example_s3_client/python/s3demo_x25519.py
 ```
 
-Store production private keys in a secret manager rather than in shell history,
-environment files committed to source control, or container images.
+Store production private keys in a secret manager. Do not put them in files
+committed to source control or bake them into container images.
 
-### Run from source
+### Authorization
 
-Set the five required environment variables to reachable LDAP and S3 services,
-then start the gateway:
+LDAP group names use `<namespace>-<permissions>`. The namespace is the part of
+a bucket name before its first `-`; permissions are one or more letters:
 
-```bash
-export LDAP_URL="ldaps://ldap.example.com:636"
-export LDAP_BASE_DN="dc=example,dc=com"
-export S3_ENDPOINT="https://s3.example.com"
-export S3_ACCESS_KEY="upstream-access-key"
-export S3_SECRET_KEY="upstream-secret-key"
-go run ./cmd/s3gateway
+| Letter | Permission |
+| --- | --- |
+| `r` | Read buckets and objects |
+| `w` | Write objects and mutable bucket settings |
+| `c` | Create buckets and put lifecycle or encryption configuration |
+| `d` | Delete objects |
+| `b` | Delete buckets and lifecycle or encryption configuration |
+
+For example, `team2-r` can read `team2-logs` and `team2-data`, while
+`team2-rwcdb` grants every permission implemented by the gateway for the
+`team2` namespace. Permissions from multiple groups for the same namespace are
+combined. `ListBuckets` returns matching buckets when the user has any
+permission for their namespace.
+
+Copy operations require `r` on the source bucket and `w` on the destination
+bucket.
+
+### Admin console
+
+Open `/login` in a browser and sign in with an LDAP username without the domain
+suffix. The console lists permitted buckets and objects and supports bucket
+creation plus object upload, download, and deletion according to the same LDAP
+group permissions as the S3 API.
+
+Admin sessions expire 30 minutes after login and are stored in process memory.
+They are invalidated on restart and are not shared between gateway replicas.
+Set `COOKIE_SECRET` to the same strong value on persistent deployments so the
+cookie encryption keys do not change on every restart.
+
+### S3 compatibility
+
+Only path-style requests (`/<bucket>/<key>`) are supported. Virtual-hosted-style
+requests are not.
+
+| Scope | Route / request | Operation or behavior | Required permission |
+| --- | --- | --- | --- |
+| Bucket | `GET /` | ListBuckets; only matching buckets are returned | Any permission on the bucket namespace |
+| Bucket | `PUT /<bucket>` | CreateBucket | `c` |
+| Bucket | `HEAD /<bucket>` | HeadBucket | `r` |
+| Bucket | `DELETE /<bucket>` | DeleteBucket | `b` |
+| Bucket | `GET /<bucket>?location` | GetBucketLocation | Any permission |
+| Bucket | `GET /<bucket>` | ListObjects v1 | `r` |
+| Bucket | `GET /<bucket>?list-type=2` | ListObjectsV2 | `r` |
+| Bucket | `GET /<bucket>?versions` | ListObjectVersions | `r` |
+| Bucket | `POST /<bucket>?delete` | DeleteObjects | `d` |
+| Bucket | `PUT /<bucket>?versioning` | PutBucketVersioning | `w` |
+| Bucket | `GET /<bucket>?versioning` | GetBucketVersioning | `r` |
+| Bucket | `PUT /<bucket>?lifecycle` | PutBucketLifecycleConfiguration | `c` |
+| Bucket | `GET /<bucket>?lifecycle` | GetBucketLifecycleConfiguration | `r` |
+| Bucket | `DELETE /<bucket>?lifecycle` | DeleteBucketLifecycleConfiguration | `b` |
+| Bucket | `PUT /<bucket>?tagging` | PutBucketTagging | `w` |
+| Bucket | `GET /<bucket>?tagging` | GetBucketTagging | `r` |
+| Bucket | `DELETE /<bucket>?tagging` | DeleteBucketTagging | `w` |
+| Bucket | `GET /<bucket>?uploads` | ListMultipartUploads | `r` |
+| Bucket | `GET /<bucket>?acl` | Return a canned owner `FULL_CONTROL` ACL | `r` |
+| Bucket | `PUT /<bucket>?acl` | Accept the `private` canned ACL as a no-op | `w` |
+| Bucket | `PUT /<bucket>?encryption` | PutBucketEncryption | `c` |
+| Bucket | `GET /<bucket>?encryption` | GetBucketEncryption | `r` |
+| Bucket | `DELETE /<bucket>?encryption` | DeleteBucketEncryption | `b` |
+| Bucket | `GET /<bucket>?policy`, `?policyStatus` | Return `NoSuchBucketPolicy`; the gateway has no bucket policies | `r` |
+| Bucket | `GET /<bucket>?cors`, `?website`, `?replication` | Return the matching not-configured error | `r` |
+| Bucket | `GET /<bucket>?logging`, `?notification`, `?accelerate` | Return an empty or disabled configuration | `r` |
+| Bucket | `GET /<bucket>?requestPayment` | Return `BucketOwner` | `r` |
+| Bucket | `GET /<bucket>?publicAccessBlock` | Return all public-access blocks enabled | `r` |
+| Object | `GET /<bucket>/<key>?acl` | Return a canned owner `FULL_CONTROL` ACL | `r` |
+| Object | `PUT /<bucket>/<key>?acl` | Accept `private`, `bucket-owner-read`, or `bucket-owner-full-control` as a no-op | `w` |
+| Object | `GET /<bucket>/<key>` | GetObject | `r` |
+| Object | `HEAD /<bucket>/<key>` | HeadObject | `r` |
+| Object | `PUT /<bucket>/<key>` | PutObject | `w` |
+| Object | `PUT /<bucket>/<key>` with `x-amz-copy-source` | CopyObject | Destination `w`; source `r` |
+| Object | `GET /<bucket>/<key>?attributes` | GetObjectAttributes | `r` |
+| Object | `DELETE /<bucket>/<key>` | DeleteObject | `d` |
+| Object | `PUT /<bucket>/<key>?tagging` | PutObjectTagging | `w` |
+| Object | `GET /<bucket>/<key>?tagging` | GetObjectTagging | `r` |
+| Object | `DELETE /<bucket>/<key>?tagging` | DeleteObjectTagging | `w` |
+| Multipart | `POST /<bucket>/<key>?uploads` | CreateMultipartUpload | `w` |
+| Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` | UploadPart | `w` |
+| Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` with `x-amz-copy-source` | UploadPartCopy | Destination `w`; source `r` |
+| Multipart | `GET /<bucket>/<key>?uploadId=...` | ListParts | `r` |
+| Multipart | `POST /<bucket>/<key>?uploadId=...` | CompleteMultipartUpload | `w` |
+| Multipart | `DELETE /<bucket>/<key>?uploadId=...` | AbortMultipartUpload | `w` |
+| Streaming | `STREAMING-AWS4-HMAC-SHA256-PAYLOAD` | Verify the `aws-chunked` per-chunk signature chain | Permission required by the underlying write route |
+| Streaming | `STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER` | Verify the chunk chain, signed trailer, and trailing checksum | Permission required by the underlying write route |
+| Streaming | `STREAMING-UNSIGNED-PAYLOAD-TRAILER` | Validate the trailing CRC32, CRC32C, CRC64NVME, SHA-1, or SHA-256 checksum | Permission required by the underlying write route |
+
+Streaming writes require `x-amz-decoded-content-length`. Signed-trailer mode
+also requires `x-amz-trailer-signature`.
+
+### Upload metadata
+
+`PutObject`, `CreateMultipartUpload`, admin-console uploads, and `CopyObject`
+with `x-amz-metadata-directive: REPLACE` stamp the authenticated LDAP username
+as `x-amz-meta-uploaded-by`, replacing any client-supplied value.
+
+Set `REQUIRED_UPLOAD_METADATA_KEYS` to a comma-separated list to require
+additional `x-amz-meta-*` keys on those creation paths. A `CopyObject` request
+using the default `COPY` directive inherits the source object's metadata and is
+not revalidated.
+
+### Configuration
+
+Configuration is read from environment variables at startup. Duration values
+use Go duration syntax such as `500ms`, `30s`, or `2m`.
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `LDAP_URL` | Yes | — | LDAP URL, for example `ldaps://ldap.example.com:636` |
+| `LDAP_BASE_DN` | Yes | — | Search base, for example `dc=example,dc=com` |
+| `S3_ENDPOINT` | Yes | — | Upstream S3-compatible endpoint |
+| `S3_ACCESS_KEY` | Yes | — | Upstream S3 access key; this is not a client gateway credential |
+| `S3_SECRET_KEY` | Yes | — | Upstream S3 secret key |
+| `LISTEN_ADDR` | No | `:8080` | Plain HTTP listen address when ACME is disabled |
+| `LDAP_DOMAIN` | No | `example.com` | Domain appended to the client-supplied LDAP username |
+| `LDAP_GROUP_TTL` | No | `2m` | Successful LDAP group-cache lifetime |
+| `LDAP_GROUP_CACHE_MAX_ENTRIES` | No | `10000` | Maximum group-cache entries; also bounds in-memory admin sessions |
+| `S3_REGION` | No | `us-east-1` | Upstream S3 signing region |
+| `S3_FORCE_PATH_STYLE` | No | `true` | Use path-style requests to the upstream S3 service |
+| `SIGV4_MAX_SKEW` | No | `15m` | Maximum allowed absolute age or clock skew of a client request |
+| `S3GATEWAY_PRIVATE_X25519_KEY` | No | Empty | 64-character hex X25519 private key used to decrypt `X1...` access key IDs |
+| `REQUIRED_UPLOAD_METADATA_KEYS` | No | Empty | Comma-separated metadata keys, with or without the `x-amz-meta-` prefix |
+| `COOKIE_SECRET` | No | Ephemeral | Admin-cookie key seed; when set, it must contain at least 32 characters |
+| `KAFKA_BROKERS` | No | Empty | Comma-separated Kafka bootstrap brokers; empty disables notifications |
+| `KAFKA_TOPIC` | No | Bucket name | Shared notification topic; requires `KAFKA_BROKERS` when non-empty |
+| `KAFKA_NOTIFICATION_TIMEOUT` | No | `5s` | Maximum wait for Kafka acknowledgement |
+| `SPLUNK_HEC_ENDPOINT` | No | Empty | Complete HEC JSON event URL; empty disables HEC forwarding |
+| `SPLUNK_HEC_TOKEN` | With HEC | Empty | HEC authentication token |
+| `SPLUNK_HEC_INDEX` | With HEC | Empty | Destination Splunk index |
+| `SPLUNK_HEC_FLUSH_INTERVAL` | No | `30s` | Interval for batching HEC log events |
+| `S3_AUDIT_HASH_KEY` | No | Ephemeral | HMAC seed for stable audit pseudonyms; when set, it must contain at least 32 characters |
+| `HTTP_READ_HEADER_TIMEOUT` | No | `10s` | HTTP header-read timeout |
+| `HTTP_READ_TIMEOUT` | No | `0s` | HTTP request-read timeout; `0s` disables it |
+| `HTTP_WRITE_TIMEOUT` | No | `0s` | HTTP response-write timeout; `0s` disables it |
+| `HTTP_IDLE_TIMEOUT` | No | `120s` | HTTP keep-alive idle timeout |
+| `HTTP_SHUTDOWN_TIMEOUT` | No | `20s` | Graceful-shutdown timeout |
+| `HTTP_MAX_HEADER_BYTES` | No | `1048576` | Maximum request-header size in bytes |
+| `ACME_DOMAINS` | No | Empty | Comma-separated certificate domains; empty disables ACME HTTPS |
+| `ACME_SERVER` | No | Let's Encrypt production | ACME directory URL |
+| `ACME_DATA_DIR` | No | `./certs` | ACME account and certificate storage directory |
+| `ACME_CA_DIR` | No | Empty | Directory containing PEM CA files trusted for a private ACME server |
+
+When `COOKIE_SECRET` is empty, the gateway generates ephemeral cookie keys and
+logs a warning. Set it to a strong secret in production, but remember that the
+session records themselves remain local to each process.
+
+### Kafka upload notifications
+
+When `KAFKA_BROKERS` is configured, the S3 API publishes a JSON event after the
+upstream confirms `PutObject` or `CompleteMultipartUpload`. Multipart initiation
+and individual part uploads do not produce events. Admin-console uploads and
+copy operations do not currently produce events.
+
+Set `KAFKA_TOPIC` to route all events to one topic:
+
+```dotenv
+KAFKA_BROKERS=kafka-1:9092,kafka-2:9092
+KAFKA_TOPIC=all-uploads
 ```
 
-The server supports graceful shutdown on `SIGINT`/`SIGTERM`.
+Leave `KAFKA_TOPIC` empty to use the bucket name as the topic. The producer
+requests automatic topic creation; the Kafka cluster must permit it, or the
+topics must already exist. Records use `<bucket>/<key>` as the key and an
+`application/json` value:
 
-### Run the published container
-
-Images are published to GitHub Container Registry. Put the required variables
-from the Configuration section in a local `s3gateway.env` file, then run:
-
-```bash
-docker pull ghcr.io/define42/s3gateway:latest
-docker run --rm -p 8080:8080 \
-  --env-file ./s3gateway.env \
-  ghcr.io/define42/s3gateway:latest
+```json
+{
+  "schema_version": 1,
+  "event_name": "ObjectCreated:CompleteMultipartUpload",
+  "bucket": "team2-evidence",
+  "key": "cases/42/document.pdf",
+  "etag": "98f13708210194c475687be6106a3b84-2",
+  "version_id": "3Lg...",
+  "upload_id": "VXBsb2FkIElE...",
+  "uploader": "alice",
+  "occurred_at": "2026-08-24T12:30:00Z"
+}
 ```
 
-## ACME (Automatic HTTPS)
+Delivery is best effort and bounded by `KAFKA_NOTIFICATION_TIMEOUT`. A Kafka
+failure is logged but does not change the successful S3 response because the
+object is already stored upstream. A timeout can leave delivery status unknown,
+so consumers must tolerate duplicate events.
 
-S3gateway supports automatic TLS certificates through ACME using `certmagic`.
+### Splunk HEC logging
 
-Minimal setup:
+Set the endpoint, token, and index to enable forwarding:
+
+```dotenv
+SPLUNK_HEC_ENDPOINT=https://splunk.example:8088/services/collector/event
+SPLUNK_HEC_TOKEN=<secret-token>
+SPLUNK_HEC_INDEX=s3gateway
+SPLUNK_HEC_FLUSH_INTERVAL=30s
+```
+
+The gateway continues to emit JSON logs on stdout while batching copies for
+HEC. Failed batches remain buffered for the next interval, subject to a 64 MiB
+in-memory limit, and pending logs are flushed during graceful shutdown. When
+the buffer is full, stdout logging continues and dropped-event counts are
+reported on stderr. A response lost after successful ingestion can cause a
+retry, so duplicate HEC events are possible. Use HTTPS for the HEC endpoint in
+production.
+
+### S3 audit logs
+
+Every S3 request produces one `INFO`-level structured log event named
+`S3 request completed`, including requests rejected during authentication.
+Health checks and browser-admin requests are excluded. Each event contains:
+
+- `event_kind`, `action`, `method`, `status`, and `outcome`
+- `duration_us` and `response_bytes`
+- `authenticated` and `handler_completed`
+- `request_id`, when the upstream returns a safe `x-amz-request-id`
+- `principal_hash`, `bucket_hash`, and `object_key_hash`
+
+The gateway does not put raw principals, bucket names, object keys,
+authorization headers, or query values in these audit fields. Identifiers are
+HMAC-SHA256 pseudonyms. When `S3_AUDIT_HASH_KEY` is empty, a random key is
+generated at startup, so hashes cannot be correlated across restarts or
+replicas. Set the same protected value of at least 32 characters on each
+instance when stable correlation is required. Splunk HEC receives these events
+when HEC forwarding is enabled.
+
+### ACME HTTPS
+
+After setting the required configuration, add one or more certificate domains:
 
 ```bash
 export ACME_DOMAINS="s3gw.example.com"
@@ -352,23 +433,24 @@ Optional overrides:
 ```bash
 export ACME_SERVER="https://acme-v02.api.letsencrypt.org/directory"
 export ACME_DATA_DIR="./certs"
-# For private ACME servers:
-export ACME_CA_DIR="/etc/s3gateway/acme-ca"
+export ACME_CA_DIR="/etc/s3gateway/acme-ca" # private ACME server CA files
 ```
 
-Behavior:
+`ACME_DOMAINS` accepts comma-separated values and trims spaces. When it is set,
+the gateway uses the ACME-managed HTTPS listener instead of `LISTEN_ADDR`.
+Ensure every public ACME domain resolves to the gateway host and that the
+required challenge and HTTPS ports are reachable.
 
-- `ACME_DOMAINS` accepts comma-separated values and trims spaces.
-- If `ACME_DOMAINS` is set, the gateway serves HTTPS using the ACME-managed listener.
-- If `ACME_DOMAINS` is empty, the gateway serves plain HTTP on `LISTEN_ADDR`.
-- For public ACME CAs, ensure each ACME domain resolves to the gateway host.
+### Health endpoints
 
-## Health Endpoints
+Health endpoints do not require SigV4 or LDAP authentication:
 
-- `GET /healthz` -> liveness endpoint. Returns `200 OK` when process is running.
-- `GET /readyz` -> readiness endpoint. Returns `200 OK` only when both LDAP and upstream S3 are reachable; otherwise returns `503 Service Unavailable`.
+| Endpoint | Meaning |
+| --- | --- |
+| `GET /healthz` | Returns `200 OK` while the process is serving requests |
+| `GET /readyz` | Returns `200 OK` when LDAP can be reached and upstream `ListBuckets` succeeds; otherwise `503 Service Unavailable` |
 
-Example Kubernetes probes:
+Example Kubernetes probes for the default plain HTTP listener:
 
 ```yaml
 livenessProbe:
@@ -382,86 +464,44 @@ readinessProbe:
     port: 8080
 ```
 
-## Client Setup Example
+### Limits and non-goals
 
-### 1) Unencrypted authentication (`AD...`) from `example_s3_client/python/s3demo.py`
+- Only header-based SigV4 authentication is supported; presigned URLs are not.
+- Only the operations listed above are implemented. Other routes return
+  `NotImplemented`.
+- Unimplemented S3 subresources such as `?retention`, `?object-lock`, and
+  `?select` are rejected before bucket or object dispatch.
+- LDAP groups are the only source of authorization. ACL reads return canned
+  owner `FULL_CONTROL` documents, and only owner-retaining canned ACL writes
+  are accepted as no-ops for client compatibility.
+- For non-streaming uploads, the gateway verifies the SigV4 signature but does
+  not independently recalculate the payload digest supplied in
+  `x-amz-content-sha256`.
 
-```python
-def generate_gateway_keys(user_upn, user_password):
-    token = f"{user_upn}:{user_password}"
-    access_key = "AD" + base64.b64encode(token.encode("utf-8")).decode("utf-8")
-    secret_key = base64.urlsafe_b64encode(
-        hashlib.sha256(token.encode("utf-8")).digest()
-    ).decode("utf-8")
-    return access_key, secret_key
-```
+## Contributing
 
-### 2) Encrypted authentication (`X1...`) from `example_s3_client/python/s3demo_x25519.py`
-
-```python
-HKDF_INFO = b"s3gateway-x25519-v1"
-HKDF_SALT_SIZE = 32
-
-
-def derive_key(shared_secret: bytes, salt: bytes) -> bytes:
-    return HKDF(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        info=HKDF_INFO,
-    ).derive(shared_secret)
-
-
-def generate_keys_x25519(user_upn, user_password, public_key_hex):
-    if ":" in user_upn:
-        raise ValueError("ldap username cannot contain ':' character")
-
-    public_key_bytes = bytes.fromhex(public_key_hex)
-    if len(public_key_bytes) != 32:
-        raise ValueError("X25519 public key must be 32 bytes")
-
-    receiver_pub = X25519PublicKey.from_public_bytes(public_key_bytes)
-    token = f"{user_upn}:{user_password}"
-    token_bytes = token.encode("utf-8")
-
-    ephemeral_priv = X25519PrivateKey.generate()
-    shared_secret = ephemeral_priv.exchange(receiver_pub)
-    ephemeral_pub_bytes = ephemeral_priv.public_key().public_bytes(
-        encoding=Encoding.Raw,
-        format=PublicFormat.Raw,
-    )
-    salt = os.urandom(HKDF_SALT_SIZE)
-    key = derive_key(shared_secret, salt)
-    aead = ChaCha20Poly1305(key)
-    nonce = os.urandom(12)
-    aad = b"X1" + ephemeral_pub_bytes + salt
-    ciphertext = aead.encrypt(nonce, token_bytes, aad)
-
-    payload = ephemeral_pub_bytes + salt + nonce + ciphertext
-    access_key = "X1" + base64.urlsafe_b64encode(payload).decode("utf-8").rstrip("=")
-    secret_key = base64.urlsafe_b64encode(
-        hashlib.sha256(token_bytes).digest()
-    ).decode("utf-8")
-    return access_key, secret_key
-```
-
-The snippet requires `HKDF` and `hashes` from `cryptography`. Configure gateway
-environment variable `S3GATEWAY_PRIVATE_X25519_KEY` with the matching private
-key and client environment variable `S3GATEWAY_PUBLIC_X25519_KEY` with the
-public key, as shown in Encrypted client setup.
-
-Repository demos:
-
-- Python unencrypted flow: `example_s3_client/python/s3demo.py`
-- Python encrypted flow: `example_s3_client/python/s3demo_x25519.py`
-- Java unencrypted flow: `example_s3_client/java/src/main/java/S3Demo.java`
-
-
-## Testing
+Go 1.24 or later is required. Docker is required for the integration tests,
+which start LDAP, MinIO, and Ceph containers through `testcontainers-go`.
 
 ```bash
+git clone https://github.com/define42/s3gateway.git
+cd s3gateway
+
+make lint
 go test ./...
 go test -race ./...
+make gosec
 ```
 
-Integration tests use Docker via `testcontainers-go`.
+Keep changes focused, format Go code with `gofmt`, and include tests for changed
+behavior. Pull requests should summarize the motivation, note configuration
+changes, list the checks run, and include screenshots for admin UI changes.
+
+## Contributors
+
+See the [GitHub contributors graph](https://github.com/define42/s3gateway/graphs/contributors).
+
+## License
+
+This repository does not currently include a license file. Add an explicit
+license before redistributing or reusing the code.

@@ -42,6 +42,7 @@ type Config struct {
 	SplunkHECToken         string
 	SplunkHECIndex         string
 	SplunkHECFlushInterval time.Duration
+	S3AuditHashKey         string // optional HMAC key for stable audit pseudonyms; never logged
 
 	ReadHeaderTimeout         time.Duration
 	ReadTimeout               time.Duration
@@ -144,6 +145,9 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.SplunkHECFlushInterval <= 0 {
 		return errors.New("SPLUNK_HEC_FLUSH_INTERVAL must be > 0")
+	}
+	if cfg.S3AuditHashKey != "" && len(cfg.S3AuditHashKey) < 32 {
+		return errors.New("S3_AUDIT_HASH_KEY must be at least 32 characters when set")
 	}
 	splunkConfigured := cfg.SplunkHECEndpoint != "" || cfg.SplunkHECToken != "" || cfg.SplunkHECIndex != ""
 	if splunkConfigured {
@@ -314,6 +318,7 @@ func LoadConfig() Config {
 		SplunkHECToken:         env("SPLUNK_HEC_TOKEN", ""),
 		SplunkHECIndex:         env("SPLUNK_HEC_INDEX", ""),
 		SplunkHECFlushInterval: envDuration("SPLUNK_HEC_FLUSH_INTERVAL", defaultSplunkHECFlushInterval),
+		S3AuditHashKey:         env("S3_AUDIT_HASH_KEY", ""),
 
 		ReadHeaderTimeout:         envDuration("HTTP_READ_HEADER_TIMEOUT", DefaultReadHeaderTimeout),
 		ReadTimeout:               envDuration("HTTP_READ_TIMEOUT", defaultReadTimeout),

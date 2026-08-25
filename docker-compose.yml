@@ -34,6 +34,7 @@ services:
       SPLUNK_HEC_TOKEN: ${SPLUNK_HEC_TOKEN:-}
       SPLUNK_HEC_INDEX: ${SPLUNK_HEC_INDEX:-}
       SPLUNK_HEC_FLUSH_INTERVAL: ${SPLUNK_HEC_FLUSH_INTERVAL:-30s}
+      S3_AUDIT_HASH_KEY: ${S3_AUDIT_HASH_KEY:-}
     depends_on:
       - minio
       - ldapserver

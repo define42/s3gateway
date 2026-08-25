@@ -68,3 +68,41 @@ func TestConfigureSplunkLoggingForwardsDefaultLogger(t *testing.T) {
 		t.Fatal("timed out waiting for Splunk HEC request")
 	}
 }
+
+func TestBootAuditsAuthenticationFailures(t *testing.T) {
+	previousLogger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	httpServer, cleanup, err := boot(config.Config{
+		LDAPURL:           "ldap://ldap.example:389",
+		BaseDN:            "dc=example,dc=com",
+		UpstreamEndpoint:  "https://s3.example",
+		UpstreamRegion:    "us-east-1",
+		UpstreamAccessKey: "access-key",
+		UpstreamSecretKey: "secret-key",
+		CookieSecret:      "1234567890abcdef1234567890abcdef",
+		S3AuditHashKey:    "abcdef1234567890abcdef1234567890",
+	})
+	if err != nil {
+		t.Fatalf("boot gateway: %v", err)
+	}
+	t.Cleanup(cleanup)
+
+	r := httptest.NewRequest(http.MethodGet, "/private-bucket/private-key", nil)
+	w := httptest.NewRecorder()
+	httpServer.Handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status mismatch: got=%d want=%d", w.Code, http.StatusUnauthorized)
+	}
+	if !bytes.Contains(logs.Bytes(), []byte(`"event_kind":"s3_audit"`)) ||
+		!bytes.Contains(logs.Bytes(), []byte(`"action":"GetObject"`)) {
+		t.Fatalf("booted handler did not emit an S3 audit event: %s", logs.Bytes())
+	}
+	if bytes.Contains(logs.Bytes(), []byte("private-bucket")) ||
+		bytes.Contains(logs.Bytes(), []byte("private-key")) {
+		t.Fatalf("booted handler exposed resource names: %s", logs.Bytes())
+	}
+}
