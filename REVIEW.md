@@ -152,7 +152,7 @@ Every request with fresh credentials — S3 API (`server.go:136`) or admin login
 - **F-35 — CI never runs the race detector**, although AGENTS.md demands it for auth/concurrency changes (and F-13 is exactly the kind of thing it catches). Add a `go test -race` job (unit packages only, if time-bound).
 - **F-36 — No in-package tests for `sigv4`, `groupcache`, `ldap`, `xmlhelper`, `handler_bucket`.** They are exercised indirectly via `-coverpkg` from server/root tests, but the chunked-reader edge cases from F-1 (huge chunk header, missing CRLF, trailer handling) deserve direct unit tests.
 - **F-37 — Codecov step breaks fork PRs.** `codecov-action@v4` with a secret token and `fail_ci_if_error: true` fails for external contributors whose runs cannot see `secrets.CODECOV_TOKEN`.
-- **F-38 — Go version skew.** Dockerfile builds with `golang:1.24-alpine`, CI uses Go `1.25`, `go.mod` pins `toolchain go1.24.13`. Harmless today, but pick one source of truth.
+- **F-38 — Resolved: Go version skew.** Docker, CI, and `go.mod` now consistently use Go 1.26.6.
 
 ---
 

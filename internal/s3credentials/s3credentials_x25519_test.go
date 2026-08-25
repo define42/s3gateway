@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
-	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -129,7 +128,6 @@ func TestDecryptTamperedHeader(t *testing.T) {
 		t.Fatalf("expected message authentication failed error for tampered salt, got %v", err)
 	}
 }
-
 
 func TestDecryptTamperedCiphertext(t *testing.T) {
 	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
@@ -330,16 +328,9 @@ func TestGenerateAccessSecretKeyEncryptError(t *testing.T) {
 	}
 }
 
-type errorReader struct {
-	err error
-}
-
-func (r errorReader) Read(_ []byte) (int, error) {
-	return 0, r.err
-}
-
 func withRandReader(t *testing.T, r io.Reader) {
 	t.Helper()
+	t.Setenv("GODEBUG", "cryptocustomrand=0")
 	oldReader := rand.Reader
 	rand.Reader = r
 	t.Cleanup(func() {
@@ -354,23 +345,6 @@ func withCurve(t *testing.T, curve ecdh.Curve) {
 	t.Cleanup(func() {
 		x25519Curve = oldCurve
 	})
-}
-
-func TestEncryptGenerateKeyError(t *testing.T) {
-	receiverPriv, err := x25519Curve.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("failed to generate receiver key: %v", err)
-	}
-
-	withRandReader(t, errorReader{err: errors.New("rand failure")})
-
-	_, err = encrypt(receiverPriv.PublicKey(), []byte("user:pass"))
-	if err == nil {
-		t.Fatalf("expected key generation error")
-	}
-	if !strings.Contains(err.Error(), "rand failure") {
-		t.Fatalf("expected key generation rand error, got %v", err)
-	}
 }
 
 func TestEncryptECDHError(t *testing.T) {
@@ -394,8 +368,9 @@ func TestEncryptSaltRandomReadError(t *testing.T) {
 		t.Fatalf("failed to generate receiver key: %v", err)
 	}
 
-	// Enough bytes for GenerateKey (32 bytes), but not enough for the salt read (needs another 32 bytes) — simulates EOF during salt generation.
-	withRandReader(t, bytes.NewReader(make([]byte, 32)))
+	// Go 1.26 ignores the reader passed to GenerateKey, so the first read from
+	// the overridden package reader is the salt.
+	withRandReader(t, bytes.NewReader(nil))
 
 	_, err = encrypt(receiverPriv.PublicKey(), []byte("user:pass"))
 	if err == nil {
@@ -412,8 +387,8 @@ func TestEncryptNonceRandomReadError(t *testing.T) {
 		t.Fatalf("failed to generate receiver key: %v", err)
 	}
 
-	// Enough bytes for GenerateKey (32 bytes) and salt (32 bytes), but not enough for the nonce read.
-	withRandReader(t, bytes.NewReader(make([]byte, 64)))
+	// The salt consumes the available bytes, leaving none for the nonce.
+	withRandReader(t, bytes.NewReader(make([]byte, hkdfSaltSize)))
 
 	_, err = encrypt(receiverPriv.PublicKey(), []byte("user:pass"))
 	if err == nil {

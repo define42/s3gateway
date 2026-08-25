@@ -75,7 +75,7 @@ Git commit SHA.
 
 ### From source
 
-Building from source requires Go 1.24 or later and reachable LDAP and upstream
+Building from source requires Go 1.26.6 or later and reachable LDAP and upstream
 S3 services:
 
 ```bash
@@ -480,7 +480,7 @@ readinessProbe:
 
 ## Contributing
 
-Go 1.24 or later is required. Docker is required for the integration tests,
+Go 1.26.6 or later is required. Docker is required for the integration tests,
 which start LDAP, MinIO, and Ceph containers through `testcontainers-go`.
 
 ```bash

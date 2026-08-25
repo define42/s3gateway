@@ -1,8 +1,6 @@
 module github.com/define42/s3gateway
 
-go 1.24.0
-
-toolchain go1.24.13
+go 1.26.6
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.1
