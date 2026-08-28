@@ -223,6 +223,16 @@ func classifyS3Request(r *http.Request) s3AuditRequest {
 	if p == "" {
 		p = "/"
 	}
+	if scope, _, ok := parsePopAPIPath(p); ok {
+		request := s3AuditRequest{action: "PopObject"}
+		if scope != popGlobalScope {
+			request.bucket = scope
+		}
+		if r.Method != http.MethodPost {
+			request.action = unsupportedS3Action
+		}
+		return request
+	}
 
 	request := s3AuditResource(p)
 	var q url.Values

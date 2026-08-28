@@ -9,6 +9,7 @@ import (
 
 	"github.com/define42/s3gateway/internal/adminpage"
 	"github.com/define42/s3gateway/internal/config"
+	"github.com/define42/s3gateway/internal/kafkapop"
 	"github.com/define42/s3gateway/internal/server"
 	"github.com/define42/s3gateway/internal/uploadnotify"
 	"github.com/define42/s3gateway/internal/upstream"
@@ -22,13 +23,19 @@ func Boot() (*http.Server, config.Config, error) {
 }
 
 func boot(cfg config.Config) (*http.Server, func(), error) {
+	cfg.ApplyDefaults()
 	up, err := upstream.New(context.Background(), cfg)
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("init upstream s3: %w", err)
 	}
 
 	var serverOptions []server.Option
-	cleanup := func() {}
+	var cleanupFunctions []func()
+	cleanup := sync.OnceFunc(func() {
+		for i := len(cleanupFunctions) - 1; i >= 0; i-- {
+			cleanupFunctions[i]()
+		}
+	})
 	if len(cfg.KafkaBrokers) > 0 {
 		publisher, err := uploadnotify.NewKafkaPublisher(
 			cfg.KafkaBrokers,
@@ -39,8 +46,20 @@ func boot(cfg config.Config) (*http.Server, func(), error) {
 		if err != nil {
 			return nil, cleanup, fmt.Errorf("init kafka upload notifier: %w", err)
 		}
-		cleanup = sync.OnceFunc(publisher.Close)
+		cleanupFunctions = append(cleanupFunctions, publisher.Close)
 		serverOptions = append(serverOptions, server.WithUploadNotifier(publisher))
+
+		popManager, err := kafkapop.New(kafkapop.Options{
+			Brokers:      cfg.KafkaBrokers,
+			Timeout:      cfg.KafkaPopTimeout,
+			MaxConsumers: cfg.KafkaPopMaxConsumers,
+		})
+		if err != nil {
+			cleanup()
+			return nil, cleanup, fmt.Errorf("init kafka pop consumer: %w", err)
+		}
+		cleanupFunctions = append(cleanupFunctions, popManager.Close)
+		serverOptions = append(serverOptions, server.WithPopConsumer(popManager))
 	}
 
 	gateway := server.New(cfg, up, serverOptions...)

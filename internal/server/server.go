@@ -28,6 +28,8 @@ import (
 
 const defaultReadyCheckTimeout = 2 * time.Second
 
+const popBasicAuthChallenge = `Basic realm="s3gateway-pop", charset="UTF-8"`
+
 func EffectiveShutdownTimeout(cfg config.Config) time.Duration {
 	cfg.ApplyDefaults()
 	return cfg.ShutdownTimeout
@@ -56,6 +58,7 @@ type Server struct {
 	cfg            config.Config
 	up             *s3.Client
 	uploadNotifier UploadNotifier
+	popConsumer    PopConsumer
 	logger         *slog.Logger
 	auditHashKeys  [auditHashScopeCount][sha256.Size]byte
 	auditHashReady bool
@@ -75,6 +78,12 @@ type Option func(*Server)
 func WithUploadNotifier(notifier UploadNotifier) Option {
 	return func(s *Server) {
 		s.uploadNotifier = notifier
+	}
+}
+
+func WithPopConsumer(consumer PopConsumer) Option {
+	return func(s *Server) {
+		s.popConsumer = consumer
 	}
 }
 
@@ -147,6 +156,10 @@ func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Han
 			adminHandler.ServeHTTP(w, r)
 			return
 		}
+		if isPopAPIPath(r.URL.Path) {
+			s.authenticatePopBasic(w, r, next)
+			return
+		}
 
 		auth, err := sigv4.ParseSigV4Authorization(r)
 		if err != nil || auth.Service != "s3" {
@@ -184,6 +197,36 @@ func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Han
 		ctx = context.WithValue(ctx, ctxUploaderKey, upn)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (s *Server) authenticatePopBasic(
+	w http.ResponseWriter,
+	r *http.Request,
+	next http.Handler,
+) {
+	upn, pass, ok := r.BasicAuth()
+	if !ok || strings.TrimSpace(upn) == "" || pass == "" {
+		writePopBasicAuthChallenge(w)
+		return
+	}
+
+	s.setS3AuditPrincipal(r, upn)
+	grps, err := s.GroupsForCredentials(upn, pass)
+	if err != nil {
+		writePopBasicAuthChallenge(w)
+		return
+	}
+	markS3AuditAuthenticated(r)
+
+	ctx := authz.WithRules(r.Context(), authz.RulesFromGroups(grps))
+	ctx = context.WithValue(ctx, ctxUploaderKey, upn)
+	next.ServeHTTP(w, r.WithContext(ctx))
+}
+
+func writePopBasicAuthChallenge(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", popBasicAuthChallenge)
+	w.Header().Set("Cache-Control", "no-store")
+	http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 }
 
 func UploaderFromRequest(r *http.Request) string {
@@ -281,6 +324,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleReadyz(w, r)
+		return
+	}
+	if isPopAPIPath(p) {
+		s.handlePopAPI(w, r)
 		return
 	}
 

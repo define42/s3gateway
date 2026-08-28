@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -1331,6 +1332,161 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 			t.Fatalf("bad creds status mismatch: got=%d body=%s", rrBadCreds.Code, rrBadCreds.Body.String())
 		}
 
+	})
+
+	t.Run("pop routes use basic auth only", func(t *testing.T) {
+		popGateway := New(config.Config{SigV4MaxSkew: 15 * time.Minute}, nil)
+		var fetchCalls int
+		popGateway.fetchGroups = func(
+			_ config.Config,
+			upn string,
+			pass string,
+		) (map[string]struct{}, error) {
+			fetchCalls++
+			if upn != "reader@example.com" || pass != "correct horse" {
+				return nil, errors.New("invalid credentials")
+			}
+			return map[string]struct{}{"team2-r": {}}, nil
+		}
+
+		var nextCalls int
+		var gotReadRule bool
+		var gotPrincipal string
+		var gotSigV4Context bool
+		handler := popGateway.WithAuth(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				nextCalls++
+				gotReadRule = authz.CanRead(
+					authz.RulesFromRequest(r),
+					"team2-images",
+				)
+				gotPrincipal = UploaderFromRequest(r)
+				gotSigV4Context = sigv4.AuthFromRequest(r) != nil
+				w.WriteHeader(http.StatusNoContent)
+			}),
+			adminWebpageHandler(popGateway),
+		)
+
+		tests := []struct {
+			name           string
+			path           string
+			authorize      func(*http.Request)
+			wantStatus     int
+			wantChallenge  bool
+			wantNextCalls  int
+			wantFetchCalls int
+		}{
+			{
+				name:          "missing authorization",
+				wantStatus:    http.StatusUnauthorized,
+				wantChallenge: true,
+			},
+			{
+				name: "sigv4 is rejected",
+				authorize: func(r *http.Request) {
+					r.Header.Set("Authorization", "AWS4-HMAC-SHA256 invalid")
+				},
+				wantStatus:    http.StatusUnauthorized,
+				wantChallenge: true,
+			},
+			{
+				name: "invalid basic credentials",
+				authorize: func(r *http.Request) {
+					r.SetBasicAuth("reader@example.com", "wrong")
+				},
+				wantStatus:     http.StatusUnauthorized,
+				wantChallenge:  true,
+				wantFetchCalls: 1,
+			},
+			{
+				name: "valid basic credentials",
+				authorize: func(r *http.Request) {
+					r.SetBasicAuth("reader@example.com", "correct horse")
+				},
+				wantStatus:     http.StatusNoContent,
+				wantNextCalls:  1,
+				wantFetchCalls: 1,
+			},
+			{
+				name: "basic is rejected for s3 routes",
+				path: "/team2-images/key.txt",
+				authorize: func(r *http.Request) {
+					r.SetBasicAuth("reader@example.com", "correct horse")
+				},
+				wantStatus: http.StatusUnauthorized,
+			},
+		}
+
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				nextCalls = 0
+				fetchCalls = 0
+				gotReadRule = false
+				gotPrincipal = ""
+				gotSigV4Context = false
+				path := test.path
+				if path == "" {
+					path = "/api/pop/team2-images/scanner"
+				}
+				request := httptest.NewRequest(
+					http.MethodPost,
+					path,
+					nil,
+				)
+				if test.authorize != nil {
+					test.authorize(request)
+				}
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+
+				if response.Code != test.wantStatus {
+					t.Fatalf(
+						"status mismatch: got=%d want=%d body=%s",
+						response.Code,
+						test.wantStatus,
+						response.Body.String(),
+					)
+				}
+				challenge := response.Header().Get("WWW-Authenticate")
+				if test.wantChallenge && challenge != popBasicAuthChallenge {
+					t.Fatalf("challenge mismatch: got=%q", challenge)
+				}
+				if test.wantChallenge && response.Header().Get("Cache-Control") != "no-store" {
+					t.Fatal("authentication failure must not be cached")
+				}
+				if !test.wantChallenge && challenge != "" {
+					t.Fatalf("unexpected challenge: %q", challenge)
+				}
+				if nextCalls != test.wantNextCalls {
+					t.Fatalf(
+						"next handler calls mismatch: got=%d want=%d",
+						nextCalls,
+						test.wantNextCalls,
+					)
+				}
+				if fetchCalls != test.wantFetchCalls {
+					t.Fatalf(
+						"LDAP calls mismatch: got=%d want=%d",
+						fetchCalls,
+						test.wantFetchCalls,
+					)
+				}
+				if test.wantNextCalls > 0 {
+					if !gotReadRule {
+						t.Fatal("expected LDAP read rule in request context")
+					}
+					if gotPrincipal != "reader@example.com" {
+						t.Fatalf(
+							"authenticated principal mismatch: got=%q",
+							gotPrincipal,
+						)
+					}
+					if gotSigV4Context {
+						t.Fatal("pop request received SigV4 authentication context")
+					}
+				}
+			})
+		}
 	})
 }
 

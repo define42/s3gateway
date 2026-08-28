@@ -323,6 +323,8 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 | `ENABLE_KAFKA_BUCKET_TOPIC` | No | `false` | Publish each upload event to a topic whose name matches its bucket |
 | `KAFKA_GLOBAL_TOPIC` | No | Empty | Optional global upload-event topic |
 | `KAFKA_NOTIFICATION_TIMEOUT` | No | `5s` | Maximum total wait for all Kafka acknowledgements |
+| `KAFKA_POP_TIMEOUT` | No | `30s` | Maximum individual wait for pop polling and offset commits |
+| `KAFKA_POP_MAX_CONSUMERS` | No | `1000` | Maximum cached `{topic, group}` pop consumers; idle consumers are evicted |
 | `SPLUNK_HEC_ENDPOINT` | No | Empty | Complete HEC JSON event URL; empty disables HEC forwarding |
 | `SPLUNK_HEC_TOKEN` | With HEC | Empty | HEC authentication token |
 | `SPLUNK_HEC_INDEX` | With HEC | Empty | Destination Splunk index |
@@ -405,6 +407,49 @@ failure is logged but does not change the successful S3 response because the
 object is already stored upstream. A timeout can leave delivery status unknown,
 so consumers must tolerate duplicate events and can use `event_id` for
 deduplication.
+
+### Kafka object pop API
+
+When Kafka notifications are configured, authenticated clients can consume an
+upload event and stream its corresponding object with:
+
+```http
+POST /api/pop/{bucket}/{group}
+POST /api/pop/_all/{group}
+```
+
+The bucket route consumes the bucket-named topic and therefore requires
+`ENABLE_KAFKA_BUCKET_TOPIC=true`. The `_all` route consumes the configured
+`KAFKA_GLOBAL_TOPIC`. Both routes use HTTP Basic authentication with the
+caller's existing LDAP UPN and password, and require read access to the event's
+bucket. SigV4 authentication is not accepted for `/api/pop/*`; other S3 routes
+continue to require SigV4. Consumer group names may contain letters, digits,
+`.`, `_`, and `-`.
+
+Basic credentials must be sent only over HTTPS because HTTP Basic encoding does
+not encrypt them. For example:
+
+```bash
+curl --user 'user@example.com' \
+  --request POST https://s3.example.com/api/pop/images/scanner
+```
+
+With the password omitted from `--user`, curl prompts for it instead of placing
+it in the shell history.
+
+The response body is the S3 object. `X-S3Gateway-Bucket` identifies its bucket,
+and `X-S3Gateway-Object-Key` contains the URL-query-escaped object key. A
+successful response also includes available object headers such as
+`Content-Type`, `Content-Length`, `ETag`, and `x-amz-version-id`. If no event is
+available within `KAFKA_POP_TIMEOUT`, the gateway returns `204 No Content`.
+
+Automatic acknowledgement occurs only after the complete object body has been
+written and flushed successfully. The gateway then synchronously commits the
+Kafka offset. An S3 read failure, short object body, client write failure, or
+Kafka commit failure leaves the record unacknowledged and eligible for
+redelivery. A successful body followed by an uncertain commit can therefore be
+delivered again; clients must tolerate duplicates and may use
+`X-S3Gateway-Event-ID` for deduplication.
 
 ### Splunk HEC logging
 
