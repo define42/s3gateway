@@ -320,8 +320,9 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 | `REQUIRED_UPLOAD_METADATA_KEYS` | No | Empty | Comma-separated metadata keys, with or without the `x-amz-meta-` prefix |
 | `COOKIE_SECRET` | No | Ephemeral | Admin-cookie key seed; when set, it must contain at least 32 characters |
 | `KAFKA_BROKERS` | No | Empty | Comma-separated Kafka bootstrap brokers; empty disables notifications |
-| `KAFKA_TOPIC` | No | Bucket name | Shared notification topic; requires `KAFKA_BROKERS` when non-empty |
-| `KAFKA_NOTIFICATION_TIMEOUT` | No | `5s` | Maximum wait for Kafka acknowledgement |
+| `ENABLE_KAFKA_BUCKET_TOPIC` | No | `false` | Publish each upload event to a topic whose name matches its bucket |
+| `KAFKA_GLOBAL_TOPIC` | No | Empty | Optional global upload-event topic |
+| `KAFKA_NOTIFICATION_TIMEOUT` | No | `5s` | Maximum total wait for all Kafka acknowledgements |
 | `SPLUNK_HEC_ENDPOINT` | No | Empty | Complete HEC JSON event URL; empty disables HEC forwarding |
 | `SPLUNK_HEC_TOKEN` | With HEC | Empty | HEC authentication token |
 | `SPLUNK_HEC_INDEX` | With HEC | Empty | Destination Splunk index |
@@ -349,21 +350,42 @@ upstream confirms `PutObject` or `CompleteMultipartUpload`. Multipart initiation
 and individual part uploads do not produce events. Admin-console uploads and
 copy operations do not currently produce events.
 
-Set `KAFKA_TOPIC` to route all events to one topic:
+Enable bucket topics to publish each event to the topic whose name matches its
+bucket:
 
 ```dotenv
 KAFKA_BROKERS=kafka-1:9092,kafka-2:9092
-KAFKA_TOPIC=all-uploads
+ENABLE_KAFKA_BUCKET_TOPIC=true
 ```
 
-Leave `KAFKA_TOPIC` empty to use the bucket name as the topic. The producer
-requests automatic topic creation; the Kafka cluster must permit it, or the
-topics must already exist. Records use `<bucket>/<key>` as the key and an
-`application/json` value:
+Configure `KAFKA_GLOBAL_TOPIC` to publish every event to one global topic:
+
+```dotenv
+KAFKA_BROKERS=kafka-1:9092,kafka-2:9092
+KAFKA_GLOBAL_TOPIC=_all
+```
+
+Set both options for dual delivery:
+
+```dotenv
+KAFKA_BROKERS=kafka-1:9092,kafka-2:9092
+ENABLE_KAFKA_BUCKET_TOPIC=true
+KAFKA_GLOBAL_TOPIC=_all
+```
+
+An upload to bucket `images` is then published to topics `images` and `_all`.
+Both records contain the same payload and generated UUIDv7 `event_id`. When
+`KAFKA_BROKERS` is set, at least one of `ENABLE_KAFKA_BUCKET_TOPIC` or
+`KAFKA_GLOBAL_TOPIC` must enable a destination.
+
+The producer requests automatic topic creation; the Kafka cluster must permit
+it, or the topics must already exist. Records use `<bucket>/<key>` as the key
+and an `application/json` value:
 
 ```json
 {
   "schema_version": 1,
+  "event_id": "019c0000-0000-7000-8000-000000000001",
   "event_name": "ObjectCreated:CompleteMultipartUpload",
   "bucket": "team2-evidence",
   "key": "cases/42/document.pdf",
@@ -375,10 +397,14 @@ topics must already exist. Records use `<bucket>/<key>` as the key and an
 }
 ```
 
-Delivery is best effort and bounded by `KAFKA_NOTIFICATION_TIMEOUT`. A Kafka
+Delivery is best effort and bounded by one shared
+`KAFKA_NOTIFICATION_TIMEOUT`. In dual-topic mode, both records are submitted
+before the gateway waits for their acknowledgements, but they are not published
+as a Kafka transaction: one topic can succeed while the other fails. A Kafka
 failure is logged but does not change the successful S3 response because the
 object is already stored upstream. A timeout can leave delivery status unknown,
-so consumers must tolerate duplicate events.
+so consumers must tolerate duplicate events and can use `event_id` for
+deduplication.
 
 ### Splunk HEC logging
 

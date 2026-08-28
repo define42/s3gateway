@@ -35,7 +35,8 @@ type Config struct {
 	RequiredUploadMetadataKeys []string // metadata keys required for upload requests (without x-amz-meta- prefix, lowercase)
 
 	KafkaBrokers             []string
-	KafkaTopic               string // shared upload topic; when empty, the bucket name is used as the topic
+	EnableKafkaBucketTopic   bool   // publish uploads to a topic whose name matches the bucket
+	KafkaGlobalTopic         string // optional global upload topic
 	KafkaNotificationTimeout time.Duration
 
 	SplunkHECEndpoint      string
@@ -130,10 +131,16 @@ func (cfg Config) Validate() error {
 	if cfg.CookieSecret != "" && len(cfg.CookieSecret) < 32 {
 		return errors.New("COOKIE_SECRET must be at least 32 characters when set")
 	}
-	if len(cfg.KafkaBrokers) == 0 && strings.TrimSpace(cfg.KafkaTopic) != "" {
-		return errors.New("KAFKA_TOPIC requires KAFKA_BROKERS")
+	if len(cfg.KafkaBrokers) == 0 && cfg.EnableKafkaBucketTopic {
+		return errors.New("ENABLE_KAFKA_BUCKET_TOPIC requires KAFKA_BROKERS")
+	}
+	if len(cfg.KafkaBrokers) == 0 && strings.TrimSpace(cfg.KafkaGlobalTopic) != "" {
+		return errors.New("KAFKA_GLOBAL_TOPIC requires KAFKA_BROKERS")
 	}
 	if len(cfg.KafkaBrokers) > 0 {
+		if !cfg.EnableKafkaBucketTopic && strings.TrimSpace(cfg.KafkaGlobalTopic) == "" {
+			return errors.New("KAFKA_BROKERS requires ENABLE_KAFKA_BUCKET_TOPIC or KAFKA_GLOBAL_TOPIC")
+		}
 		if cfg.KafkaNotificationTimeout <= 0 {
 			return errors.New("KAFKA_NOTIFICATION_TIMEOUT must be > 0")
 		}
@@ -230,6 +237,19 @@ func envInt(key string, def int) int {
 	return n
 }
 
+func envBool(key string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		slog.Error("invalid bool", "key", key, "error", err)
+		os.Exit(1)
+	}
+	return b
+}
+
 func envCSV(key string) []string {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
@@ -311,7 +331,8 @@ func LoadConfig() Config {
 		RequiredUploadMetadataKeys: envCSVMetadataKeys("REQUIRED_UPLOAD_METADATA_KEYS"),
 
 		KafkaBrokers:             envCSV("KAFKA_BROKERS"),
-		KafkaTopic:               env("KAFKA_TOPIC", ""),
+		EnableKafkaBucketTopic:   envBool("ENABLE_KAFKA_BUCKET_TOPIC", false),
+		KafkaGlobalTopic:         env("KAFKA_GLOBAL_TOPIC", ""),
 		KafkaNotificationTimeout: envDuration("KAFKA_NOTIFICATION_TIMEOUT", defaultKafkaNotificationTimeout),
 
 		SplunkHECEndpoint:      env("SPLUNK_HEC_ENDPOINT", ""),

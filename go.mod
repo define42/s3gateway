@@ -10,6 +10,7 @@ require (
 	github.com/aws/smithy-go v1.24.0
 	github.com/caddyserver/certmagic v0.25.1
 	github.com/go-ldap/ldap/v3 v3.4.12
+	github.com/google/uuid v1.6.0
 	github.com/gorilla/securecookie v1.1.2
 	github.com/gorilla/sessions v1.4.0
 	github.com/minio/minio-go/v7 v7.0.85
@@ -60,7 +61,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/goccy/go-json v0.10.4 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/klauspost/compress v1.18.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/libdns/libdns v1.1.1 // indirect

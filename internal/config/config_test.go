@@ -76,16 +76,32 @@ func TestConfigValidateMatrix(t *testing.T) {
 			wantMsg: "COOKIE_SECRET",
 		},
 		{
-			name: "kafka topic without brokers",
+			name: "kafka bucket topic without brokers",
 			mutate: func(c *Config) {
-				c.KafkaTopic = "uploads"
+				c.EnableKafkaBucketTopic = true
 			},
-			wantMsg: "KAFKA_TOPIC",
+			wantMsg: "ENABLE_KAFKA_BUCKET_TOPIC",
+		},
+		{
+			name: "kafka global topic without brokers",
+			mutate: func(c *Config) {
+				c.KafkaGlobalTopic = "_all"
+			},
+			wantMsg: "KAFKA_GLOBAL_TOPIC",
+		},
+		{
+			name: "kafka brokers without a topic",
+			mutate: func(c *Config) {
+				c.KafkaBrokers = []string{"kafka:9092"}
+				c.KafkaNotificationTimeout = time.Second
+			},
+			wantMsg: "requires ENABLE_KAFKA_BUCKET_TOPIC or KAFKA_GLOBAL_TOPIC",
 		},
 		{
 			name: "kafka notification timeout",
 			mutate: func(c *Config) {
 				c.KafkaBrokers = []string{"kafka:9092"}
+				c.EnableKafkaBucketTopic = true
 			},
 			wantMsg: "KAFKA_NOTIFICATION_TIMEOUT",
 		},
@@ -93,6 +109,7 @@ func TestConfigValidateMatrix(t *testing.T) {
 			name: "empty kafka broker",
 			mutate: func(c *Config) {
 				c.KafkaBrokers = []string{"kafka:9092", " "}
+				c.EnableKafkaBucketTopic = true
 				c.KafkaNotificationTimeout = time.Second
 			},
 			wantMsg: "KAFKA_BROKERS",
@@ -189,6 +206,23 @@ func TestEnvHelper(t *testing.T) {
 	}
 }
 
+func TestEnvBool(t *testing.T) {
+	t.Setenv("TEST_BOOL_KEY", "")
+	if got := envBool("TEST_BOOL_KEY", true); !got {
+		t.Fatal("envBool() default = false, want true")
+	}
+
+	t.Setenv("TEST_BOOL_KEY", " true ")
+	if got := envBool("TEST_BOOL_KEY", false); !got {
+		t.Fatal("envBool() configured value = false, want true")
+	}
+
+	t.Setenv("TEST_BOOL_KEY", "false")
+	if got := envBool("TEST_BOOL_KEY", true); got {
+		t.Fatal("envBool() configured value = true, want false")
+	}
+}
+
 func TestEnvCSVMetadataKeys(t *testing.T) {
 	t.Setenv("REQUIRED_UPLOAD_METADATA_KEYS", "")
 	if got := envCSVMetadataKeys("REQUIRED_UPLOAD_METADATA_KEYS"); got != nil {
@@ -276,6 +310,32 @@ func TestLoadConfigSplunkHEC(t *testing.T) {
 	}
 	if cfg.S3AuditHashKey != "1234567890abcdef1234567890abcdef" {
 		t.Fatalf("S3 audit hash key mismatch")
+	}
+}
+
+func TestLoadConfigKafkaGlobalTopic(t *testing.T) {
+	t.Setenv("LDAP_URL", "ldap://ldap.example:389")
+	t.Setenv("LDAP_BASE_DN", "dc=example,dc=com")
+	t.Setenv("S3_ENDPOINT", "https://s3.example")
+	t.Setenv("S3_ACCESS_KEY", "access-key")
+	t.Setenv("S3_SECRET_KEY", "secret-key")
+	t.Setenv("KAFKA_BROKERS", "kafka-1:9092,kafka-2:9092")
+	t.Setenv("ENABLE_KAFKA_BUCKET_TOPIC", "true")
+	t.Setenv("KAFKA_GLOBAL_TOPIC", "_all")
+	t.Setenv("KAFKA_NOTIFICATION_TIMEOUT", "3s")
+
+	cfg := LoadConfig()
+	if !cfg.EnableKafkaBucketTopic {
+		t.Fatal("kafka bucket topic should be enabled")
+	}
+	if cfg.KafkaGlobalTopic != "_all" {
+		t.Fatalf("kafka global topic mismatch: got=%q want=%q", cfg.KafkaGlobalTopic, "_all")
+	}
+	if cfg.KafkaNotificationTimeout != 3*time.Second {
+		t.Fatalf(
+			"kafka notification timeout mismatch: got=%s want=3s",
+			cfg.KafkaNotificationTimeout,
+		)
 	}
 }
 

@@ -32,7 +32,8 @@ func boot(cfg config.Config) (*http.Server, func(), error) {
 	if len(cfg.KafkaBrokers) > 0 {
 		publisher, err := uploadnotify.NewKafkaPublisher(
 			cfg.KafkaBrokers,
-			cfg.KafkaTopic,
+			cfg.EnableKafkaBucketTopic,
+			cfg.KafkaGlobalTopic,
 			cfg.KafkaNotificationTimeout,
 		)
 		if err != nil {
