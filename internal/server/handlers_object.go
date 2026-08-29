@@ -450,14 +450,18 @@ func (s *Server) handleListObjectVersions(w http.ResponseWriter, r *http.Request
 	xw.End("ListVersionsResult")
 }
 
-// writeChunkedBodyError writes the S3 error for an aws-chunked body validation
+// writeBodyValidationError writes the S3 error for a request-body integrity
 // failure and reports whether it handled the error. The upstream SDK can mask
-// body-reader failures (e.g. behind retry-rewind errors), so the decoded
-// stream's own recorded validation error is consulted as well.
-func writeChunkedBodyError(w http.ResponseWriter, err error, body io.ReadCloser) bool {
+// body-reader failures (e.g. behind retry-rewind errors), so the stream's own
+// recorded validation error is consulted as well.
+func writeBodyValidationError(w http.ResponseWriter, err error, body io.ReadCloser) bool {
 	for _, e := range []error{sigv4.StreamValidationError(body), err} {
 		if e == nil {
 			continue
+		}
+		if errors.Is(e, sigv4.ErrPayloadHashMismatch) {
+			s3xml.WriteError(w, http.StatusBadRequest, "XAmzContentSHA256Mismatch", "The provided x-amz-content-sha256 does not match the request body")
+			return true
 		}
 		if sigv4.IsTrailerChecksumMismatchError(e) {
 			s3xml.WriteError(w, http.StatusBadRequest, "BadDigest", "The aws-chunked payload does not match its trailing checksum")
@@ -1342,7 +1346,7 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 			s3xml.WriteError(w, http.StatusLengthRequired, "MissingContentLength", "Content-Length required")
 			return
 		}
-		if writeChunkedBodyError(w, err, nil) {
+		if writeBodyValidationError(w, err, nil) {
 			return
 		}
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Invalid request body")
@@ -1445,7 +1449,7 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		s3.WithAPIOptions(v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware),
 	)
 	if err != nil {
-		if writeChunkedBodyError(w, err, body) {
+		if writeBodyValidationError(w, err, body) {
 			return
 		}
 		s3http.WriteUpstreamError(w, err)

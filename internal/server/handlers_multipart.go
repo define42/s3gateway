@@ -237,7 +237,7 @@ func (s *Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 			s3xml.WriteError(w, http.StatusLengthRequired, "MissingContentLength", "Content-Length required")
 			return
 		}
-		if writeChunkedBodyError(w, err, nil) {
+		if writeBodyValidationError(w, err, nil) {
 			return
 		}
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Invalid request body")
@@ -290,7 +290,7 @@ func (s *Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 		s3.WithAPIOptions(v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware),
 	)
 	if err != nil {
-		if writeChunkedBodyError(w, err, body) {
+		if writeBodyValidationError(w, err, body) {
 			return
 		}
 		s3http.WriteUpstreamError(w, err)

@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/xml"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 
@@ -266,7 +265,7 @@ func (s *Server) handlePutBucketEncryption(w http.ResponseWriter, r *http.Reques
 	}
 
 	var doc sseConfigXML
-	if err := xml.NewDecoder(io.LimitReader(r.Body, maxBucketConfigBodyBytes)).Decode(&doc); err != nil || len(doc.Rules) == 0 {
+	if err := s3xml.DecodeLimited(r.Body, &doc, s3xml.DecodeLimits{MaxBodyBytes: maxBucketConfigBodyBytes}); err != nil || len(doc.Rules) == 0 {
 		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid server-side encryption configuration")
 		return
 	}

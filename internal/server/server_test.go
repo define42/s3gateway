@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
@@ -255,22 +256,25 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 	}
 
 	gw := New(cfg, up)
-	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
+	gwSrv := httptest.NewTLSServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
 	gatewayAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	gatewayAwsClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, mustGatewaySecretForAccessKey(t, gatewayAccessKey))
-	gatewayMinioClient := newMinioGatewayClient(t, gwSrv.URL, gatewayAccessKey, mustGatewaySecretForAccessKey(t, gatewayAccessKey))
+	gatewayMinioClient := newMinioGatewayClient(
+		t,
+		gwSrv.URL,
+		gatewayAccessKey,
+		mustGatewaySecretForAccessKey(t, gatewayAccessKey),
+		gwSrv.Client().Transport,
+	)
 	upstreamClient := testutil.NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-minio-client-%d", time.Now().UnixNano())
 	key := "smoke/minio-client.txt"
 	wantBody := []byte("hello through minio-go client and s3gateway")
 
-	if _, err := gatewayAwsClient.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(bucket),
-	}); err != nil {
-		t.Fatalf("create bucket via aws client through gateway: %v", err)
+	if err := gatewayMinioClient.MakeBucket(ctx, bucket, minio.MakeBucketOptions{Region: "us-east-1"}); err != nil {
+		t.Fatalf("create bucket via minio client through gateway: %v", err)
 	}
 
 	if _, err := gatewayMinioClient.PutObject(
@@ -1529,6 +1533,103 @@ func TestValidateSigV4RequestTime(t *testing.T) {
 	})
 }
 
+func TestWithAuthRejectsTamperedSignedBodies(t *testing.T) {
+	t.Run("object upload cannot complete upstream", func(t *testing.T) {
+		const (
+			original = "original object payload"
+			tampered = "tampered object payload"
+		)
+		if len(original) != len(tampered) {
+			t.Fatal("test payloads must have equal lengths")
+		}
+
+		received := make(chan int, 1)
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			received <- len(body)
+			w.WriteHeader(http.StatusOK)
+		})
+		defer cleanup()
+		gw.gcache.Set("testuser", "dogood", map[string]struct{}{"team2-rw": {}})
+
+		req := signedGatewayRequest(t, http.MethodPut, "https://example.com/team2-bucket/object.txt", tampered, original, nil)
+		rr := httptest.NewRecorder()
+		gw.WithAuth(gw, adminWebpageHandler(gw)).ServeHTTP(rr, req)
+		if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "XAmzContentSHA256Mismatch") {
+			t.Fatalf("status=%d body=%s, want 400 XAmzContentSHA256Mismatch", rr.Code, rr.Body.String())
+		}
+		select {
+		case n := <-received:
+			if n >= len(tampered) {
+				t.Fatalf("upstream received complete tampered body: got %d of %d bytes", n, len(tampered))
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for aborted upstream upload")
+		}
+	})
+
+	t.Run("control-plane XML never reaches upstream", func(t *testing.T) {
+		const (
+			original = `<Tagging><TagSet><Tag><Key>role</Key><Value>reader</Value></Tag></TagSet></Tagging>`
+			tampered = `<Tagging><TagSet><Tag><Key>role</Key><Value>writer</Value></Tag></TagSet></Tagging>`
+		)
+		if len(original) != len(tampered) {
+			t.Fatal("test payloads must have equal lengths")
+		}
+
+		upstreamCalled := make(chan struct{}, 1)
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			upstreamCalled <- struct{}{}
+			w.WriteHeader(http.StatusOK)
+		})
+		defer cleanup()
+		gw.gcache.Set("testuser", "dogood", map[string]struct{}{"team2-rw": {}})
+
+		headers := http.Header{"Content-Type": {"application/xml"}}
+		req := signedGatewayRequest(t, http.MethodPut, "https://example.com/team2-bucket?tagging", tampered, original, headers)
+		rr := httptest.NewRecorder()
+		gw.WithAuth(gw, adminWebpageHandler(gw)).ServeHTTP(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status=%d body=%s, want 400", rr.Code, rr.Body.String())
+		}
+		select {
+		case <-upstreamCalled:
+			t.Fatal("upstream was called with tampered control-plane content")
+		default:
+		}
+	})
+}
+
+func signedGatewayRequest(
+	t *testing.T,
+	method string,
+	target string,
+	actualBody string,
+	signedBody string,
+	headers http.Header,
+) *http.Request {
+	t.Helper()
+
+	accessKey, secretKey, err := s3credentials.GenerateKeysBase64Encoded("testuser", "dogood")
+	if err != nil {
+		t.Fatalf("generate gateway credentials: %v", err)
+	}
+	req := httptest.NewRequest(method, target, strings.NewReader(actualBody))
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
+	digest := sha256.Sum256([]byte(signedBody))
+	payloadHash := fmt.Sprintf("%x", digest)
+	req.Header.Set("x-amz-content-sha256", payloadHash)
+	credentials := aws.Credentials{AccessKeyID: accessKey, SecretAccessKey: secretKey}
+	if err := v4.NewSigner().SignHTTP(t.Context(), credentials, req, payloadHash, "s3", "us-east-1", time.Now().UTC()); err != nil {
+		t.Fatalf("sign gateway request: %v", err)
+	}
+	return req
+}
+
 func TestGroupCacheCredentialAwareAndBounded(t *testing.T) {
 	c := gatewaycache.New(2*time.Second, 2)
 
@@ -2760,7 +2861,13 @@ func tamperFirstChunkSignatureForTest(t *testing.T, encoded string) string {
 	return string(out)
 }
 
-func newMinioGatewayClient(t *testing.T, gatewayURL, accessKey, secretKey string) *minio.Client {
+func newMinioGatewayClient(
+	t *testing.T,
+	gatewayURL string,
+	accessKey string,
+	secretKey string,
+	transport http.RoundTripper,
+) *minio.Client {
 	t.Helper()
 
 	parsedURL, err := url.Parse(gatewayURL)
@@ -2770,6 +2877,7 @@ func newMinioGatewayClient(t *testing.T, gatewayURL, accessKey, secretKey string
 	client, err := minio.New(parsedURL.Host, &minio.Options{
 		Creds:        minioCredentials.NewStaticV4(accessKey, secretKey, ""),
 		Secure:       strings.EqualFold(parsedURL.Scheme, "https"),
+		Transport:    transport,
 		Region:       "us-east-1",
 		BucketLookup: minio.BucketLookupPath,
 	})

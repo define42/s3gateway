@@ -143,12 +143,17 @@ For each S3 request, the gateway:
 
 1. Parses the SigV4 authorization data and validates the request timestamp.
 2. Decodes or decrypts the access key ID and derives the SigV4 secret access key.
-3. Verifies the SigV4 request signature.
+3. Verifies the SigV4 request signature, required signed headers, and any
+   declared hexadecimal payload digest as the body is consumed.
 4. Binds to LDAP as `<username>@<LDAP_DOMAIN>` and loads the user's groups.
 5. Applies the group-derived bucket policy and proxies an allowed request.
 
 Always use TLS in production. In legacy mode, anyone who obtains the access key
 ID can recover the LDAP username and password.
+
+Body-bearing requests that use `UNSIGNED-PAYLOAD` or
+`STREAMING-UNSIGNED-PAYLOAD-TRAILER` are accepted only over TLS. Plaintext
+requests must cryptographically bind their body to the SigV4 signature.
 
 #### Encrypted client setup
 
@@ -281,7 +286,7 @@ requests are not.
 | Multipart | `DELETE /<bucket>/<key>?uploadId=...` | AbortMultipartUpload | `w` |
 | Streaming | `STREAMING-AWS4-HMAC-SHA256-PAYLOAD` | Verify the `aws-chunked` per-chunk signature chain | Permission required by the underlying write route |
 | Streaming | `STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER` | Verify the chunk chain, signed trailer, and trailing checksum | Permission required by the underlying write route |
-| Streaming | `STREAMING-UNSIGNED-PAYLOAD-TRAILER` | Validate the trailing CRC32, CRC32C, CRC64NVME, SHA-1, or SHA-256 checksum | Permission required by the underlying write route |
+| Streaming | `STREAMING-UNSIGNED-PAYLOAD-TRAILER` | Over TLS, validate the trailing CRC32, CRC32C, CRC64NVME, SHA-1, or SHA-256 checksum | Permission required by the underlying write route |
 
 Streaming writes require `x-amz-decoded-content-length`. Signed-trailer mode
 also requires `x-amz-trailer-signature`.
@@ -555,9 +560,10 @@ readinessProbe:
 - LDAP groups are the only source of authorization. ACL reads return canned
   owner `FULL_CONTROL` documents, and only owner-retaining canned ACL writes
   are accepted as no-ops for client compatibility.
-- For non-streaming uploads, the gateway verifies the SigV4 signature but does
-  not independently recalculate the payload digest supplied in
-  `x-amz-content-sha256`.
+- For non-streaming signed payloads, the gateway verifies the declared
+  `x-amz-content-sha256` digest while streaming and withholds the final byte
+  until verification succeeds, so an invalid body cannot complete an upstream
+  write.
 
 ## Contributing
 

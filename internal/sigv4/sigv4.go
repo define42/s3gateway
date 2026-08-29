@@ -9,6 +9,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha1" // #nosec G505 -- SHA-1 is one of the S3 trailing-checksum algorithms, not used for security
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -46,6 +47,18 @@ var (
 	// ErrSigV4RequestOutsideMaxSkew indicates that request time lies outside the
 	// configured past-or-future tolerance.
 	ErrSigV4RequestOutsideMaxSkew = errors.New("request outside allowed time skew")
+	// ErrInvalidPayloadHash indicates that x-amz-content-sha256 is neither a
+	// supported streaming mode nor a 64-character hexadecimal SHA-256 digest.
+	ErrInvalidPayloadHash = errors.New("invalid x-amz-content-sha256")
+	// ErrPayloadHashMismatch indicates that a non-streaming body did not match
+	// its signed x-amz-content-sha256 digest.
+	ErrPayloadHashMismatch = errors.New("request payload SHA-256 mismatch")
+	// ErrUnsignedPayloadRequiresTLS prevents an on-path attacker from changing
+	// an unsigned request body without invalidating its SigV4 signature.
+	ErrUnsignedPayloadRequiresTLS = errors.New("UNSIGNED-PAYLOAD requires TLS")
+	// ErrRequiredHeaderNotSigned indicates that an operation-changing header was
+	// present but omitted from the SigV4 SignedHeaders set.
+	ErrRequiredHeaderNotSigned = errors.New("security-relevant header is not signed")
 )
 
 // ValidateSigV4RequestTime checks timestamp syntax, agreement with the
@@ -143,12 +156,21 @@ func splitAuthParts(s string) map[string]string {
 }
 
 // VerifySigV4 recomputes and compares a header-based request signature. It
-// requires x-amz-content-sha256 and every header named by auth.SignedHeaders.
-// auth must be non-nil.
+// requires x-amz-content-sha256, every header named by auth.SignedHeaders, and
+// signatures over headers that can change S3 operation semantics. Hexadecimal
+// non-streaming payload hashes are verified as r.Body is consumed. auth must
+// be non-nil.
 func VerifySigV4(r *http.Request, auth *Auth, secret string) error {
 	payloadHash := r.Header.Get("x-amz-content-sha256")
 	if payloadHash == "" {
 		return errors.New("missing x-amz-content-sha256")
+	}
+	if err := requireSignedHeaders(r, auth.SignedHeaders); err != nil {
+		return err
+	}
+	expectedPayloadHash, verifyPayload, err := parsePayloadHash(r, payloadHash)
+	if err != nil {
+		return err
 	}
 
 	canonURI := CanonicalURI(r.URL.EscapedPath())
@@ -181,7 +203,91 @@ func VerifySigV4(r *http.Request, auth *Auth, secret string) error {
 	if !constantTimeEq(auth.SignatureHex, gotSig) {
 		return errors.New("signature mismatch")
 	}
+	if verifyPayload {
+		if r.ContentLength == 0 || r.Body == nil || r.Body == http.NoBody {
+			emptyHash := sha256.Sum256(nil)
+			if subtle.ConstantTimeCompare(expectedPayloadHash[:], emptyHash[:]) != 1 {
+				return ErrPayloadHashMismatch
+			}
+			return nil
+		}
+		r.Body = newPayloadHashReadCloser(r.Body, expectedPayloadHash)
+	}
 	return nil
+}
+
+var requiredSignedHTTPHeaders = map[string]struct{}{
+	"cache-control":       {},
+	"content-disposition": {},
+	"content-encoding":    {},
+	"content-language":    {},
+	"content-md5":         {},
+	"content-type":        {},
+	"expires":             {},
+	"if-match":            {},
+	"if-modified-since":   {},
+	"if-none-match":       {},
+	"if-unmodified-since": {},
+	"range":               {},
+}
+
+func requireSignedHeaders(r *http.Request, signedHeaders []string) error {
+	signed := make(map[string]struct{}, len(signedHeaders))
+	for _, name := range signedHeaders {
+		name = strings.ToLower(strings.TrimSpace(name))
+		if name != "" {
+			signed[name] = struct{}{}
+		}
+	}
+
+	required := map[string]struct{}{"host": {}, "x-amz-date": {}}
+	for name := range r.Header {
+		name = strings.ToLower(name)
+		if name == "x-amz-content-sha256" {
+			// S3 implicitly includes this value as HashedPayload, so listing it
+			// in SignedHeaders is optional.
+			continue
+		}
+		if strings.HasPrefix(name, "x-amz-") {
+			required[name] = struct{}{}
+			continue
+		}
+		if _, ok := requiredSignedHTTPHeaders[name]; ok {
+			required[name] = struct{}{}
+		}
+	}
+	for name := range required {
+		if _, ok := signed[name]; !ok {
+			return fmt.Errorf("%w: %s", ErrRequiredHeaderNotSigned, name)
+		}
+	}
+	return nil
+}
+
+func parsePayloadHash(r *http.Request, value string) ([sha256.Size]byte, bool, error) {
+	var expected [sha256.Size]byte
+	normalized := strings.TrimSpace(value)
+	switch strings.ToUpper(normalized) {
+	case StreamingSignedPayload, StreamingSignedPayloadTrailer:
+		return expected, false, nil
+	case StreamingUnsignedPayloadTrailer:
+		if r.TLS == nil {
+			return expected, false, ErrUnsignedPayloadRequiresTLS
+		}
+		return expected, false, nil
+	case "UNSIGNED-PAYLOAD":
+		if r.TLS == nil && r.ContentLength != 0 && r.Body != nil && r.Body != http.NoBody {
+			return expected, false, ErrUnsignedPayloadRequiresTLS
+		}
+		return expected, false, nil
+	}
+
+	decoded, err := hex.DecodeString(normalized)
+	if err != nil || len(decoded) != sha256.Size {
+		return expected, false, ErrInvalidPayloadHash
+	}
+	copy(expected[:], decoded)
+	return expected, true, nil
 }
 
 // CanonicalURI ensures an escaped request path is non-empty and begins with a
@@ -239,6 +345,9 @@ func canonicalHeaders(r *http.Request, signedHeaders []string) (string, string, 
 		host = r.URL.Host
 	}
 	hm["host"] = compressSpaces(strings.TrimSpace(host))
+	if r.ContentLength >= 0 {
+		hm["content-length"] = strconv.FormatInt(r.ContentLength, 10)
+	}
 
 	// SigV4 expects signed headers list in lowercase sorted order (most clients do this already).
 	sh := make([]string, len(signedHeaders))
@@ -655,6 +764,70 @@ func (r *awsChunkedReadCloser) Read(p []byte) (int, error) { return r.guard.Read
 
 func (r *awsChunkedReadCloser) Close() error { return r.c.Close() }
 
+func (r *awsChunkedReadCloser) validationError() error {
+	if r.reader == nil {
+		return nil
+	}
+	return r.reader.err
+}
+
+type payloadHashReader struct {
+	r        io.Reader
+	hash     hash.Hash
+	expected [sha256.Size]byte
+	err      error
+}
+
+func (r *payloadHashReader) Read(p []byte) (int, error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	n, err := r.r.Read(p)
+	if n > 0 {
+		_, _ = r.hash.Write(p[:n])
+	}
+	if errors.Is(err, io.EOF) {
+		actual := r.hash.Sum(nil)
+		if subtle.ConstantTimeCompare(actual, r.expected[:]) != 1 {
+			r.err = ErrPayloadHashMismatch
+			return n, r.err
+		}
+	} else if err != nil {
+		r.err = err
+	}
+	return n, err
+}
+
+type payloadHashReadCloser struct {
+	reader *payloadHashReader
+	guard  trailerGuardReader
+	c      io.Closer
+}
+
+func newPayloadHashReadCloser(body io.ReadCloser, expected [sha256.Size]byte) *payloadHashReadCloser {
+	reader := &payloadHashReader{
+		r:        body,
+		hash:     sha256.New(),
+		expected: expected,
+	}
+	return &payloadHashReadCloser{
+		reader: reader,
+		guard:  trailerGuardReader{r: reader},
+		c:      body,
+	}
+}
+
+func (r *payloadHashReadCloser) Read(p []byte) (int, error) { return r.guard.Read(p) }
+
+func (r *payloadHashReadCloser) Close() error { return r.c.Close() }
+
+func (r *payloadHashReadCloser) validationError() error {
+	if r.reader == nil {
+		return nil
+	}
+	return r.reader.err
+}
+
 // trailerGuardReader delays the final byte of the decoded stream until the
 // underlying chunked reader reports a clean EOF, i.e. until every
 // end-of-stream validation (final chunk signature, trailer signature,
@@ -719,16 +892,16 @@ func (g *trailerGuardReader) Read(p []byte) (int, error) {
 	}
 }
 
-// StreamValidationError returns the aws-chunked validation error the decoded
-// body hit while being streamed upstream, if any. The upstream SDK may mask
-// body-reader errors (e.g. behind "failed to rewind transport stream for
-// retry"), so handlers should consult this to classify the failure.
+// StreamValidationError returns the payload validation error the request body
+// hit while being streamed upstream, if any. The upstream SDK may mask body-
+// reader errors (e.g. behind "failed to rewind transport stream for retry"),
+// so handlers should consult this to classify the failure.
 func StreamValidationError(body io.ReadCloser) error {
-	rc, ok := body.(*awsChunkedReadCloser)
-	if !ok || rc.reader == nil {
+	source, ok := body.(interface{ validationError() error })
+	if !ok {
 		return nil
 	}
-	return rc.reader.err
+	return source.validationError()
 }
 
 type awsChunkedReader struct {

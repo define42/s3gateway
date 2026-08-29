@@ -3,11 +3,9 @@ package app_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -52,32 +50,10 @@ func TestMinioClientIntegration(t *testing.T) {
 		t.Fatalf("boot s3gateway: %v", err)
 	}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen for gateway: %v", err)
-	}
-	serveErr := make(chan error, 1)
-	go func() {
-		serveErr <- httpSrv.Serve(ln)
-	}()
-	t.Cleanup(func() {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer shutdownCancel()
-		if err := httpSrv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			t.Errorf("shutdown gateway: %v", err)
-		}
-		select {
-		case err := <-serveErr:
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
-				t.Errorf("gateway serve error: %v", err)
-			}
-		case <-time.After(10 * time.Second):
-			t.Errorf("timeout waiting for gateway to stop")
-		}
-	})
-
-	gatewayURL := "http://" + ln.Addr().String()
-	waitForGatewayReady(t, gatewayURL)
+	gatewaySrv := httptest.NewTLSServer(httpSrv.Handler)
+	defer gatewaySrv.Close()
+	gatewayURL := gatewaySrv.URL
+	waitForGatewayReady(t, gatewayURL, gatewaySrv.Client())
 
 	rwAccessKey, rwSecretKey, err := s3credentials.GenerateKeysBase64Encoded("testuser", "dogood")
 	if err != nil {
@@ -91,6 +67,7 @@ func TestMinioClientIntegration(t *testing.T) {
 	minioClient, err := minio.New(parsedGatewayURL.Host, &minio.Options{
 		Creds:        minioCredentials.NewStaticV4(rwAccessKey, rwSecretKey, ""),
 		Secure:       strings.EqualFold(parsedGatewayURL.Scheme, "https"),
+		Transport:    gatewaySrv.Client().Transport,
 		Region:       "us-east-1",
 		BucketLookup: minio.BucketLookupPath,
 	})

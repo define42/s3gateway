@@ -1075,10 +1075,13 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	}
 }
 
-func waitForGatewayReady(t *testing.T, gatewayURL string) {
+func waitForGatewayReady(t *testing.T, gatewayURL string, clients ...*http.Client) {
 	t.Helper()
 
 	client := &http.Client{Timeout: 500 * time.Millisecond}
+	if len(clients) > 0 && clients[0] != nil {
+		client = clients[0]
+	}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		req, err := http.NewRequest(http.MethodGet, gatewayURL+"/", nil)
