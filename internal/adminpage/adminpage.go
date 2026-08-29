@@ -42,6 +42,13 @@ const (
 	adminSessionValueGrps  = "groups"
 	adminPreviewMaxKeys    = int32(25)
 	maxAdminFormBodySize   = 64 * 1024 // 64 KiB is more than enough for any admin form
+
+	maxAdminUploadParts              = 128
+	maxAdminUploadMetadataFields     = 64
+	maxAdminUploadFieldBytes         = int64(8 << 10)
+	maxAdminUploadMetadataKeyBytes   = 256
+	maxAdminUploadMetadataValueBytes = int64(4 << 10)
+	maxAdminUploadMetadataBytes      = 16 << 10
 )
 
 // IsBrowser reports whether a request looks like interactive browser traffic.
@@ -1443,14 +1450,16 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	const maxUploadFieldBytes = int64(1 << 20) // 1 MiB
-
 	var (
-		bucket  string
-		key     string
-		cursor  string
-		history string
-		size    int64 = -1
+		bucket                 string
+		key                    string
+		cursor                 string
+		history                string
+		size                   int64 = -1
+		bucketWriteAuthorized  bool
+		partCount              int
+		metadataCount          int
+		metadataAggregateBytes int
 	)
 	metaValues := map[string]string{}
 
@@ -1479,17 +1488,35 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 			redirectUploadPayloadError("Could not process upload payload.")
 			return
 		}
+		partCount++
+		if partCount > maxAdminUploadParts {
+			_ = part.Close()
+			redirectUploadPayloadError("Could not process upload payload.")
+			return
+		}
 
 		partName := strings.TrimSpace(part.FormName())
 		if rawKey, ok := strings.CutPrefix(partName, "meta-"); ok {
-			// User-supplied object metadata field (meta-<key>). Collected before
-			// the file part so it can be validated and attached to the upload.
-			valueBytes, readErr := io.ReadAll(io.LimitReader(part, maxUploadFieldBytes+1))
-			_ = part.Close()
-			if readErr != nil || int64(len(valueBytes)) > maxUploadFieldBytes {
+			metadataCount++
+			if !bucketWriteAuthorized || metadataCount > maxAdminUploadMetadataFields ||
+				len(rawKey) == 0 || len(rawKey) > maxAdminUploadMetadataKeyBytes {
+				_ = part.Close()
 				redirectUploadPayloadError("Could not process upload payload.")
 				return
 			}
+
+			valueBytes, readErr := io.ReadAll(io.LimitReader(part, maxAdminUploadMetadataValueBytes+1))
+			_ = part.Close()
+			if readErr != nil || int64(len(valueBytes)) > maxAdminUploadMetadataValueBytes {
+				redirectUploadPayloadError("Could not process upload payload.")
+				return
+			}
+			if len(rawKey) > maxAdminUploadMetadataBytes-metadataAggregateBytes ||
+				len(valueBytes) > maxAdminUploadMetadataBytes-metadataAggregateBytes-len(rawKey) {
+				redirectUploadPayloadError("Could not process upload payload.")
+				return
+			}
+			metadataAggregateBytes += len(rawKey) + len(valueBytes)
 			if metaKey := config.NormalizeRequiredMetadataKey(rawKey); metaKey != "" {
 				metaValues[metaKey] = strings.TrimSpace(string(valueBytes))
 			}
@@ -1497,9 +1524,9 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 		}
 		switch partName {
 		case "name", "key", "cursor", "history", "size":
-			valueBytes, readErr := io.ReadAll(io.LimitReader(part, maxUploadFieldBytes+1))
+			valueBytes, readErr := io.ReadAll(io.LimitReader(part, maxAdminUploadFieldBytes+1))
 			_ = part.Close()
-			if readErr != nil || int64(len(valueBytes)) > maxUploadFieldBytes {
+			if readErr != nil || int64(len(valueBytes)) > maxAdminUploadFieldBytes {
 				redirectUploadPayloadError("Could not process upload payload.")
 				return
 			}
@@ -1509,6 +1536,13 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 			case "name":
 				if bucket == "" {
 					bucket = value
+					if bucket != "" {
+						if !authz.CanWrite(rules, bucket) {
+							http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, cursor, history, "", "Write permission is required for uploads."), http.StatusSeeOther)
+							return
+						}
+						bucketWriteAuthorized = true
+					}
 				}
 			case "key":
 				if key == "" {
@@ -1546,7 +1580,7 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 			redirectToBucket := func(notice, pageErr string) {
 				http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, cursor, history, notice, pageErr), http.StatusSeeOther)
 			}
-			if !authz.CanWrite(rules, bucket) {
+			if !bucketWriteAuthorized {
 				_ = part.Close()
 				redirectToBucket("", "Write permission is required for uploads.")
 				return
@@ -1719,7 +1753,7 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
-	if !authz.CanWrite(rules, bucket) {
+	if !bucketWriteAuthorized {
 		http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, cursor, history, "", "Write permission is required for uploads."), http.StatusSeeOther)
 		return
 	}
