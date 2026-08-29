@@ -421,16 +421,18 @@ POST /api/pop/_all/{group}
 The bucket route consumes the bucket-named topic and therefore requires
 `ENABLE_KAFKA_BUCKET_TOPIC=true`. The `_all` route consumes the configured
 `KAFKA_GLOBAL_TOPIC`. Both routes use HTTP Basic authentication with the
-caller's existing LDAP UPN and password, and require read access to the event's
-bucket. SigV4 authentication is not accepted for `/api/pop/*`; other S3 routes
-continue to require SigV4. Consumer group names may contain letters, digits,
-`.`, `_`, and `-`.
+caller's LDAP username without the domain suffix and password; the gateway
+appends `@LDAP_DOMAIN` during authentication. Both routes require read access
+to the event's bucket. SigV4 authentication is not accepted for `/api/pop/*`;
+other S3 routes continue to require SigV4. Consumer group names may contain
+letters, digits, `.`, `_`, and `-`, must not be `.` or `..`, and may be at most
+249 bytes long.
 
 Basic credentials must be sent only over HTTPS because HTTP Basic encoding does
 not encrypt them. For example:
 
 ```bash
-curl --user 'user@example.com' \
+curl --user 'user' \
   --request POST https://s3.example.com/api/pop/images/scanner
 ```
 
@@ -551,22 +553,8 @@ readinessProbe:
 
 ## Contributing
 
-Go 1.26.6 or later is required. Docker is required for the integration tests,
-which start LDAP, MinIO, and Ceph containers through `testcontainers-go`.
-
-```bash
-git clone https://github.com/define42/s3gateway.git
-cd s3gateway
-
-make lint
-go test ./...
-go test -race ./...
-make gosec
-```
-
-Keep changes focused, format Go code with `gofmt`, and include tests for changed
-behavior. Pull requests should summarize the motivation, note configuration
-changes, list the checks run, and include screenshots for admin UI changes.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for prerequisites, local development,
+tests, benchmarks, and the pull-request checklist.
 
 ## Contributors
 

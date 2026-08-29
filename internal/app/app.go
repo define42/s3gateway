@@ -15,7 +15,9 @@ import (
 	"github.com/define42/s3gateway/internal/upstream"
 )
 
-// Boot constructs the configured gateway HTTP server.
+// Boot loads process configuration and constructs the gateway HTTP server and
+// optional Kafka integrations. Configuration failures terminate the process;
+// component initialization failures are returned.
 func Boot() (*http.Server, config.Config, error) {
 	cfg := config.LoadConfig()
 	httpServer, _, err := boot(cfg)

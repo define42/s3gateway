@@ -22,7 +22,10 @@ import (
 
 const splunkHECCloseTimeout = 10 * time.Second
 
-// Run starts the gateway, waits for shutdown, and returns a process exit code.
+// Run starts the configured HTTP or ACME-managed HTTPS server, waits for a
+// server failure or termination signal, and performs a bounded graceful
+// shutdown. It returns 0 after a clean server stop and 1 when initialization or
+// serving reports an error.
 func Run() int {
 	localHandler := slog.NewJSONHandler(os.Stdout, nil)
 	slog.SetDefault(slog.New(localHandler))

@@ -1,3 +1,5 @@
+// Package config loads and validates gateway configuration from environment
+// variables.
 package config
 
 import (
@@ -14,6 +16,8 @@ import (
 	"github.com/define42/s3gateway/internal/s3credentials"
 )
 
+// Config contains the gateway's LDAP, upstream S3, notification, logging,
+// HTTP, and ACME settings.
 type Config struct {
 	ListenAddr string
 
@@ -71,12 +75,18 @@ const (
 	defaultKafkaPopMaxConsumers     = 1000
 	defaultSplunkHECFlushInterval   = 30 * time.Second
 
+	// DefaultGroupCacheMaxEntries bounds the in-memory LDAP group cache.
 	DefaultGroupCacheMaxEntries = 10000
-	DefaultReadHeaderTimeout    = 10 * time.Second
-	DefaultIdleTimeout          = 120 * time.Second
-	DefaultMaxHeaderBytes       = 1 << 20 // 1 MiB
+	// DefaultReadHeaderTimeout limits the time spent reading request headers.
+	DefaultReadHeaderTimeout = 10 * time.Second
+	// DefaultIdleTimeout limits keep-alive idle time.
+	DefaultIdleTimeout = 120 * time.Second
+	// DefaultMaxHeaderBytes bounds HTTP request headers to 1 MiB.
+	DefaultMaxHeaderBytes = 1 << 20
 )
 
+// ApplyDefaults fills zero-valued settings that have runtime defaults. It does
+// not validate the resulting configuration.
 func (cfg *Config) ApplyDefaults() {
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = ":8080"
@@ -119,6 +129,8 @@ func (cfg *Config) ApplyDefaults() {
 	}
 }
 
+// Validate checks numeric bounds and cross-field requirements. It expects
+// defaults to have been applied when zero values should be accepted.
 func (cfg Config) Validate() error {
 	if cfg.GroupCacheMaxEntries <= 0 {
 		return errors.New("LDAP_GROUP_CACHE_MAX_ENTRIES must be > 0")
@@ -325,6 +337,9 @@ func envCSVMetadataKeys(key string) []string {
 	return out
 }
 
+// LoadConfig reads environment variables, validates them, and applies runtime
+// defaults. It logs and terminates the process with exit status 1 when a
+// required variable is missing or a value is invalid.
 func LoadConfig() Config {
 	cfg := Config{
 		ListenAddr: env("LISTEN_ADDR", ":8080"),

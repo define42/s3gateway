@@ -31,6 +31,8 @@ var errPopResponseHandled = errors.New("pop response handled")
 // PopConsumer delivers one Kafka record to handle and commits it only when
 // handle succeeds.
 type PopConsumer interface {
+	// Consume delivers at most one record for a topic and consumer group. The
+	// implementation commits the record only after handle succeeds.
 	Consume(
 		context.Context,
 		string,

@@ -1,3 +1,4 @@
+// Package main provides the s3gateway executable.
 package main
 
 import (

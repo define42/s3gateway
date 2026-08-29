@@ -1,3 +1,5 @@
+// Package sigv4 parses and verifies AWS Signature Version 4 requests and
+// decodes SigV4 streaming payloads used by S3 writes.
 package sigv4
 
 import (
@@ -23,10 +25,8 @@ import (
 	"time"
 )
 
-// ==================== SigV4 verify (minimal header-based) ====================
-//
-// We verify signatures using the secret derived from access key credentials.
-// Real auth is then done by decoding accessKey -> upn:pass and binding to AD.
+// Auth contains the credential scope and signature material parsed from a
+// header-based SigV4 Authorization value.
 type Auth struct {
 	AccessKey     string // #nosec G117 -- AccessKey is a public identifier, not a secret
 	Date          string
@@ -38,11 +38,19 @@ type Auth struct {
 }
 
 var (
-	ErrInvalidAmzDate             = errors.New("invalid x-amz-date")
-	ErrSigV4DateScopeMismatch     = errors.New("credential scope date mismatch")
+	// ErrInvalidAmzDate indicates that x-amz-date is not a SigV4 timestamp.
+	ErrInvalidAmzDate = errors.New("invalid x-amz-date")
+	// ErrSigV4DateScopeMismatch indicates that the credential-scope date does
+	// not match x-amz-date.
+	ErrSigV4DateScopeMismatch = errors.New("credential scope date mismatch")
+	// ErrSigV4RequestOutsideMaxSkew indicates that request time lies outside the
+	// configured past-or-future tolerance.
 	ErrSigV4RequestOutsideMaxSkew = errors.New("request outside allowed time skew")
 )
 
+// ValidateSigV4RequestTime checks timestamp syntax, agreement with the
+// credential-scope date, and absolute clock skew. A non-positive maxSkew
+// disables only the skew check. auth must be non-nil.
 func ValidateSigV4RequestTime(auth *Auth, now time.Time, maxSkew time.Duration) error {
 	amzTime, err := time.Parse("20060102T150405Z", strings.TrimSpace(auth.AmzDate))
 	if err != nil {
@@ -62,6 +70,9 @@ func ValidateSigV4RequestTime(auth *Auth, now time.Time, maxSkew time.Duration) 
 	return nil
 }
 
+// ParseSigV4Authorization parses a header-based AWS4-HMAC-SHA256 authorization
+// value and the required x-amz-date header. Access keys containing slashes are
+// supported because the credential scope is parsed from the right.
 func ParseSigV4Authorization(r *http.Request) (*Auth, error) {
 	az := r.Header.Get("Authorization")
 	if az == "" {
@@ -131,6 +142,9 @@ func splitAuthParts(s string) map[string]string {
 	return out
 }
 
+// VerifySigV4 recomputes and compares a header-based request signature. It
+// requires x-amz-content-sha256 and every header named by auth.SignedHeaders.
+// auth must be non-nil.
 func VerifySigV4(r *http.Request, auth *Auth, secret string) error {
 	payloadHash := r.Header.Get("x-amz-content-sha256")
 	if payloadHash == "" {
@@ -170,6 +184,8 @@ func VerifySigV4(r *http.Request, auth *Auth, secret string) error {
 	return nil
 }
 
+// CanonicalURI ensures an escaped request path is non-empty and begins with a
+// slash. It preserves all other escaping and path structure.
 func CanonicalURI(escapedPath string) string {
 	if escapedPath == "" {
 		return "/"
@@ -281,6 +297,8 @@ func awsURLEncode(s string, encodeSlash bool) string {
 	return b.String()
 }
 
+// DeriveSigningKey derives the SigV4 request-signing key for a credential
+// scope.
 func DeriveSigningKey(secret, date, region, service string) []byte {
 	kDate := hmacSHA256([]byte("AWS4"+secret), []byte(date))
 	kRegion := hmacSHA256(kDate, []byte(region))
@@ -293,6 +311,8 @@ func hmacSHA256(key, data []byte) []byte {
 	m.Write(data)
 	return m.Sum(nil)
 }
+
+// HmacSHA256Hex returns the lowercase hexadecimal HMAC-SHA256 of data.
 func HmacSHA256Hex(key, data []byte) string {
 	return hex.EncodeToString(hmacSHA256(key, data))
 }
@@ -309,10 +329,15 @@ func constantTimeEq(a, b string) bool {
 	return v == 0
 }
 
-// Supported streaming payload modes (x-amz-content-sha256 values).
 const (
-	StreamingSignedPayload          = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
-	StreamingSignedPayloadTrailer   = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"
+	// StreamingSignedPayload identifies signed aws-chunked data without signed
+	// trailers.
+	StreamingSignedPayload = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD"
+	// StreamingSignedPayloadTrailer identifies signed aws-chunked data with a
+	// signed trailer block.
+	StreamingSignedPayloadTrailer = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER"
+	// StreamingUnsignedPayloadTrailer identifies unsigned aws-chunked data whose
+	// declared trailing checksums provide payload-integrity validation.
 	StreamingUnsignedPayloadTrailer = "STREAMING-UNSIGNED-PAYLOAD-TRAILER"
 )
 
@@ -326,18 +351,41 @@ const (
 )
 
 var (
+	// ErrMissingDecodedContentLength indicates that a streaming request omitted
+	// x-amz-decoded-content-length.
 	ErrMissingDecodedContentLength = errors.New("missing x-amz-decoded-content-length")
+	// ErrInvalidDecodedContentLength indicates that the decoded content length
+	// is not a non-negative base-10 integer.
 	ErrInvalidDecodedContentLength = errors.New("invalid x-amz-decoded-content-length")
-	ErrContentLengthRequired       = errors.New("content length required")
-	ErrUnsupportedStreamingMode    = errors.New("unsupported streaming payload mode")
-	ErrMissingSigV4AuthContext     = errors.New("missing sigv4 auth context")
-	ErrMissingSigV4SecretContext   = errors.New("missing sigv4 secret context")
-	ErrMissingChunkSignature       = errors.New("missing aws-chunked chunk signature")
-	ErrInvalidChunkSignature       = errors.New("invalid aws-chunked chunk signature")
-	ErrInvalidChunkHeader          = errors.New("invalid aws-chunked chunk header")
-	ErrInvalidTrailer              = errors.New("invalid aws-chunked trailer")
-	ErrMissingTrailerSignature     = errors.New("missing x-amz-trailer-signature")
-	ErrTrailerChecksumMismatch     = errors.New("aws-chunked trailing checksum mismatch")
+	// ErrContentLengthRequired indicates that a non-streaming write has unknown
+	// content length.
+	ErrContentLengthRequired = errors.New("content length required")
+	// ErrUnsupportedStreamingMode indicates an unrecognized streaming
+	// x-amz-content-sha256 value.
+	ErrUnsupportedStreamingMode = errors.New("unsupported streaming payload mode")
+	// ErrMissingSigV4AuthContext indicates that signed streaming validation lacks
+	// parsed authentication context.
+	ErrMissingSigV4AuthContext = errors.New("missing sigv4 auth context")
+	// ErrMissingSigV4SecretContext indicates that signed streaming validation
+	// lacks the request's derived signing secret.
+	ErrMissingSigV4SecretContext = errors.New("missing sigv4 secret context")
+	// ErrMissingChunkSignature indicates that a signed aws-chunked frame omitted
+	// its chunk-signature extension.
+	ErrMissingChunkSignature = errors.New("missing aws-chunked chunk signature")
+	// ErrInvalidChunkSignature indicates malformed or mismatched chunk or trailer
+	// signature data.
+	ErrInvalidChunkSignature = errors.New("invalid aws-chunked chunk signature")
+	// ErrInvalidChunkHeader indicates malformed aws-chunked size or framing data.
+	ErrInvalidChunkHeader = errors.New("invalid aws-chunked chunk header")
+	// ErrInvalidTrailer indicates malformed or excessive aws-chunked trailer
+	// fields.
+	ErrInvalidTrailer = errors.New("invalid aws-chunked trailer")
+	// ErrMissingTrailerSignature indicates that signed-trailer mode ended without
+	// x-amz-trailer-signature.
+	ErrMissingTrailerSignature = errors.New("missing x-amz-trailer-signature")
+	// ErrTrailerChecksumMismatch indicates that decoded payload bytes do not match
+	// a declared trailing checksum.
+	ErrTrailerChecksumMismatch = errors.New("aws-chunked trailing checksum mismatch")
 )
 
 func isAWSChunkedPayload(h http.Header) bool {
@@ -360,6 +408,8 @@ func parseDecodedContentLength(h http.Header) (int64, error) {
 	return n, nil
 }
 
+// AWSChunkSignatureVerifier tracks the signature chain for one signed
+// aws-chunked request body. It is stateful and not safe for concurrent use.
 type AWSChunkSignatureVerifier struct {
 	signingKey []byte
 	amzDate    string
@@ -367,6 +417,8 @@ type AWSChunkSignatureVerifier struct {
 	PrevSig    string
 }
 
+// NewAWSChunkSignatureVerifier initializes a chunk-signature chain from the
+// request's header signature. auth must be non-nil.
 func NewAWSChunkSignatureVerifier(auth *Auth, secret string) *AWSChunkSignatureVerifier {
 	return &AWSChunkSignatureVerifier{
 		signingKey: DeriveSigningKey(secret, auth.Date, auth.Region, auth.Service),
@@ -493,7 +545,9 @@ func trailerChecksumsForRequest(h http.Header) []trailerChecksum {
 type CtxKey string
 
 const (
-	CtxSigV4AuthKey   CtxKey = "sigv4-auth"
+	// CtxSigV4AuthKey stores parsed SigV4 authentication in a request context.
+	CtxSigV4AuthKey CtxKey = "sigv4-auth"
+	// CtxSigV4SecretKey stores the derived signing secret in a request context.
 	CtxSigV4SecretKey CtxKey = "sigv4-secret"
 )
 
@@ -527,6 +581,9 @@ func WithSigV4Secret(ctx context.Context, secret string) context.Context {
 	return context.WithValue(ctx, CtxSigV4SecretKey, secret)
 }
 
+// ChunkSignatureVerifierFromRequest returns a verifier for signed streaming
+// payload modes. Non-streaming and unsigned-trailer requests return nil; signed
+// modes require Auth and secret values previously stored in the request context.
 func ChunkSignatureVerifierFromRequest(r *http.Request) (*AWSChunkSignatureVerifier, error) {
 	if !isAWSChunkedPayload(r.Header) {
 		return nil, nil
@@ -552,6 +609,9 @@ func ChunkSignatureVerifierFromRequest(r *http.Request) (*AWSChunkSignatureVerif
 	}
 }
 
+// IsChunkSignatureValidationError reports whether err represents aws-chunked
+// framing, chunk-signature, or signed-trailer validation failure. Trailing
+// checksum mismatches are classified separately.
 func IsChunkSignatureValidationError(err error) bool {
 	return errors.Is(err, ErrInvalidChunkSignature) ||
 		errors.Is(err, ErrMissingChunkSignature) ||
@@ -977,6 +1037,11 @@ func (r *awsChunkedReader) consumeTrailers() error {
 	return fmt.Errorf("%w: too many trailer lines", ErrInvalidTrailer)
 }
 
+// DecodeBodyForS3Write returns a request body and decoded content length
+// suitable for an upstream S3 write. Streaming bodies are decoded as they are
+// read; chunk signatures, signed trailers, and declared trailing checksums are
+// validated before the final payload byte is released. Non-streaming bodies
+// require a known Content-Length.
 func DecodeBodyForS3Write(r *http.Request, verifier *AWSChunkSignatureVerifier) (io.ReadCloser, int64, error) {
 	if isAWSChunkedPayload(r.Header) {
 		mode := streamingPayloadMode(r.Header)

@@ -1,3 +1,4 @@
+// Package authz maps LDAP group names to permissions on S3 bucket namespaces.
 package authz
 
 import (
@@ -25,8 +26,8 @@ func RulesFromRequest(r *http.Request) []Rule {
 	return rules
 }
 
-// ==================== AuthZ: <namespace>-<letters> => bucket namespace "<namespace>" ====================
-// Permission letters:
+// Perm is a bitmask of operations granted on a bucket namespace. LDAP group
+// suffixes use these permission letters:
 //
 //	r = read
 //	w = write
@@ -36,22 +37,33 @@ func RulesFromRequest(r *http.Request) []Rule {
 type Perm uint32
 
 const (
+	// PermNone grants no operations.
 	PermNone Perm = 0
 
+	// PermRead grants read operations.
 	PermRead Perm = 1 << iota
+	// PermWrite grants object write operations.
 	PermWrite
+	// PermCreateBucket grants bucket creation.
 	PermCreateBucket
+	// PermDeleteObject grants object deletion.
 	PermDeleteObject
+	// PermDeleteBucket grants bucket deletion.
 	PermDeleteBucket
 
+	// PermReadWrite combines read and object-write permissions.
 	PermReadWrite = PermRead | PermWrite
 )
 
+// Rule grants a permission mask to buckets in one namespace. A bucket's
+// namespace is the lowercase portion before its first hyphen.
 type Rule struct {
 	BucketPrefix string // e.g. "test"
 	Perm         Perm
 }
 
+// RulesFromGroups parses authorization-shaped LDAP groups and merges all
+// permissions that target the same namespace. Unrecognized groups are ignored.
 func RulesFromGroups(groups map[string]struct{}) []Rule {
 	byPrefix := map[string]Perm{}
 	for g := range groups {
@@ -69,6 +81,9 @@ func RulesFromGroups(groups map[string]struct{}) []Rule {
 	return out
 }
 
+// ParseGroup parses a case-insensitive "namespace-letters" group name. The
+// supported permission letters are r, w, c, d, and b; any other letter makes
+// the entire group invalid.
 func ParseGroup(g string) (prefix string, perm Perm, ok bool) {
 	g = strings.ToLower(strings.TrimSpace(g))
 	i := strings.Index(g, "-")
@@ -114,6 +129,8 @@ func BucketNamespace(bucket string) string {
 	return b
 }
 
+// BucketPerm returns the first rule matching bucket's lowercase namespace, or
+// PermNone when no rule matches.
 func BucketPerm(rules []Rule, bucket string) Perm {
 	ns := BucketNamespace(bucket)
 	for _, r := range rules {
@@ -124,14 +141,24 @@ func BucketPerm(rules []Rule, bucket string) Perm {
 	return PermNone
 }
 
-func CanRead(rules []Rule, bucket string) bool  { return BucketPerm(rules, bucket)&PermRead != 0 }
+// CanRead reports whether rules grant read permission on bucket.
+func CanRead(rules []Rule, bucket string) bool { return BucketPerm(rules, bucket)&PermRead != 0 }
+
+// CanWrite reports whether rules grant object-write permission on bucket.
 func CanWrite(rules []Rule, bucket string) bool { return BucketPerm(rules, bucket)&PermWrite != 0 }
+
+// CanCreateBucket reports whether rules grant bucket creation in bucket's
+// namespace.
 func CanCreateBucket(rules []Rule, bucket string) bool {
 	return BucketPerm(rules, bucket)&PermCreateBucket != 0
 }
+
+// CanDeleteObject reports whether rules grant object deletion on bucket.
 func CanDeleteObject(rules []Rule, bucket string) bool {
 	return BucketPerm(rules, bucket)&PermDeleteObject != 0
 }
+
+// CanDeleteBucket reports whether rules grant deletion of bucket.
 func CanDeleteBucket(rules []Rule, bucket string) bool {
 	return BucketPerm(rules, bucket)&PermDeleteBucket != 0
 }

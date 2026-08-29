@@ -79,6 +79,7 @@ func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {
 
 }
 
+// X25519PublicKeyFromHex parses a 32-byte, hexadecimal X25519 public key.
 func X25519PublicKeyFromHex(hexKey string) (*ecdh.PublicKey, error) {
 	keyBytes, err := hex.DecodeString(hexKey)
 	if err != nil {
@@ -92,6 +93,9 @@ func X25519PublicKeyFromHex(hexKey string) (*ecdh.PublicKey, error) {
 	return x25519Curve.NewPublicKey(keyBytes)
 }
 
+// GenerateKeysX25519 encrypts LDAP credentials for the supplied X25519 public
+// key and derives the matching S3 signing secret. It rejects usernames
+// containing a colon because the encrypted plaintext uses a colon separator.
 func GenerateKeysX25519(ldapUsername, ldapPassword, publicKeyHex string) (accessKey string, secretKey string, err error) {
 	publicKey, err := X25519PublicKeyFromHex(publicKeyHex)
 	if err != nil {
@@ -184,6 +188,7 @@ func decryptToken(encoded string, privateKey *ecdh.PrivateKey) (ldapUsername, ld
 	return ldapUsername, ldapPassword, secretKey, nil
 }
 
+// X25519PrivateKeyFromHex parses a 32-byte, hexadecimal X25519 private key.
 func X25519PrivateKeyFromHex(hexKey string) (*ecdh.PrivateKey, error) {
 	keyBytes, err := hex.DecodeString(hexKey)
 	if err != nil {
@@ -198,6 +203,8 @@ func X25519PrivateKeyFromHex(hexKey string) (*ecdh.PrivateKey, error) {
 	return curve.NewPrivateKey(keyBytes)
 }
 
+// GenerateX25519TestKeys creates a hexadecimal X25519 key pair for tests and
+// local integration environments.
 func GenerateX25519TestKeys() (privateKeyHex string, publicKeyHex string, err error) {
 	priv, err := x25519Curve.GenerateKey(rand.Reader)
 	if err != nil {

@@ -1,3 +1,5 @@
+// Package upstream constructs the AWS SDK client used to forward gateway
+// operations to the configured S3-compatible service.
 package upstream
 
 import (
@@ -13,10 +15,11 @@ import (
 	"github.com/define42/s3gateway/internal/config"
 )
 
-// ==================== Upstream S3 client (service creds) ====================
+// New constructs an S3 client with static service credentials, a tuned shared
+// HTTP transport, and checksum policies compatible with streamed request
+// bodies. The supplied context bounds AWS SDK configuration loading.
 //
-// Key point: for PutObject/UploadPart with unseekable bodies, use
-// v4.SwapComputePayloadSHA256ForUnsignedPayloadMiddleware and provide ContentLength. :contentReference[oaicite:6]{index=6}
+// New panics if http.DefaultTransport is not an *http.Transport.
 func New(ctx context.Context, cfg config.Config) (*s3.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = http.ProxyFromEnvironment

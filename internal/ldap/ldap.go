@@ -1,3 +1,5 @@
+// Package ldap authenticates users and retrieves Active Directory group
+// membership over LDAP.
 package ldap
 
 import (
@@ -18,6 +20,8 @@ func ldapDial(ldapURL string) (*ldap.Conn, error) {
 	return DialWithTimeout(ldapURL, defaultLDAPDialTimeout)
 }
 
+// DialWithTimeout opens an LDAP connection using the URL's scheme and a dialer
+// bounded by timeout.
 func DialWithTimeout(ldapURL string, timeout time.Duration) (*ldap.Conn, error) {
 	_, err := url.Parse(ldapURL)
 	if err != nil {
@@ -26,6 +30,10 @@ func DialWithTimeout(ldapURL string, timeout time.Duration) (*ldap.Conn, error) 
 	return ldap.DialURL(ldapURL, ldap.DialWithDialer(&net.Dialer{Timeout: timeout}))
 }
 
+// FetchGroupsUPN appends cfg.LDAPDomain to upn, binds with the resulting user
+// principal name, and searches cfg.BaseDN for that identity. It returns
+// lowercase common names from memberOf and fails unless the search yields
+// exactly one user entry.
 func FetchGroupsUPN(cfg config.Config, upn, password string) (map[string]struct{}, error) {
 	conn, err := ldapDial(cfg.LDAPURL)
 	if err != nil {

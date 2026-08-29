@@ -1,0 +1,164 @@
+# s3gateway
+
+> A Go HTTP gateway for path-style S3 clients that authenticates AWS Signature Version 4 requests with LDAP credentials, authorizes bucket namespaces from LDAP groups, and proxies allowed operations to an S3-compatible backend.
+
+## Project status
+
+- Application module: `github.com/define42/s3gateway`
+- Executable: `./cmd/s3gateway`
+- Latest release tag: `v1.0.64` (2026-08-28)
+- Required Go version: 1.26.6 or later
+- Distribution: source, `ghcr.io/define42/s3gateway` container images, and GitHub releases
+- License: this repository currently has no license file; do not assume permission to redistribute or reuse it
+
+## Quick start
+
+The local stack starts MinIO, GLAUTH, and s3gateway:
+
+```bash
+docker compose up --build -d
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install boto3 cryptography
+python3 example_s3_client/python/s3demo.py
+docker compose down
+```
+
+Run from source with reachable LDAP and S3 services:
+
+```bash
+export LDAP_URL='ldaps://ldap.example.com:636'
+export LDAP_BASE_DN='dc=example,dc=com'
+export S3_ENDPOINT='https://s3.example.com'
+export S3_ACCESS_KEY='upstream-access-key'
+export S3_SECRET_KEY='upstream-secret-key'
+go run ./cmd/s3gateway
+```
+
+## Development commands
+
+```bash
+go build ./cmd/s3gateway
+go test ./...
+go test -race ./...
+make lint
+make gosec
+```
+
+Integration tests use `testcontainers-go` and require Docker. The scheduled integration benchmark command is:
+
+```bash
+go test -run '^$' \
+  -bench '^BenchmarkFullIntegrationGateway(PutObject|GetObject)$' \
+  -benchmem -count=3 -benchtime=3x ./...
+```
+
+## Request flow and architecture
+
+1. `cmd/s3gateway` calls `internal/app.Run`, which loads configuration, composes dependencies, starts HTTP or ACME-managed HTTPS, and handles graceful shutdown.
+2. `internal/s3credentials` decodes legacy `AD...` access key IDs or decrypts `X1...` X25519 credentials; `internal/sigv4` validates the request time and SigV4 signature.
+3. `internal/ldap` authenticates the user and loads groups; `internal/groupcache` caches successful group lookups.
+4. `internal/authz` turns group names into namespace permissions; `internal/server` dispatches allowed S3 operations and proxies them through `internal/upstream` using the gateway's configured upstream credentials.
+5. `internal/adminpage` serves the browser console with the same LDAP-derived authorization rules. HTML templates are embedded from `internal/adminpage/webtemplate`.
+6. Optional `internal/uploadnotify` and `internal/kafkapop` components publish and consume Kafka upload events. `internal/splunkhec` optionally mirrors structured logs to Splunk HEC.
+
+Supporting protocol packages include `internal/s3http` for S3 request/error translation and `internal/s3xml` for S3 XML codecs.
+
+## Authentication and authorization
+
+- Only header-based SigV4 is supported. Presigned URLs and virtual-hosted-style S3 requests are not supported.
+- Client access key IDs contain LDAP credentials. `X1...` uses X25519, HKDF-SHA256, and ChaCha20-Poly1305; legacy `AD...` is only base64 and is reversible.
+- The SigV4 secret access key is `base64url(SHA-256("username:password"))`.
+- The gateway appends `@LDAP_DOMAIN` to client usernames before LDAP bind/search. Usernames cannot contain `:`.
+- LDAP groups use `<namespace>-<permissions>`. Permissions are `r` read, `w` write, `c` create/configure, `d` delete objects, and `b` delete buckets/configuration.
+- A bucket matches the namespace before its first hyphen. Copy operations require `r` on the source and `w` on the destination.
+- The full implemented S3 operation matrix and required permissions are in `README.md` under "S3 compatibility."
+
+## Configuration
+
+Configuration is read from environment variables at startup. Durations use Go syntax such as `500ms`, `30s`, or `2m`.
+
+Required variables:
+
+- `LDAP_URL`, `LDAP_BASE_DN`
+- `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`
+
+Core optional variables and defaults:
+
+- `LISTEN_ADDR=:8080`, `LDAP_DOMAIN=example.com`, `LDAP_GROUP_TTL=2m`, `LDAP_GROUP_CACHE_MAX_ENTRIES=10000`
+- `S3_REGION=us-east-1`, `S3_FORCE_PATH_STYLE=true`, `SIGV4_MAX_SKEW=15m`
+- `S3GATEWAY_PRIVATE_X25519_KEY` for `X1...` client credentials
+- `REQUIRED_UPLOAD_METADATA_KEYS` for required `x-amz-meta-*` fields
+- `COOKIE_SECRET`; when set it must be at least 32 characters
+
+Kafka variables:
+
+- `KAFKA_BROKERS`, `ENABLE_KAFKA_BUCKET_TOPIC=false`, `KAFKA_GLOBAL_TOPIC`
+- `KAFKA_NOTIFICATION_TIMEOUT=5s`, `KAFKA_POP_TIMEOUT=30s`, `KAFKA_POP_MAX_CONSUMERS=1000`
+- `KAFKA_BROKERS` requires at least one enabled destination. `KAFKA_TOPIC` is obsolete as of `v1.0.63`.
+
+Logging variables:
+
+- `SPLUNK_HEC_ENDPOINT`, `SPLUNK_HEC_TOKEN`, `SPLUNK_HEC_INDEX`, `SPLUNK_HEC_FLUSH_INTERVAL=30s`
+- `S3_AUDIT_HASH_KEY`; when set it must be at least 32 characters
+
+HTTP and TLS variables:
+
+- `HTTP_READ_HEADER_TIMEOUT=10s`, `HTTP_READ_TIMEOUT=0s`, `HTTP_WRITE_TIMEOUT=0s`, `HTTP_IDLE_TIMEOUT=120s`
+- `HTTP_SHUTDOWN_TIMEOUT=20s`, `HTTP_MAX_HEADER_BYTES=1048576`
+- `ACME_DOMAINS`, `ACME_SERVER`, `ACME_DATA_DIR=./certs`, `ACME_CA_DIR`
+
+See the configuration table in `README.md` and validation in `internal/config/config.go` before adding or changing variables.
+
+## HTTP surfaces
+
+- S3 API: path-style routes rooted at `/`; SigV4 plus LDAP authentication
+- Admin console: `/login`, `/admin`, and related browser routes; LDAP login and in-memory cookie-backed sessions
+- Health: unauthenticated `GET /healthz` and `GET /readyz`
+- Kafka object pop: `POST /api/pop/{bucket}/{group}` or `POST /api/pop/_all/{group}`; LDAP-backed HTTP Basic authentication, not SigV4
+
+## Events and observability
+
+- Successful S3 `PutObject` and `CompleteMultipartUpload` operations can publish versioned JSON events to bucket-named topics, one global topic, or both.
+- Kafka notification delivery is best effort and not transactional. Failures do not change an already-successful S3 response; consumers must tolerate duplicates and can deduplicate with `event_id`.
+- Pop consumption commits an offset only after the corresponding object body is fully written and flushed. Commit uncertainty still permits duplicate delivery.
+- Standard output receives structured JSON logs. Optional Splunk HEC forwarding batches copies and may retry them.
+- S3 audit events use HMAC pseudonyms for principal, bucket, and object key. Without `S3_AUDIT_HASH_KEY`, pseudonyms change at process startup.
+
+## Security boundaries and operational constraints
+
+- Use TLS for every production client connection. Legacy `AD...` access key IDs expose recoverable LDAP credentials, and `/api/pop/*` uses HTTP Basic credentials.
+- Store `S3_SECRET_KEY`, LDAP credentials, `S3GATEWAY_PRIVATE_X25519_KEY`, `COOKIE_SECRET`, `S3_AUDIT_HASH_KEY`, and `SPLUNK_HEC_TOKEN` outside source control and container images.
+- The gateway authenticates clients with LDAP but accesses the backend through one configured upstream S3 identity. Its LDAP authorization checks are therefore the application boundary protecting upstream access.
+- Admin sessions are stored in process memory, expire about 30 minutes after login, disappear on restart, and are not shared between replicas. An empty `COOKIE_SECRET` also generates ephemeral cookie keys.
+- `REQUIRED_UPLOAD_METADATA_KEYS` applies to `PutObject`, `CreateMultipartUpload`, admin uploads, and `CopyObject` with metadata directive `REPLACE`; a default `COPY` inherits source metadata without revalidation.
+- Non-streaming request signatures are verified, but the gateway does not independently recalculate the supplied `x-amz-content-sha256` payload digest.
+- Audit logs intentionally exclude raw identity and resource names, but stable pseudonyms remain correlatable data and their HMAC key must be protected.
+- The readiness endpoint contacts both LDAP and the upstream S3 service; liveness only reports that the process is serving.
+
+## Repository map
+
+- `cmd/s3gateway/`: executable entry point
+- `internal/app/`: dependency composition and process lifecycle
+- `internal/config/`: environment loading, defaults, and validation
+- `internal/server/`: authentication middleware, S3 routing, handlers, audit events, and Kafka pop HTTP API
+- `internal/adminpage/`: browser administration and embedded templates
+- `internal/s3credentials/`, `internal/sigv4/`: client credential formats and signature validation
+- `internal/ldap/`, `internal/groupcache/`, `internal/authz/`: authentication, group caching, and permission rules
+- `internal/upstream/`: AWS SDK S3 client construction
+- `internal/uploadnotify/`, `internal/kafkapop/`: Kafka publishing and pop consumption
+- `internal/splunkhec/`: optional log forwarding
+- `example_s3_client/`: Python and Java clients
+- `testldap/`: local GLAUTH fixture
+- `.github/workflows/`: lint/test/release/container, benchmark, and CodeQL automation
+
+## References
+
+- [README and full operation/configuration reference](https://github.com/define42/s3gateway/blob/main/README.md)
+- [Changelog](https://github.com/define42/s3gateway/blob/main/CHANGELOG.md)
+- [Repository](https://github.com/define42/s3gateway)
+- [Releases](https://github.com/define42/s3gateway/releases)
+- [Issues](https://github.com/define42/s3gateway/issues)
+- [Container packages](https://github.com/define42/s3gateway/pkgs/container/s3gateway)
+- [CI workflows](https://github.com/define42/s3gateway/actions)
+- [Source review notes](https://github.com/define42/s3gateway/blob/main/REVIEW.md)

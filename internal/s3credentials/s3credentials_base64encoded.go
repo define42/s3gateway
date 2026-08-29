@@ -37,6 +37,9 @@ func decodeBase64(accessKey string) (username, password, secretKey string, err e
 	return username, password, EncodeSecretKey(s), nil
 }
 
+// GenerateKeysBase64Encoded creates a legacy AD-prefixed access key containing
+// a reversible Base64 encoding of the LDAP credentials. It rejects usernames
+// containing a colon because the encoded payload uses a colon separator.
 func GenerateKeysBase64Encoded(ldapUsername, ldapPassword string) (accessKey string, secretKey string, err error) {
 	if strings.Contains(ldapUsername, ":") {
 		return "", "", errors.New("ldap username cannot contain ':' character")

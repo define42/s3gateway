@@ -58,6 +58,9 @@ func extractUpstreamErrorInfo(err error) upstreamErrorInfo {
 	return info
 }
 
+// WriteUpstreamError translates an AWS SDK error into an S3 XML error response.
+// It preserves the upstream status, API code and message, x-amz-* headers, and
+// Retry-After when available; otherwise it writes a BadGateway response.
 func WriteUpstreamError(w http.ResponseWriter, err error) {
 	info := extractUpstreamErrorInfo(err)
 	for k, vals := range info.headers {
@@ -68,6 +71,8 @@ func WriteUpstreamError(w http.ResponseWriter, err error) {
 	s3xml.WriteError(w, info.status, info.code, info.message)
 }
 
+// WriteUpstreamHeadError writes only the translated upstream status and
+// forwarding-safe headers, as required for HEAD responses.
 func WriteUpstreamHeadError(w http.ResponseWriter, err error) {
 	info := extractUpstreamErrorInfo(err)
 	for k, vals := range info.headers {

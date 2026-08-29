@@ -12,6 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
+// ParseEncodingType parses the optional S3 encoding-type parameter. URL is the
+// only accepted non-empty value and is matched case-insensitively.
 func ParseEncodingType(v string) (types.EncodingType, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
@@ -23,6 +25,8 @@ func ParseEncodingType(v string) (types.EncodingType, error) {
 	return "", fmt.Errorf("unsupported encoding-type %q", raw)
 }
 
+// ParseRequestPayerHeader parses x-amz-request-payer. Requester is the only
+// accepted non-empty value and is matched case-insensitively.
 func ParseRequestPayerHeader(h http.Header) (types.RequestPayer, error) {
 	raw := strings.TrimSpace(h.Get("x-amz-request-payer"))
 	if raw == "" {
@@ -34,6 +38,9 @@ func ParseRequestPayerHeader(h http.Header) (types.RequestPayer, error) {
 	return "", fmt.Errorf("unsupported request payer %q", raw)
 }
 
+// ParseOptionalObjectAttributes parses a comma-separated optional-attributes
+// header, removes duplicates, and accepts only RestoreStatus. Empty tokens are
+// ignored, but a non-empty header containing no attributes is invalid.
 func ParseOptionalObjectAttributes(v string) ([]types.OptionalObjectAttributes, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
@@ -65,6 +72,8 @@ func ParseOptionalObjectAttributes(v string) ([]types.OptionalObjectAttributes, 
 	return out, nil
 }
 
+// ParseMetadataDirective parses an optional, case-insensitive S3 metadata
+// directive supported by the AWS SDK.
 func ParseMetadataDirective(v string) (types.MetadataDirective, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
@@ -78,6 +87,8 @@ func ParseMetadataDirective(v string) (types.MetadataDirective, error) {
 	return "", fmt.Errorf("unsupported metadata directive %q", raw)
 }
 
+// ParseTaggingDirective parses an optional, case-insensitive S3 tagging
+// directive supported by the AWS SDK.
 func ParseTaggingDirective(v string) (types.TaggingDirective, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
@@ -91,6 +102,8 @@ func ParseTaggingDirective(v string) (types.TaggingDirective, error) {
 	return "", fmt.Errorf("unsupported tagging directive %q", raw)
 }
 
+// ParseStorageClass parses an optional, case-insensitive S3 storage class
+// supported by the AWS SDK.
 func ParseStorageClass(v string) (types.StorageClass, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
@@ -104,6 +117,8 @@ func ParseStorageClass(v string) (types.StorageClass, error) {
 	return "", fmt.Errorf("unsupported storage class %q", raw)
 }
 
+// ParseObjectCannedACL parses an optional, case-insensitive x-amz-acl value
+// supported by the AWS SDK.
 func ParseObjectCannedACL(v string) (types.ObjectCannedACL, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
@@ -117,6 +132,8 @@ func ParseObjectCannedACL(v string) (types.ObjectCannedACL, error) {
 	return "", fmt.Errorf("unsupported x-amz-acl %q", raw)
 }
 
+// ParseOptionalHTTPTime parses an HTTP date and normalizes it to UTC. Blank
+// input returns nil without an error.
 func ParseOptionalHTTPTime(v string) (*time.Time, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
@@ -130,6 +147,8 @@ func ParseOptionalHTTPTime(v string) (*time.Time, error) {
 	return &utc, nil
 }
 
+// ParseOptionalBool parses an optional case-insensitive boolean. The second
+// result reports whether a value was present.
 func ParseOptionalBool(v string) (bool, bool, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
@@ -145,6 +164,9 @@ func ParseOptionalBool(v string) (bool, bool, error) {
 	}
 }
 
+// ParseSSECustomerHeaders extracts the three SSE-C request headers. The present
+// result is true when any header is set; in that case all three are required.
+// The function does not validate the algorithm, key encoding, or MD5 value.
 func ParseSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string, present bool, err error) {
 	a := strings.TrimSpace(h.Get("x-amz-server-side-encryption-customer-algorithm"))
 	k := strings.TrimSpace(h.Get("x-amz-server-side-encryption-customer-key"))
@@ -159,6 +181,9 @@ func ParseSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string, present 
 	return aws.String(a), aws.String(k), aws.String(m), true, nil
 }
 
+// ParseCopySourceSSECustomerHeaders extracts the three copy-source SSE-C
+// headers. The present result is true when any header is set; in that case all
+// three are required. Header values are not cryptographically validated.
 func ParseCopySourceSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string, present bool, err error) {
 	a := strings.TrimSpace(h.Get("x-amz-copy-source-server-side-encryption-customer-algorithm"))
 	k := strings.TrimSpace(h.Get("x-amz-copy-source-server-side-encryption-customer-key"))
@@ -173,6 +198,8 @@ func ParseCopySourceSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string
 	return aws.String(a), aws.String(k), aws.String(m), true, nil
 }
 
+// ParseCopySourceConditionalHeaders extracts copy-source ETag and date
+// preconditions. It returns an error when either non-empty date is invalid.
 func ParseCopySourceConditionalHeaders(h http.Header) (ifMatch, ifNoneMatch *string, ifModifiedSince, ifUnmodifiedSince *time.Time, err error) {
 	if raw := strings.TrimSpace(h.Get("x-amz-copy-source-if-match")); raw != "" {
 		ifMatch = aws.String(raw)
@@ -189,6 +216,9 @@ func ParseCopySourceConditionalHeaders(h http.Header) (ifMatch, ifNoneMatch *str
 	return ifMatch, ifNoneMatch, ifModifiedSince, ifUnmodifiedSince, nil
 }
 
+// SourceBucketFromCopySource returns the path-unescaped bucket segment from an
+// x-amz-copy-source value. It accepts an optional leading slash and discards
+// query parameters such as versionId.
 func SourceBucketFromCopySource(copySource string) (string, error) {
 	raw := strings.TrimSpace(copySource)
 	if raw == "" {
@@ -217,6 +247,8 @@ func SourceBucketFromCopySource(copySource string) (string, error) {
 	return bucket, nil
 }
 
+// SSEWriteHeaders contains parsed server-side-encryption headers for an S3
+// write request. Nil pointer fields were absent from the request.
 type SSEWriteHeaders struct {
 	ServerSideEncryption    types.ServerSideEncryption
 	SSEKMSKeyID             *string
@@ -226,6 +258,9 @@ type SSEWriteHeaders struct {
 	SSECustomerKeyMD5       *string
 }
 
+// ParseSSEWriteHeaders validates S3 write-encryption header combinations. KMS
+// fields require aws:kms or aws:kms:dsse, and SSE-C cannot be combined with
+// x-amz-server-side-encryption.
 func ParseSSEWriteHeaders(h http.Header) (SSEWriteHeaders, error) {
 	out := SSEWriteHeaders{}
 	sse := strings.TrimSpace(h.Get("x-amz-server-side-encryption"))
@@ -276,6 +311,8 @@ func ParseSSEWriteHeaders(h http.Header) (SSEWriteHeaders, error) {
 	return out, nil
 }
 
+// ChecksumWriteHeaders contains checksum selection and value headers from an
+// S3 write request. At most one checksum value field may be non-nil.
 type ChecksumWriteHeaders struct {
 	ChecksumAlgorithm types.ChecksumAlgorithm
 	ChecksumCRC32     *string
@@ -285,6 +322,8 @@ type ChecksumWriteHeaders struct {
 	ChecksumSHA256    *string
 }
 
+// ParseChecksumAlgorithmHeader parses an optional checksum algorithm. CRC32,
+// CRC32C, CRC64NVME, SHA1, and SHA256 are accepted case-insensitively.
 func ParseChecksumAlgorithmHeader(v string) (types.ChecksumAlgorithm, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {
@@ -306,6 +345,8 @@ func ParseChecksumAlgorithmHeader(v string) (types.ChecksumAlgorithm, error) {
 	}
 }
 
+// ParseChecksumWriteHeaders extracts the selected algorithm and checksum value
+// headers. It rejects requests containing more than one checksum value header.
 func ParseChecksumWriteHeaders(h http.Header) (ChecksumWriteHeaders, error) {
 	out := ChecksumWriteHeaders{}
 	var err error
@@ -335,6 +376,8 @@ func ParseChecksumWriteHeaders(h http.Header) (ChecksumWriteHeaders, error) {
 	return out, nil
 }
 
+// ParseChecksumMode parses the optional x-amz-checksum-mode value. ENABLED is
+// the only accepted non-empty value and is matched case-insensitively.
 func ParseChecksumMode(v string) (types.ChecksumMode, error) {
 	raw := strings.TrimSpace(v)
 	if raw == "" {

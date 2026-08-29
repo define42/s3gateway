@@ -26,15 +26,18 @@ var xmlEscaper = strings.NewReplacer(
 	`'`, "&apos;",
 )
 
-// ==================== XML helpers ====================
+// Escape replaces the five XML special characters with entity references.
 func Escape(s string) string {
 	return xmlEscaper.Replace(s)
 }
 
+// FormatTime renders t in UTC with the millisecond precision used by S3 XML
+// responses.
 func FormatTime(t time.Time) string {
 	return t.UTC().Format(s3TimeMillisFormat)
 }
 
+// BoolString returns the lowercase XML representation of a boolean.
 func BoolString(v bool) string {
 	if v {
 		return "true"
@@ -42,6 +45,8 @@ func BoolString(v bool) string {
 	return "false"
 }
 
+// WriteError writes an S3 Error document with the supplied HTTP status. XML
+// encoding and response-write errors cannot be returned to the caller.
 func WriteError(w http.ResponseWriter, status int, code, msg string) {
 	xw := BeginResponse(w, status)
 	xw.Start("Error")
@@ -56,12 +61,17 @@ func beginXMLResponse(w http.ResponseWriter, status int) {
 	w.WriteHeader(status)
 }
 
+// Writer incrementally emits S3 XML and retains the first encoding or write
+// error. After an error, token-writing methods become no-ops until Flush
+// returns that error.
 type Writer struct {
 	enc *xml.Encoder
 	out io.Writer
 	err error
 }
 
+// BeginResponse commits an application/xml response with status, writes the
+// XML declaration, and returns a streaming writer for the document body.
 func BeginResponse(w http.ResponseWriter, status int) *Writer {
 	beginXMLResponse(w, status)
 	xw := &Writer{enc: xml.NewEncoder(w), out: w}
@@ -70,6 +80,8 @@ func BeginResponse(w http.ResponseWriter, status int) *Writer {
 	return xw
 }
 
+// FlushResponse flushes a streaming response and discards any error. It is
+// intended for deferred cleanup where the HTTP status has already been sent.
 func FlushResponse(xw *Writer) {
 	_ = xw.Flush()
 }
@@ -80,6 +92,7 @@ func (xw *Writer) setErr(err error) {
 	}
 }
 
+// Start writes an opening element with optional attributes.
 func (xw *Writer) Start(name string, attrs ...xml.Attr) {
 	if xw.err != nil {
 		return
@@ -87,6 +100,7 @@ func (xw *Writer) Start(name string, attrs ...xml.Attr) {
 	xw.setErr(xw.enc.EncodeToken(xml.StartElement{Name: xml.Name{Local: name}, Attr: attrs}))
 }
 
+// End writes a closing element. name must match the most recent open element.
 func (xw *Writer) End(name string) {
 	if xw.err != nil {
 		return
@@ -94,6 +108,7 @@ func (xw *Writer) End(name string) {
 	xw.setErr(xw.enc.EncodeToken(xml.EndElement{Name: xml.Name{Local: name}}))
 }
 
+// Elem writes one escaped text element.
 func (xw *Writer) Elem(name, value string) {
 	if xw.err != nil {
 		return
@@ -101,6 +116,8 @@ func (xw *Writer) Elem(name, value string) {
 	xw.setErr(xw.enc.EncodeElement(value, xml.StartElement{Name: xml.Name{Local: name}}))
 }
 
+// RawString writes pre-encoded XML without escaping it. Callers must ensure
+// value is trusted, well-formed XML that preserves the encoder's element stack.
 func (xw *Writer) RawString(value string) {
 	if xw.err != nil {
 		return
@@ -113,14 +130,17 @@ func (xw *Writer) RawString(value string) {
 	xw.setErr(err)
 }
 
+// ElemInt writes a base-10 integer element.
 func (xw *Writer) ElemInt(name string, value int64) {
 	xw.Elem(name, strconv.FormatInt(value, 10))
 }
 
+// ElemBool writes a lowercase boolean element.
 func (xw *Writer) ElemBool(name string, value bool) {
 	xw.Elem(name, BoolString(value))
 }
 
+// Flush emits buffered XML and returns the first error observed by the writer.
 func (xw *Writer) Flush() error {
 	if xw.err != nil {
 		return xw.err
@@ -131,6 +151,7 @@ func (xw *Writer) Flush() error {
 	return xw.err
 }
 
+// EncodeRootStart opens a root element in the S3 XML namespace.
 func EncodeRootStart(xw *Writer, name string) {
 	xw.Start(name, xml.Attr{
 		Name:  xml.Name{Local: "xmlns"},
@@ -138,6 +159,7 @@ func EncodeRootStart(xw *Writer, name string) {
 	})
 }
 
+// EncodeCommonPrefixes writes each non-nil common prefix in SDK order.
 func EncodeCommonPrefixes(xw *Writer, prefixes []types.CommonPrefix) {
 	for _, cp := range prefixes {
 		if cp.Prefix == nil {
@@ -149,6 +171,8 @@ func EncodeCommonPrefixes(xw *Writer, prefixes []types.CommonPrefix) {
 	}
 }
 
+// EncodeOwnerIDThenDisplayName writes an Owner element with ID before
+// DisplayName. A nil owner produces no output.
 func EncodeOwnerIDThenDisplayName(xw *Writer, owner *types.Owner) {
 	if owner == nil {
 		return
@@ -163,6 +187,8 @@ func EncodeOwnerIDThenDisplayName(xw *Writer, owner *types.Owner) {
 	xw.End("Owner")
 }
 
+// EncodeOwnerDisplayNameThenID writes an Owner element with DisplayName before
+// ID. A nil owner produces no output.
 func EncodeOwnerDisplayNameThenID(xw *Writer, owner *types.Owner) {
 	if owner == nil {
 		return
@@ -177,6 +203,8 @@ func EncodeOwnerDisplayNameThenID(xw *Writer, owner *types.Owner) {
 	xw.End("Owner")
 }
 
+// EncodeInitiatorDisplayNameThenID writes an Initiator element with DisplayName
+// before ID. A nil initiator produces no output.
 func EncodeInitiatorDisplayNameThenID(xw *Writer, initiator *types.Initiator) {
 	if initiator == nil {
 		return
@@ -191,6 +219,8 @@ func EncodeInitiatorDisplayNameThenID(xw *Writer, initiator *types.Initiator) {
 	xw.End("Initiator")
 }
 
+// EncodeRestoreStatus writes the populated fields of an S3 RestoreStatus
+// element. A nil status produces no output.
 func EncodeRestoreStatus(xw *Writer, restore *types.RestoreStatus) {
 	if restore == nil {
 		return

@@ -18,6 +18,9 @@ type versioningConfigXML struct {
 	MFADelete *string  `xml:"MfaDelete,omitempty"`
 }
 
+// DecodeVersioningConfig decodes a bucket versioning request and normalizes
+// recognized status values case-insensitively. Unknown Status or MFADelete
+// values return an error.
 func DecodeVersioningConfig(r io.Reader) (*types.VersioningConfiguration, error) {
 	var in versioningConfigXML
 	if err := xml.NewDecoder(r).Decode(&in); err != nil {
@@ -60,6 +63,8 @@ func DecodeVersioningConfig(r io.Reader) (*types.VersioningConfiguration, error)
 	return &out, nil
 }
 
+// EncodeVersioningConfig returns a complete S3 versioning XML document. Empty
+// status values are omitted; non-empty values are encoded without validation.
 func EncodeVersioningConfig(status types.BucketVersioningStatus, mfaDelete types.MFADeleteStatus) ([]byte, error) {
 	out := versioningConfigXML{
 		XMLNS: "http://s3.amazonaws.com/doc/2006-03-01/",
@@ -91,6 +96,8 @@ type tagXMLKV struct {
 	Value *string `xml:"Value"`
 }
 
+// DecodeTagging decodes an S3 Tagging document. Every Tag must contain both a
+// Key and Value element, though either element may contain an empty string.
 func DecodeTagging(r io.Reader) (*types.Tagging, error) {
 	var in taggingXML
 	if err := xml.NewDecoder(r).Decode(&in); err != nil {
@@ -116,6 +123,8 @@ func DecodeTagging(r io.Reader) (*types.Tagging, error) {
 	return out, nil
 }
 
+// WriteTaggingResponse writes an S3 Tagging document, omitting nil tag fields.
+// Response-write errors cannot be returned to the caller.
 func WriteTaggingResponse(w http.ResponseWriter, status int, tagSet []types.Tag) {
 	xw := BeginResponse(w, status)
 	defer FlushResponse(xw)

@@ -1,3 +1,5 @@
+// Package certreader loads PEM and DER certificate bundles for TLS trust
+// configuration.
 package certreader
 
 import (
@@ -10,6 +12,10 @@ import (
 	"path/filepath"
 )
 
+// ReadCertificates extends the system certificate pool with every non-directory
+// entry in caFolder and, when present, the Debian-style default CA bundle at
+// /etc/ssl/certs/ca-certificates.crt. A directory entry or malformed certificate
+// causes the whole operation to fail.
 func ReadCertificates(caFolder string) (*x509.CertPool, error) {
 	certpool, err := x509.SystemCertPool()
 	if err != nil {
@@ -61,6 +67,9 @@ func ReadCertificates(caFolder string) (*x509.CertPool, error) {
 	return certpool, nil
 }
 
+// LoadCertBundleFromFile reads a PEM or DER certificate bundle. The first PEM
+// block determines whether the file is decoded as PEM; otherwise it is parsed
+// as DER.
 func LoadCertBundleFromFile(filename string) ([]*x509.Certificate, error) {
 	b, err := os.ReadFile(filename) // #nosec G304 -- filename is from os.ReadDir output or a trusted constant
 	if err != nil {
@@ -75,6 +84,7 @@ func LoadCertBundleFromFile(filename string) ([]*x509.Certificate, error) {
 	return LoadCertBundleFromDER(b)
 }
 
+// LoadCertBundleFromDER parses one or more concatenated DER certificates.
 func LoadCertBundleFromDER(derBytes []byte) ([]*x509.Certificate, error) {
 	certs, err := x509.ParseCertificates(derBytes)
 	if err != nil {
@@ -83,6 +93,8 @@ func LoadCertBundleFromDER(derBytes []byte) ([]*x509.Certificate, error) {
 	return certs, nil
 }
 
+// LoadCertBundleFromPEM parses one or more CERTIFICATE blocks. It rejects
+// non-certificate PEM blocks and input containing no certificates.
 func LoadCertBundleFromPEM(pemBytes []byte) ([]*x509.Certificate, error) {
 	certificates := []*x509.Certificate{}
 	var block *pem.Block

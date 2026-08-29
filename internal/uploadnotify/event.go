@@ -3,12 +3,17 @@ package uploadnotify
 
 import "time"
 
+// SchemaVersion is the current JSON event schema version.
 const SchemaVersion = 1
 
+// EventName identifies the S3 object-creation operation that produced an event.
 type EventName string
 
 const (
-	EventObjectCreatedPut                     EventName = "ObjectCreated:Put"
+	// EventObjectCreatedPut identifies a successful single-request object upload.
+	EventObjectCreatedPut EventName = "ObjectCreated:Put"
+	// EventObjectCreatedCompleteMultipartUpload identifies a successfully
+	// completed multipart upload.
 	EventObjectCreatedCompleteMultipartUpload EventName = "ObjectCreated:CompleteMultipartUpload"
 )
 

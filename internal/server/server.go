@@ -30,11 +30,15 @@ const defaultReadyCheckTimeout = 2 * time.Second
 
 const popBasicAuthChallenge = `Basic realm="s3gateway-pop", charset="UTF-8"`
 
+// EffectiveShutdownTimeout returns the configured shutdown timeout after
+// applying the default when it is zero.
 func EffectiveShutdownTimeout(cfg config.Config) time.Duration {
 	cfg.ApplyDefaults()
 	return cfg.ShutdownTimeout
 }
 
+// NewHTTPServer constructs an HTTP server using the gateway's listener and
+// timeout settings. Zero-valued settings receive configuration defaults.
 func NewHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
 	cfg.ApplyDefaults()
 
@@ -54,6 +58,8 @@ type ctxKey string
 
 const ctxUploaderKey ctxKey = "uploader-upn"
 
+// Server authenticates gateway requests, enforces LDAP-derived authorization,
+// and dispatches supported path-style S3 operations to an upstream client.
 type Server struct {
 	cfg            config.Config
 	up             *s3.Client
@@ -70,23 +76,31 @@ type Server struct {
 // UploadNotifier receives events only after the upstream S3 operation has
 // successfully created an object.
 type UploadNotifier interface {
+	// Notify publishes one confirmed object-creation event.
 	Notify(context.Context, uploadnotify.Event) error
 }
 
+// Option customizes a Server during construction.
 type Option func(*Server)
 
+// WithUploadNotifier configures publication of successful object-creation
+// events. A nil notifier disables publication.
 func WithUploadNotifier(notifier UploadNotifier) Option {
 	return func(s *Server) {
 		s.uploadNotifier = notifier
 	}
 }
 
+// WithPopConsumer configures the Kafka-backed object pop API. A nil consumer
+// leaves the API unavailable.
 func WithPopConsumer(consumer PopConsumer) Option {
 	return func(s *Server) {
 		s.popConsumer = consumer
 	}
 }
 
+// New constructs the gateway handler and its in-memory LDAP group cache. It
+// applies zero-value configuration defaults but does not validate cfg or up.
 func New(cfg config.Config, up *s3.Client, opts ...Option) *Server {
 	cfg.ApplyDefaults()
 	auditHashKeys, auditHashReady := newAuditHashKeys(cfg.S3AuditHashKey)
@@ -110,6 +124,9 @@ func New(cfg config.Config, up *s3.Client, opts ...Option) *Server {
 	return s
 }
 
+// GroupsForCredentials returns LDAP groups for a username and password, using
+// the credential-bound cache and coalescing concurrent identical lookups. The
+// returned map is detached from cached state.
 func (s *Server) GroupsForCredentials(upn, pass string) (map[string]struct{}, error) {
 	if upn == "" || pass == "" {
 		return nil, errors.New("missing credentials")
@@ -146,6 +163,10 @@ func (s *Server) GroupsForCredentials(upn, pass string) (map[string]struct{}, er
 	return groupcache.CloneGroups(shared), nil
 }
 
+// WithAuth routes health checks and browser-admin requests before authenticating
+// API traffic. Pop requests use HTTP Basic authentication; S3 requests require
+// a valid, timely SigV4 signature and LDAP credentials encoded in the access
+// key. Successful requests receive authorization and identity context values.
 func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
@@ -229,6 +250,8 @@ func writePopBasicAuthChallenge(w http.ResponseWriter) {
 	http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 }
 
+// UploaderFromRequest returns the domainless LDAP username stored by WithAuth,
+// or an empty string when the request has no gateway identity.
 func UploaderFromRequest(r *http.Request) string {
 	v := r.Context().Value(ctxUploaderKey)
 	if v == nil {
@@ -298,6 +321,10 @@ func firstUnsupportedSubresource(q url.Values) string {
 	return found[0]
 }
 
+// ServeHTTP dispatches health checks, the Kafka pop API, and the supported
+// path-style S3 bucket and object operations. Unsupported subresources are
+// rejected before dispatch so they cannot fall through to a different S3
+// operation.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Path-style only:
 	//   /                 => ListBuckets

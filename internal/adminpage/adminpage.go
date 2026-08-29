@@ -1,3 +1,5 @@
+// Package adminpage provides the browser-based administration interface and
+// its server-side session storage.
 package adminpage
 
 import (
@@ -40,6 +42,9 @@ const (
 	maxAdminFormBodySize   = 64 * 1024 // 64 KiB is more than enough for any admin form
 )
 
+// IsBrowser reports whether a request looks like interactive browser traffic.
+// SigV4 authorization always takes precedence, even when the request also
+// advertises HTML support and a Mozilla-compatible user agent.
 func IsBrowser(r *http.Request) bool {
 	auth := strings.ToLower(strings.TrimSpace(r.Header.Get("Authorization")))
 	if strings.HasPrefix(auth, "aws4-hmac-sha256 ") {
@@ -67,6 +72,8 @@ func normalizeAdminRoutePath(path string) string {
 	return p
 }
 
+// IsAdminRoute reports whether path names a route owned by the administration
+// interface. It ignores trailing slashes on non-root paths.
 func IsAdminRoute(path string) bool {
 	switch normalizeAdminRoutePath(path) {
 	case "/", "/login", "/admin", "/admin/create-bucket", "/admin/bucket", "/admin/bucket/download", "/admin/bucket/upload", "/admin/bucket/delete", "/logout":
@@ -205,6 +212,9 @@ type adminSession struct {
 	LastSeen time.Time
 }
 
+// AdminSessionStore holds authenticated admin sessions in memory. Sessions
+// expire after an idle TTL, and saving beyond the capacity evicts the
+// least-recently-seen session.
 type AdminSessionStore struct {
 	mu         sync.Mutex
 	ttl        time.Duration
@@ -212,6 +222,8 @@ type AdminSessionStore struct {
 	data       map[string]adminSession
 }
 
+// NewAdminSessionStore constructs an in-memory admin session backend.
+// Non-positive arguments use the package defaults.
 func NewAdminSessionStore(ttl time.Duration, maxEntries int) *AdminSessionStore {
 	if ttl <= 0 {
 		ttl = defaultAdminSessionTTL
@@ -354,6 +366,9 @@ func newAdminSessionID() (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
+// AdminGorillaStore implements sessions.Store with encrypted cookies that
+// contain only an opaque ID; authenticated session data remains in its
+// AdminSessionStore backend.
 type AdminGorillaStore struct {
 	backend *AdminSessionStore
 	Codecs  []securecookie.Codec
@@ -375,6 +390,12 @@ func random32() [32]byte {
 	return b
 }
 
+// NewAdminGorillaStore constructs the cookie-facing session store. An empty
+// cookieSecret generates ephemeral keys, invalidating cookies after restart;
+// a non-positive TTL uses the package default.
+//
+// With an empty cookieSecret, the function panics if secure random key
+// generation fails.
 func NewAdminGorillaStore(cookieSecret string, ttl time.Duration, backend *AdminSessionStore) *AdminGorillaStore {
 
 	if ttl <= 0 {
@@ -405,6 +426,8 @@ func NewAdminGorillaStore(cookieSecret string, ttl time.Duration, backend *Admin
 	return store
 }
 
+// MaxAge updates the default cookie lifetime and the age accepted by each
+// secure-cookie codec.
 func (s *AdminGorillaStore) MaxAge(age int) {
 	s.Options.MaxAge = age
 	for _, codec := range s.Codecs {
@@ -414,6 +437,8 @@ func (s *AdminGorillaStore) MaxAge(age int) {
 	}
 }
 
+// Get returns the named session from the request-scoped Gorilla registry,
+// loading it through New on the first access.
 func (s *AdminGorillaStore) Get(r *http.Request, name string) (*sessions.Session, error) {
 	return sessions.GetRegistry(r).Get(s, name)
 }
@@ -487,6 +512,8 @@ func adminSessionFromValues(values map[interface{}]interface{}) (string, map[str
 	return username, groups, nil
 }
 
+// New decodes a named session cookie and loads the corresponding server-side
+// session. Missing or expired backend entries are treated as new sessions.
 func (s *AdminGorillaStore) New(r *http.Request, name string) (*sessions.Session, error) {
 	session := sessions.NewSession(s, name)
 	opts := *s.Options
@@ -510,6 +537,10 @@ func (s *AdminGorillaStore) New(r *http.Request, name string) (*sessions.Session
 	return session, err
 }
 
+// Save persists the authenticated session data and writes an encrypted ID
+// cookie. A non-positive session MaxAge deletes the backend entry and cookie.
+// Save returns an error for an unconfigured backend, invalid session values,
+// backend persistence failures, or cookie-encoding failures.
 func (s *AdminGorillaStore) Save(r *http.Request, w http.ResponseWriter, session *sessions.Session) error {
 	if session.Options == nil {
 		opts := *s.Options
@@ -1834,7 +1865,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// NewHandler creates the admin page HTTP handler.
+// NewHandler constructs the admin HTTP handler with an in-memory session
+// backend. requiredUploadMetadataKeys are enforced by the upload form.
 func NewHandler(s3Client *s3.Client, cookieSecret string, maxSessions int, requiredUploadMetadataKeys []string, authenticate func(upn, pass string) (map[string]struct{}, error)) http.Handler {
 	sessions := NewAdminSessionStore(defaultAdminSessionTTL, maxSessions)
 	webSessions := NewAdminGorillaStore(cookieSecret, defaultAdminSessionTTL, sessions)
@@ -1846,7 +1878,9 @@ func NewHandler(s3Client *s3.Client, cookieSecret string, maxSessions int, requi
 	}
 }
 
-// NewHandlerWithSessions creates the admin page HTTP handler with pre-created sessions (for testing).
+// NewHandlerWithSessions constructs the admin HTTP handler with a caller-owned
+// session store. It is intended for callers that need to control session
+// lifetime or persistence.
 func NewHandlerWithSessions(s3Client *s3.Client, webSessions *AdminGorillaStore, authenticate func(upn, pass string) (map[string]struct{}, error)) http.Handler {
 	return &handler{
 		s3:           s3Client,

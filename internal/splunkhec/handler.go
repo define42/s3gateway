@@ -86,7 +86,9 @@ type hecResponse struct {
 	Code *int `json:"code"`
 }
 
-// NewHandler constructs and starts a buffered HEC handler.
+// NewHandler validates the HEC endpoint and required options, then starts the
+// periodic flush worker. A nil HTTPClient uses a client with a 10-second
+// timeout; a nil ErrorWriter sends diagnostics to standard error.
 func NewHandler(options Options) (*Handler, error) {
 	endpoint := strings.TrimSpace(options.Endpoint)
 	token := strings.TrimSpace(options.Token)
