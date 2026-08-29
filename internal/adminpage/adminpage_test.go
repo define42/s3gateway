@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
 )
 
 func adminLoginSessionCookie(t *testing.T, handler http.Handler, username, password string) *http.Cookie {

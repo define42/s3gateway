@@ -1,0 +1,26 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: standard
+  settings:
+    staticcheck:
+      checks:
+        - all
+        # Quick-fix suggestions are optional style rewrites, not diagnostics.
+        - -QF*
+  exclusions:
+    rules:
+      # Cleanup errors do not affect assertions in tests. Production cleanup
+      # calls remain checked by errcheck.
+      - path: _test\.go
+        text: Error return value of .*Close.* is not checked
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

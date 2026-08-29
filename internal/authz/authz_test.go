@@ -92,11 +92,11 @@ func TestHelloGroupReadAccess(t *testing.T) {
 		name string
 		want bool
 	}{
-		{"hello-data-2024", true},  // namespace "hello" → match
-		{"hello", true},            // no dash → whole name is namespace "hello" → match
-		{"hello-2024", true},       // namespace "hello" → match
-		{"hello2-data", false},     // namespace "hello2" → no match
-		{"other-bucket", false},    // namespace "other" → no match
+		{"hello-data-2024", true}, // namespace "hello" → match
+		{"hello", true},           // no dash → whole name is namespace "hello" → match
+		{"hello-2024", true},      // namespace "hello" → match
+		{"hello2-data", false},    // namespace "hello2" → no match
+		{"other-bucket", false},   // namespace "other" → no match
 	}
 
 	for _, tt := range buckets {

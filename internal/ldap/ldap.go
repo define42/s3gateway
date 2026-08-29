@@ -39,7 +39,7 @@ func FetchGroupsUPN(cfg config.Config, upn, password string) (map[string]struct{
 	if err != nil {
 		return nil, fmt.Errorf("ldap dial: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	upnWithDomain := upn + "@" + ldap.EscapeFilter(cfg.LDAPDomain)
 

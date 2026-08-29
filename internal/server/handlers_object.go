@@ -790,7 +790,7 @@ func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 		s3http.WriteUpstreamError(w, err)
 		return
 	}
-	defer out.Body.Close()
+	defer func() { _ = out.Body.Close() }()
 
 	// Propagate a few headers
 	if out.ETag != nil {
@@ -1313,7 +1313,7 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Invalid request body")
 		return
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 	if cl > maxSinglePutObjectSize {
 		s3xml.WriteError(w, http.StatusBadRequest, "EntityTooLarge", "Use multipart upload for objects larger than 5 GiB")
 		return

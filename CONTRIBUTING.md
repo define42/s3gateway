@@ -81,8 +81,9 @@ Run the security scanner for security-sensitive changes:
 make gosec
 ```
 
-The `lint` and `gosec` targets download and run the latest releases of their
-respective tools. To run a focused package or test while developing:
+The `lint` target pins its golangci-lint release so local and CI checks use the
+same rules. The `gosec` target downloads its latest release. To run a focused
+package or test while developing:
 
 ```bash
 go test ./internal/server

@@ -1,0 +1,40 @@
+# Go binaries and build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+/bin/
+/dist/
+/s3gateway
+/vendor/
+
+# Test and coverage output
+*.out
+/coverage.html
+/coverage.txt
+
+# Local workspace and runtime data
+/go.work.sum
+/certs/
+/tmp/
+
+# Example-client build output
+/.venv/
+__pycache__/
+*.py[cod]
+/example_s3_client/java/target/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Editors and operating systems
+/.idea/
+/.vscode/
+*.swp
+*.swo
+*~
+.DS_Store

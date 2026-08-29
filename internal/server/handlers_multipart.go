@@ -213,7 +213,7 @@ func (s *Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Invalid request body")
 		return
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := s3http.ParseSSECustomerHeaders(r.Header)
 	if err != nil {
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")

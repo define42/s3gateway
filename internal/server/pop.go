@@ -228,7 +228,7 @@ func (s *Server) streamPoppedObject(
 		s3http.WriteUpstreamError(w, err)
 		return fmt.Errorf("get popped object: %w", err)
 	}
-	defer out.Body.Close()
+	defer func() { _ = out.Body.Close() }()
 
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")

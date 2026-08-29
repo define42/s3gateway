@@ -1396,7 +1396,7 @@ func (h *handler) handleAdminBucketDownload(w http.ResponseWriter, r *http.Reque
 		http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, "", "", "", "Could not download object."), http.StatusSeeOther)
 		return
 	}
-	defer out.Body.Close()
+	defer func() { _ = out.Body.Close() }()
 
 	contentType := strings.TrimSpace(aws.ToString(out.ContentType))
 	if contentType == "" {
