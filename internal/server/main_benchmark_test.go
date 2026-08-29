@@ -38,8 +38,7 @@ func BenchmarkFullIntegrationGatewayPutObject(b *testing.B) {
 
 	b.ReportAllocs()
 	b.SetBytes(int64(len(payload)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := env.rwClient.PutObject(env.ctx, &s3.PutObjectInput{
 			Bucket:        aws.String(bucket),
 			Key:           aws.String(key),
@@ -88,8 +87,7 @@ func BenchmarkFullIntegrationGatewayGetObject(b *testing.B) {
 
 	b.ReportAllocs()
 	b.SetBytes(int64(len(payload)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		out, err := env.rwClient.GetObject(env.ctx, &s3.GetObjectInput{
 			Bucket: aws.String(bucket),
 			Key:    aws.String(key),

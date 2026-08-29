@@ -15,7 +15,6 @@ func TestDecodeVersioningConfigMFADeleteValues(t *testing.T) {
 	}
 
 	for _, v := range allowed {
-		v := v
 		t.Run("exact_"+string(v), func(t *testing.T) {
 			cfg, err := s3xml.DecodeVersioningConfig(strings.NewReader(
 				`<VersioningConfiguration><MfaDelete>` + string(v) + `</MfaDelete></VersioningConfiguration>`,

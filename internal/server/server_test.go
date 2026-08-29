@@ -36,7 +36,7 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
 	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)
@@ -227,7 +227,7 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
 	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)
@@ -317,7 +317,7 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 }
 
 func TestLdapS3upstreamListBuckets(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
 	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)
@@ -408,7 +408,7 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
 	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)
@@ -500,7 +500,7 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
 	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)
@@ -692,7 +692,7 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
 	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)
@@ -884,7 +884,7 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
 	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)
@@ -1114,7 +1114,7 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 }
 
 func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
 	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)
@@ -1627,7 +1627,7 @@ func TestGatewayPreservesUpstreamErrorStatusAndHeaders(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 
 	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
@@ -1671,7 +1671,7 @@ func TestGatewayPreservesUpstreamErrorStatusAndHeaders(t *testing.T) {
 }
 
 func TestGatewayHandlesUpstreamLatencySpike(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(1500 * time.Millisecond)
@@ -1703,7 +1703,7 @@ func TestGatewayHandlesUpstreamLatencySpike(t *testing.T) {
 }
 
 func TestHandleGetObjectAttributesIncludesChecksum(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -1760,7 +1760,7 @@ func TestHandleGetObjectAttributesIncludesChecksum(t *testing.T) {
 }
 
 func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
 	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)
@@ -1852,7 +1852,7 @@ type integrationEnv struct {
 func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 	tb.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(tb.Context(), 3*time.Minute)
 	ldapCfgPath := testutil.WriteGatewayGlauthConfig(tb)
 	ldapURL, stopLDAP := testutil.StartGlauthWithConfig(ctx, tb, ldapCfgPath, "ldap")
 	minioURL, stopMinio := testutil.StartMinio(ctx, tb, "minioadmin", "minioadmin")
@@ -1918,7 +1918,7 @@ func TestFullIntegrationPerformance(t *testing.T) {
 		t.Fatalf("create gateway performance bucket: %v", err)
 	}
 	t.Cleanup(func() {
-		for i := 0; i < ops; i++ {
+		for i := range ops {
 			key := fmt.Sprintf("perf/gateway/%03d.bin", i)
 			_, _ = env.rwClient.DeleteObject(env.ctx, &s3.DeleteObjectInput{
 				Bucket: aws.String(gatewayBucket),
@@ -1937,7 +1937,7 @@ func TestFullIntegrationPerformance(t *testing.T) {
 		t.Fatalf("create upstream performance bucket: %v", err)
 	}
 	t.Cleanup(func() {
-		for i := 0; i < ops; i++ {
+		for i := range ops {
 			key := fmt.Sprintf("perf/upstream/%03d.bin", i)
 			_, _ = env.upstreamClient.DeleteObject(env.ctx, &s3.DeleteObjectInput{
 				Bucket: aws.String(upstreamBucket),
@@ -1950,7 +1950,7 @@ func TestFullIntegrationPerformance(t *testing.T) {
 	})
 
 	gatewayPutStart := time.Now()
-	for i := 0; i < ops; i++ {
+	for i := range ops {
 		key := fmt.Sprintf("perf/gateway/%03d.bin", i)
 		if _, err := env.rwClient.PutObject(env.ctx, &s3.PutObjectInput{
 			Bucket:        aws.String(gatewayBucket),
@@ -1965,7 +1965,7 @@ func TestFullIntegrationPerformance(t *testing.T) {
 	gatewayPutDur := time.Since(gatewayPutStart)
 
 	gatewayGetStart := time.Now()
-	for i := 0; i < ops; i++ {
+	for i := range ops {
 		key := fmt.Sprintf("perf/gateway/%03d.bin", i)
 		out, err := env.rwClient.GetObject(env.ctx, &s3.GetObjectInput{
 			Bucket: aws.String(gatewayBucket),
@@ -1989,7 +1989,7 @@ func TestFullIntegrationPerformance(t *testing.T) {
 	gatewayGetDur := time.Since(gatewayGetStart)
 
 	upstreamPutStart := time.Now()
-	for i := 0; i < ops; i++ {
+	for i := range ops {
 		key := fmt.Sprintf("perf/upstream/%03d.bin", i)
 		if _, err := env.upstreamClient.PutObject(env.ctx, &s3.PutObjectInput{
 			Bucket:        aws.String(upstreamBucket),
@@ -2004,7 +2004,7 @@ func TestFullIntegrationPerformance(t *testing.T) {
 	upstreamPutDur := time.Since(upstreamPutStart)
 
 	upstreamGetStart := time.Now()
-	for i := 0; i < ops; i++ {
+	for i := range ops {
 		key := fmt.Sprintf("perf/upstream/%03d.bin", i)
 		out, err := env.upstreamClient.GetObject(env.ctx, &s3.GetObjectInput{
 			Bucket: aws.String(upstreamBucket),

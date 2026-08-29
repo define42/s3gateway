@@ -75,7 +75,7 @@ Git commit SHA.
 
 ### From source
 
-Building from source requires Go 1.26.6 or later and reachable LDAP and upstream
+Building from source requires Go 1.27.0 or later and reachable LDAP and upstream
 S3 services:
 
 ```bash

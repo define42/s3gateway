@@ -7,7 +7,7 @@
 - Application module: `github.com/define42/s3gateway`
 - Executable: `./cmd/s3gateway`
 - Latest release tag: `v1.0.64` (2026-08-28)
-- Required Go version: 1.26.6 or later
+- Required Go version: 1.27.0 or later
 - Distribution: source, `ghcr.io/define42/s3gateway` container images, and GitHub releases
 - License: this repository currently has no license file; do not assume permission to redistribute or reuse it
 

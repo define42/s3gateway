@@ -26,8 +26,7 @@ func extractUpstreamErrorInfo(err error) upstreamErrorInfo {
 		headers: make(http.Header),
 	}
 
-	var apiErr smithy.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[smithy.APIError](err); ok {
 		if c := strings.TrimSpace(apiErr.ErrorCode()); c != "" {
 			info.code = c
 		}
@@ -39,8 +38,7 @@ func extractUpstreamErrorInfo(err error) upstreamErrorInfo {
 		}
 	}
 
-	var respErr *smithyhttp.ResponseError
-	if errors.As(err, &respErr) {
+	if respErr, ok := errors.AsType[*smithyhttp.ResponseError](err); ok {
 		if sc := respErr.HTTPStatusCode(); sc > 0 {
 			info.status = sc
 		}

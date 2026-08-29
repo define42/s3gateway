@@ -22,7 +22,7 @@ func TestSigV4AuthFromCtx(t *testing.T) {
 
 	t.Run("wrong context value type", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
-			context.WithValue(context.Background(), sigv4.CtxSigV4AuthKey, "not-auth"),
+			context.WithValue(t.Context(), sigv4.CtxSigV4AuthKey, "not-auth"),
 		)
 		if got := sigv4.AuthFromRequest(req); got != nil {
 			t.Fatalf("sigV4AuthFromCtx() = %+v, want nil for wrong context type", got)
@@ -39,7 +39,7 @@ func TestSigV4AuthFromCtx(t *testing.T) {
 			AmzDate:      "20260207T010203Z",
 		}
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
-			context.WithValue(context.Background(), sigv4.CtxSigV4AuthKey, want),
+			context.WithValue(t.Context(), sigv4.CtxSigV4AuthKey, want),
 		)
 		got := sigv4.AuthFromRequest(req)
 		if got != want {
@@ -58,7 +58,7 @@ func TestSigV4SecretFromCtx(t *testing.T) {
 
 	t.Run("wrong context value type", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
-			context.WithValue(context.Background(), sigv4.CtxSigV4SecretKey, 123),
+			context.WithValue(t.Context(), sigv4.CtxSigV4SecretKey, 123),
 		)
 		if got := sigv4.SecretFromRequest(req); got != "" {
 			t.Fatalf("sigV4SecretFromCtx() = %q, want empty string for wrong context type", got)
@@ -68,7 +68,7 @@ func TestSigV4SecretFromCtx(t *testing.T) {
 	t.Run("valid secret value", func(t *testing.T) {
 		const want = "derived-secret"
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
-			context.WithValue(context.Background(), sigv4.CtxSigV4SecretKey, want),
+			context.WithValue(t.Context(), sigv4.CtxSigV4SecretKey, want),
 		)
 		if got := sigv4.SecretFromRequest(req); got != want {
 			t.Fatalf("sigV4SecretFromCtx() = %q, want %q", got, want)
@@ -102,7 +102,7 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 			AmzDate:      "20260207T010203Z",
 		}
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(
-			context.WithValue(context.Background(), sigv4.CtxSigV4AuthKey, auth),
+			context.WithValue(t.Context(), sigv4.CtxSigV4AuthKey, auth),
 		)
 		req.Header.Set("x-amz-content-sha256", mode)
 
@@ -124,7 +124,7 @@ func TestChunkSignatureVerifierFromRequestUsesSigV4AuthFromCtx(t *testing.T) {
 			SignatureHex: strings.Repeat("b", 64),
 			AmzDate:      "20260207T010203Z",
 		}
-		ctx := context.WithValue(context.Background(), sigv4.CtxSigV4AuthKey, auth)
+		ctx := context.WithValue(t.Context(), sigv4.CtxSigV4AuthKey, auth)
 		ctx = context.WithValue(ctx, sigv4.CtxSigV4SecretKey, "secret")
 		req := httptest.NewRequest(http.MethodPut, "/bucket/key", nil).WithContext(ctx)
 		req.Header.Set("x-amz-content-sha256", mode)

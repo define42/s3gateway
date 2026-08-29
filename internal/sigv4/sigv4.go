@@ -126,7 +126,7 @@ func ParseSigV4Authorization(r *http.Request) (*Auth, error) {
 
 func splitAuthParts(s string) map[string]string {
 	out := map[string]string{}
-	for _, p := range strings.Split(s, ",") {
+	for p := range strings.SplitSeq(s, ",") {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
@@ -524,7 +524,7 @@ func trailerChecksumsForRequest(h http.Header) []trailerChecksum {
 	var out []trailerChecksum
 	seen := map[string]struct{}{}
 	for _, v := range h.Values("x-amz-trailer") {
-		for _, name := range strings.Split(v, ",") {
+		for name := range strings.SplitSeq(v, ",") {
 			name = strings.ToLower(strings.TrimSpace(name))
 			if name == "" {
 				continue
@@ -957,7 +957,7 @@ func (r *awsChunkedReader) finishTrailers() error {
 // It tolerates both CRLF and bare-LF line endings and a stream that ends at
 // EOF instead of a blank line (framings seen from the AWS SDKs and minio-go).
 func (r *awsChunkedReader) readTrailerSection() (trailers [][2]string, trailerSig string, err error) {
-	for i := 0; i < maxTrailerLines; i++ {
+	for range maxTrailerLines {
 		line, err := readLineBounded(r.br, maxTrailerLineBytes)
 		eof := false
 		if err != nil {
@@ -1025,7 +1025,7 @@ func (r *awsChunkedReader) verifyTrailingChecksums(trailers [][2]string) error {
 }
 
 func (r *awsChunkedReader) consumeTrailers() error {
-	for i := 0; i < maxTrailerLines; i++ {
+	for range maxTrailerLines {
 		line, err := readLineBounded(r.br, maxTrailerLineBytes)
 		if err != nil {
 			return err

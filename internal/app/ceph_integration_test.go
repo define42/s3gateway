@@ -175,7 +175,7 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Minute)
 	defer cancel()
 
 	cephEndpoint, container, terminate := startCephRGW(ctx, t)

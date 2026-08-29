@@ -50,7 +50,7 @@ func TestConfigureSplunkLoggingForwardsDefaultLogger(t *testing.T) {
 	}
 	slog.Info("configured logger event", "component", "app")
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	if err := handler.Close(ctx); err != nil {
 		t.Fatalf("close configured Splunk logger: %v", err)

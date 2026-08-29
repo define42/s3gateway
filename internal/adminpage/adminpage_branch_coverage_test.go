@@ -205,7 +205,7 @@ func TestNewAdminSessionIDAndRandom32EntropyFailure(t *testing.T) {
 }
 
 func TestParseSessionGroupsAndSessionValuesCoverage(t *testing.T) {
-	groupsFromInterfaces := parseSessionGroups([]interface{}{" Team2-R ", 123, "", "Team2-R"})
+	groupsFromInterfaces := parseSessionGroups([]any{" Team2-R ", 123, "", "Team2-R"})
 	if len(groupsFromInterfaces) != 1 {
 		t.Fatalf("groupsFromInterfaces size mismatch: got=%d want=%d", len(groupsFromInterfaces), 1)
 	}
@@ -225,19 +225,19 @@ func TestParseSessionGroupsAndSessionValuesCoverage(t *testing.T) {
 		t.Fatalf("unexpected groups for unsupported type: %v", got)
 	}
 
-	if _, _, err := adminSessionFromValues(map[interface{}]interface{}{}); err == nil {
+	if _, _, err := adminSessionFromValues(map[any]any{}); err == nil {
 		t.Fatalf("expected missing username error")
 	}
-	if _, _, err := adminSessionFromValues(map[interface{}]interface{}{adminSessionValueUser: 42}); err == nil {
+	if _, _, err := adminSessionFromValues(map[any]any{adminSessionValueUser: 42}); err == nil {
 		t.Fatalf("expected invalid username type error")
 	}
-	if _, _, err := adminSessionFromValues(map[interface{}]interface{}{adminSessionValueUser: "   "}); err == nil {
+	if _, _, err := adminSessionFromValues(map[any]any{adminSessionValueUser: "   "}); err == nil {
 		t.Fatalf("expected blank username error")
 	}
 
-	username, groups, err := adminSessionFromValues(map[interface{}]interface{}{
+	username, groups, err := adminSessionFromValues(map[any]any{
 		adminSessionValueUser: " alice ",
-		adminSessionValueGrps: []interface{}{" Team2-R ", "team3-w"},
+		adminSessionValueGrps: []any{" Team2-R ", "team3-w"},
 	})
 	if err != nil {
 		t.Fatalf("adminSessionFromValues success path: %v", err)
@@ -259,7 +259,7 @@ func TestAdminGorillaStoreSaveCoverage(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	session := sessions.NewSession(store, adminSessionCookieName)
-	session.Values = map[interface{}]interface{}{
+	session.Values = map[any]any{
 		adminSessionValueUser: "alice",
 		adminSessionValueGrps: []string{"team2-r"},
 	}
@@ -293,7 +293,7 @@ func TestAdminGorillaStoreSaveCoverage(t *testing.T) {
 	nilBackendStore := NewAdminGorillaStore("secret", time.Hour, nil)
 	nilBackendSession := sessions.NewSession(nilBackendStore, adminSessionCookieName)
 	nilBackendSession.Options = &sessions.Options{MaxAge: 60}
-	nilBackendSession.Values = map[interface{}]interface{}{
+	nilBackendSession.Values = map[any]any{
 		adminSessionValueUser: "alice",
 		adminSessionValueGrps: []string{"team2-r"},
 	}
@@ -304,7 +304,7 @@ func TestAdminGorillaStoreSaveCoverage(t *testing.T) {
 	badValuesStore := NewAdminGorillaStore("secret", time.Hour, NewAdminSessionStore(time.Hour, 2))
 	badSession := sessions.NewSession(badValuesStore, adminSessionCookieName)
 	badSession.Options = &sessions.Options{MaxAge: 60}
-	badSession.Values = map[interface{}]interface{}{
+	badSession.Values = map[any]any{
 		adminSessionValueUser: "   ",
 	}
 	if err := badValuesStore.Save(req, httptest.NewRecorder(), badSession); err == nil {

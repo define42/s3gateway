@@ -1,7 +1,6 @@
 package adminpage
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +14,7 @@ import (
 
 func newTestS3Client(t *testing.T, upstreamURL string) *s3.Client {
 	t.Helper()
-	cfg, err := awsconfig.LoadDefaultConfig(context.Background(),
+	cfg, err := awsconfig.LoadDefaultConfig(t.Context(),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("upstream-ak", "upstream-sk", "")),
 		awsconfig.WithRegion("us-east-1"),
 	)

@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -90,11 +90,7 @@ func (p *KafkaPublisher) Notify(ctx context.Context, event Event) error {
 		event.OccurredAt = time.Now().UTC()
 	}
 	if strings.TrimSpace(event.EventID) == "" {
-		eventID, err := uuid.NewV7()
-		if err != nil {
-			return fmt.Errorf("uploadnotify: generate event id: %w", err)
-		}
-		event.EventID = eventID.String()
+		event.EventID = uuid.NewV7().String()
 	}
 
 	payload, err := json.Marshal(event)

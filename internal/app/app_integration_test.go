@@ -26,7 +26,7 @@ import (
 )
 
 func TestBootS3GatewayFullIntegration(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
 	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)

@@ -21,7 +21,7 @@ jobs:
       # Checkout
       # -------------------------------
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0   # REQUIRED for tag calculation
 
@@ -29,20 +29,24 @@ jobs:
       # Go setup
       # -------------------------------
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.26.6'
+          go-version-file: go.mod
           cache-dependency-path: go.sum
 
       # -------------------------------
       # Build & test
       # -------------------------------
+      - name: Verify go.mod is tidy
+        run: make tidy-check
+
       - name: Lint
         run: make lint
 
       - name: Run tests with coverage
         run: |
-          go test ./... -coverprofile=coverage.out  -covermode=atomic -coverpkg=./...
+          go test -race -shuffle=on -count=1 ./... \
+            -coverprofile=coverage.out -covermode=atomic -coverpkg=./...
 
       - name: Show coverage in job summary
         run: |
@@ -53,7 +57,7 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.out

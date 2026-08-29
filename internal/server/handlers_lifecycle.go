@@ -633,7 +633,7 @@ func lifecycleRuleLegacyPrefix(r types.LifecycleRule) *string {
 	if !field.IsValid() || field.Kind() != reflect.Pointer || field.IsNil() {
 		return nil
 	}
-	legacy, ok := field.Interface().(*string)
+	legacy, ok := reflect.TypeAssert[*string](field)
 	if !ok || legacy == nil {
 		return nil
 	}

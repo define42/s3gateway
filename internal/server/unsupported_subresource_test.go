@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
@@ -67,7 +66,7 @@ func TestAWSSDKClientDefaultTrailerUpload(t *testing.T) {
 		t.Fatalf("generate keys: %v", err)
 	}
 
-	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
+	awsCfg, err := awsconfig.LoadDefaultConfig(t.Context(),
 		awsconfig.WithRegion("us-east-1"),
 		awsconfig.WithBaseEndpoint(gwSrv.URL),
 		awsconfig.WithCredentialsProvider(awscredentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
@@ -80,7 +79,7 @@ func TestAWSSDKClientDefaultTrailerUpload(t *testing.T) {
 
 	// bytes.Buffer is deliberately non-seekable: over TLS that makes the SDK
 	// use its aws-chunked unsigned-trailer encoding with a CRC32 trailer.
-	if _, err := client.PutObject(context.Background(), &s3.PutObjectInput{
+	if _, err := client.PutObject(t.Context(), &s3.PutObjectInput{
 		Bucket:        aws.String("team2-sdk"),
 		Key:           aws.String("trailer.bin"),
 		Body:          bytes.NewBuffer(payload),

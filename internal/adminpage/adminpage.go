@@ -15,9 +15,11 @@ import (
 	"html/template"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -266,7 +268,7 @@ func (s *AdminSessionStore) save(sessionID, username string, groups map[string]s
 		s.evictOneOldestLocked()
 	}
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		newID, err := newAdminSessionID()
 		if err != nil {
 			return "", err
@@ -455,7 +457,7 @@ func sessionGroupsSlice(groups map[string]struct{}) []string {
 	return out
 }
 
-func parseSessionGroups(v interface{}) map[string]struct{} {
+func parseSessionGroups(v any) map[string]struct{} {
 	out := make(map[string]struct{})
 	switch raw := v.(type) {
 	case []string:
@@ -465,7 +467,7 @@ func parseSessionGroups(v interface{}) map[string]struct{} {
 				out[g] = struct{}{}
 			}
 		}
-	case []interface{}:
+	case []any:
 		for _, item := range raw {
 			s, ok := item.(string)
 			if !ok {
@@ -487,14 +489,14 @@ func parseSessionGroups(v interface{}) map[string]struct{} {
 	return out
 }
 
-func adminSessionToValues(s adminSession) map[interface{}]interface{} {
-	return map[interface{}]interface{}{
+func adminSessionToValues(s adminSession) map[any]any {
+	return map[any]any{
 		adminSessionValueUser: s.Username,
 		adminSessionValueGrps: sessionGroupsSlice(s.Groups),
 	}
 }
 
-func adminSessionFromValues(values map[interface{}]interface{}) (string, map[string]struct{}, error) {
+func adminSessionFromValues(values map[any]any) (string, map[string]struct{}, error) {
 	rawUser, ok := values[adminSessionValueUser]
 	if !ok {
 		return "", nil, errors.New("missing admin session username")
@@ -713,12 +715,7 @@ func adminCreateBucketSpaces(groups map[string]struct{}) []string {
 
 func adminHasCreateSpace(spaces []string, space string) bool {
 	space = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(space, "-")))
-	for _, s := range spaces {
-		if s == space {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(spaces, space)
 }
 
 func adminBuildBucketName(space, suffix string) (string, error) {
@@ -731,8 +728,8 @@ func adminBuildBucketName(space, suffix string) (string, error) {
 		return "", errors.New("bucket name suffix is required")
 	}
 
-	if strings.HasPrefix(suffix, space+"-") {
-		suffix = strings.TrimPrefix(suffix, space+"-")
+	if after, ok := strings.CutPrefix(suffix, space+"-"); ok {
+		suffix = after
 	}
 	suffix = strings.TrimSpace(strings.Trim(suffix, "-"))
 	if suffix == "" {
@@ -992,7 +989,7 @@ func clearAdminSession(w http.ResponseWriter, r *http.Request, webSession *sessi
 	if webSession == nil {
 		return
 	}
-	webSession.Values = map[interface{}]interface{}{}
+	webSession.Values = map[any]any{}
 	webSession.Options.MaxAge = -1
 	_ = webSession.Save(r, w)
 }
@@ -1098,7 +1095,7 @@ func (h *handler) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		webSession.Options = &opts
 	}
 	if err != nil {
-		webSession.Values = map[interface{}]interface{}{}
+		webSession.Values = map[any]any{}
 		webSession.ID = ""
 	}
 
@@ -1484,7 +1481,7 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 		}
 
 		partName := strings.TrimSpace(part.FormName())
-		if rawKey := strings.TrimPrefix(partName, "meta-"); rawKey != partName {
+		if rawKey, ok := strings.CutPrefix(partName, "meta-"); ok {
 			// User-supplied object metadata field (meta-<key>). Collected before
 			// the file part so it can be validated and attached to the upload.
 			valueBytes, readErr := io.ReadAll(io.LimitReader(part, maxUploadFieldBytes+1))
@@ -1579,9 +1576,7 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 			// REQUIRED_UPLOAD_METADATA_KEYS, which the browser form collects as
 			// meta-<key> fields.
 			meta := make(map[string]string, len(metaValues)+1)
-			for k, v := range metaValues {
-				meta[k] = v
-			}
+			maps.Copy(meta, metaValues)
 			meta["uploaded-by"] = strings.TrimSpace(session.Username)
 			if missing := missingRequiredMetadata(meta, h.requiredUploadMetadataKeys); len(missing) > 0 {
 				_ = part.Close()

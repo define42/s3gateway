@@ -33,7 +33,7 @@ func TestGroupsForCredentialsSingleflightDeduplicatesConcurrentMisses(t *testing
 	errs := make(chan error, workers)
 	var wg sync.WaitGroup
 	wg.Add(workers)
-	for i := 0; i < workers; i++ {
+	for range workers {
 		go func() {
 			defer wg.Done()
 			<-start

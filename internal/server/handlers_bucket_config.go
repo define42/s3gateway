@@ -29,8 +29,8 @@ const (
 )
 
 func isUpstreamNotFound(err error) bool {
-	var respErr *smithyhttp.ResponseError
-	return errors.As(err, &respErr) && respErr.HTTPStatusCode() == http.StatusNotFound
+	respErr, ok := errors.AsType[*smithyhttp.ResponseError](err)
+	return ok && respErr.HTTPStatusCode() == http.StatusNotFound
 }
 
 // requireBucketExists heads the bucket upstream so gateway-local answers keep

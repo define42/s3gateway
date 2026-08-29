@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,7 +25,7 @@ func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func
 	t.Helper()
 
 	upstreamSrv := httptest.NewServer(h)
-	ctx := context.Background()
+	ctx := t.Context()
 	// A custom CA bundle cannot be installed into the production factory's
 	// plain *http.Client; it is irrelevant for the local stub anyway.
 	t.Setenv("AWS_CA_BUNDLE", "")
@@ -90,7 +89,7 @@ func TestS3ClientUpload100MBThroughGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate keys: %v", err)
 	}
-	client := testutil.NewS3Client(t, context.Background(), gwSrv.URL, "us-east-1", accessKey, secretKey)
+	client := testutil.NewS3Client(t, t.Context(), gwSrv.URL, "us-east-1", accessKey, secretKey)
 
 	tmpFile, err := os.CreateTemp(t.TempDir(), "gateway-upload-100mb-*")
 	if err != nil {
@@ -104,7 +103,7 @@ func TestS3ClientUpload100MBThroughGateway(t *testing.T) {
 		t.Fatalf("seek temp file start: %v", err)
 	}
 
-	if _, err := client.PutObject(context.Background(), &s3.PutObjectInput{
+	if _, err := client.PutObject(t.Context(), &s3.PutObjectInput{
 		Bucket:        aws.String("team2-large"),
 		Key:           aws.String("objects/100mb.bin"),
 		Body:          tmpFile,
@@ -287,7 +286,7 @@ func TestGatewayWriteCopyAndDeleteHandlerMatrix(t *testing.T) {
 	})
 	defer cleanup()
 
-	permCtx := authz.WithRules(context.Background(), fullTeam2Rule())
+	permCtx := authz.WithRules(t.Context(), fullTeam2Rule())
 
 	putReq := httptest.NewRequest(http.MethodPut, "/team2-rich/object-put.txt", bytes.NewReader([]byte("payload")))
 	putReq = putReq.WithContext(permCtx)
@@ -415,7 +414,7 @@ func TestGatewayBucketHeadVersioningAndCreateDelete(t *testing.T) {
 	})
 	defer cleanup()
 
-	fullPerm := authz.WithRules(context.Background(), fullTeam2Rule())
+	fullPerm := authz.WithRules(t.Context(), fullTeam2Rule())
 
 	createReq := httptest.NewRequest(http.MethodPut, "/team2-bucket", nil).WithContext(fullPerm)
 	createRR := httptest.NewRecorder()
@@ -490,7 +489,7 @@ func TestGatewayBucketAndObjectTaggingRoutes(t *testing.T) {
 	})
 	defer cleanup()
 
-	fullPerm := authz.WithRules(context.Background(), fullTeam2Rule())
+	fullPerm := authz.WithRules(t.Context(), fullTeam2Rule())
 	bucketTaggingPayload := `<?xml version="1.0" encoding="UTF-8"?><Tagging><TagSet><Tag><Key>bk</Key><Value>bv</Value></Tag></TagSet></Tagging>`
 	objectTaggingPayload := `<?xml version="1.0" encoding="UTF-8"?><Tagging><TagSet><Tag><Key>ok</Key><Value>ov</Value></Tag></TagSet></Tagging>`
 

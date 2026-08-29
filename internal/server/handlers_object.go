@@ -1122,7 +1122,7 @@ func parseObjectAttributesHeader(h http.Header) ([]types.ObjectAttributes, error
 	seen := map[types.ObjectAttributes]struct{}{}
 	out := make([]types.ObjectAttributes, 0, len(values))
 	for _, raw := range values {
-		for _, token := range strings.Split(raw, ",") {
+		for token := range strings.SplitSeq(raw, ",") {
 			v := strings.Trim(strings.TrimSpace(token), `"`)
 			if v == "" {
 				continue

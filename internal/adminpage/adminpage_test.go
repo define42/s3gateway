@@ -907,10 +907,7 @@ func TestAdminBucketUpload100MB(t *testing.T) {
 		chunk := bytes.Repeat([]byte("z"), 1<<20) // 1 MiB
 		var remaining = uploadSize
 		for remaining > 0 {
-			writeLen := int64(len(chunk))
-			if remaining < writeLen {
-				writeLen = remaining
-			}
+			writeLen := min(remaining, int64(len(chunk)))
 			if _, err := filePart.Write(chunk[:writeLen]); err != nil {
 				writeErr <- err
 				return

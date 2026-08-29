@@ -48,7 +48,7 @@ func ParseOptionalObjectAttributes(v string) ([]types.OptionalObjectAttributes, 
 	}
 	seen := map[types.OptionalObjectAttributes]struct{}{}
 	out := make([]types.OptionalObjectAttributes, 0, 2)
-	for _, token := range strings.Split(raw, ",") {
+	for token := range strings.SplitSeq(raw, ",") {
 		t := strings.TrimSpace(token)
 		if t == "" {
 			continue

@@ -6,6 +6,8 @@ run:
 
 linters:
   default: standard
+  enable:
+    - modernize
   settings:
     staticcheck:
       checks:

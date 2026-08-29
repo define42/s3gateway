@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 
 	"github.com/define42/s3gateway/internal/adminpage"
@@ -34,8 +35,8 @@ func boot(cfg config.Config) (*http.Server, func(), error) {
 	var serverOptions []server.Option
 	var cleanupFunctions []func()
 	cleanup := sync.OnceFunc(func() {
-		for i := len(cleanupFunctions) - 1; i >= 0; i-- {
-			cleanupFunctions[i]()
+		for _, cleanupFunction := range slices.Backward(cleanupFunctions) {
+			cleanupFunction()
 		}
 	})
 	if len(cfg.KafkaBrokers) > 0 {

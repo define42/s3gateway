@@ -817,7 +817,7 @@ func TestHandleDeleteObjectsRejectsMoreThan1000Objects(t *testing.T) {
 
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?><Delete>`)
-	for i := 0; i < 1001; i++ {
+	for i := range 1001 {
 		b.WriteString("<Object><Key>k")
 		b.WriteString(strconv.Itoa(i))
 		b.WriteString("</Key></Object>")

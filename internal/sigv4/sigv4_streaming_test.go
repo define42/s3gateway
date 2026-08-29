@@ -497,7 +497,7 @@ func TestDecodeTrailerSectionEdgeCases(t *testing.T) {
 
 	t.Run("too many trailer lines", func(t *testing.T) {
 		var sb strings.Builder
-		for i := 0; i < 40; i++ {
+		for i := range 40 {
 			fmt.Fprintf(&sb, "x-amz-meta-t%d:v\r\n", i)
 		}
 		sb.WriteString("\r\n")
@@ -587,7 +587,7 @@ func TestDecodeTrailerSectionEdgeCases(t *testing.T) {
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("%x;chunk-signature=%s\r\n%s\r\n", len(payload), chunkSig, payload))
 		sb.WriteString("0;chunk-signature=" + finalSig + "\r\n")
-		for i := 0; i < 40; i++ {
+		for range 40 {
 			sb.WriteString("padding\r\n")
 		}
 		sb.WriteString("\r\n")

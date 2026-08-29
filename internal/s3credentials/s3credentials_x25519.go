@@ -2,6 +2,7 @@ package s3credentials
 
 import (
 	"crypto/ecdh"
+	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -11,7 +12,6 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/chacha20poly1305"
-	"golang.org/x/crypto/hkdf"
 )
 
 var x25519Curve = ecdh.X25519()
@@ -22,12 +22,13 @@ const hkdfSaltSize = 32
 const hkdfInfo = "s3gateway-x25519-v1"
 
 func deriveKey(sharedSecret, salt []byte) ([]byte, error) {
-	reader := hkdf.New(sha256.New, sharedSecret, salt, []byte(hkdfInfo))
-	key := make([]byte, chacha20poly1305.KeySize)
-	if _, err := io.ReadFull(reader, key); err != nil {
-		return nil, err
-	}
-	return key, nil
+	return hkdf.Key(
+		sha256.New,
+		sharedSecret,
+		salt,
+		hkdfInfo,
+		chacha20poly1305.KeySize,
+	)
 }
 
 func decrypt(receiverPriv *ecdh.PrivateKey, encoded string) ([]byte, error) {

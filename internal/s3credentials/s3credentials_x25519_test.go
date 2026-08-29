@@ -77,7 +77,6 @@ func TestDecryptErrors(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := decrypt(receiverPriv, tc.encoded)
 			if err == nil {
@@ -188,7 +187,6 @@ func TestDecryptTokenRejectsEmptyCredentials(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			encoded, err := encrypt(receiverPriv.PublicKey(), []byte(tc.token))
 			if err != nil {
@@ -243,7 +241,6 @@ func TestGenerateAccessSecretKeyValidationErrors(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, err := GenerateKeysX25519(tc.username, tc.password, tc.publicHex)
 			if err == nil {

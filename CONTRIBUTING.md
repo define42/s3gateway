@@ -6,7 +6,7 @@ endpoints.
 
 ## Prerequisites
 
-- Go 1.26.6 or later
+- Go 1.27.0 or later
 - Git
 - Docker Engine with the Compose plugin
 - Network access for Go modules, lint and security tools, and test container

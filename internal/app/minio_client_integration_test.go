@@ -27,7 +27,7 @@ import (
 // accessed through the minio S3 client. It exercises bucket creation, object
 // put, object get, object deletion, and bucket deletion.
 func TestMinioClientIntegration(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
 	ldapCfgPath := testutil.WriteGatewayGlauthConfig(t)

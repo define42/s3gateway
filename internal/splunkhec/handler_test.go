@@ -134,7 +134,7 @@ func TestHandlerFlushesStructuredBatch(t *testing.T) {
 	if got := bytes.Count(local.Bytes(), []byte{'\n'}); got != 2 {
 		t.Fatalf("local log line count mismatch before HEC flush: got=%d want=2", got)
 	}
-	if err := handler.Flush(context.Background()); err != nil {
+	if err := handler.Flush(t.Context()); err != nil {
 		t.Fatalf("flush logs: %v", err)
 	}
 
@@ -213,10 +213,10 @@ func TestHandlerRetriesFailedBatch(t *testing.T) {
 	defer closeHandler(t, handler)
 	slog.New(handler).Info("retry this event")
 
-	if err := handler.Flush(context.Background()); err == nil {
+	if err := handler.Flush(t.Context()); err == nil {
 		t.Fatal("expected first HEC flush to fail")
 	}
-	if err := handler.Flush(context.Background()); err != nil {
+	if err := handler.Flush(t.Context()); err != nil {
 		t.Fatalf("retry HEC flush: %v", err)
 	}
 	first := <-requests
@@ -315,7 +315,7 @@ func newTestHandler(t *testing.T, endpoint string, interval time.Duration, local
 
 func closeHandler(t *testing.T, handler *Handler) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	if err := handler.Close(ctx); err != nil {
 		t.Fatalf("close HEC handler: %v", err)

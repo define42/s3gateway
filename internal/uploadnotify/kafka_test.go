@@ -7,8 +7,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -125,7 +125,7 @@ func TestKafkaPublisherNotifyTopicModes(t *testing.T) {
 				OccurredAt: occurredAt,
 			}
 
-			if err := publisher.Notify(context.Background(), event); err != nil {
+			if err := publisher.Notify(t.Context(), event); err != nil {
 				t.Fatalf("Notify() error = %v", err)
 			}
 			if len(producer.records) != len(tt.expectedTopics) {
@@ -169,7 +169,7 @@ func TestKafkaPublisherNotifyGeneratesSharedEventID(t *testing.T) {
 	producer := &fakeRecordProducer{}
 	publisher := newKafkaPublisher(producer, true, "_all", time.Second)
 
-	if err := publisher.Notify(context.Background(), Event{
+	if err := publisher.Notify(t.Context(), Event{
 		EventName: EventObjectCreatedPut,
 		Bucket:    "bucket",
 		Key:       "object",
@@ -199,8 +199,8 @@ func TestKafkaPublisherNotifyGeneratesSharedEventID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("event id is not a UUID: %v", err)
 	}
-	if eventID.Version() != 7 {
-		t.Fatalf("event id version = %d, want 7", eventID.Version())
+	if version := eventID[6] >> 4; version != 7 {
+		t.Fatalf("event id version = %d, want 7", version)
 	}
 }
 
@@ -209,7 +209,7 @@ func TestKafkaPublisherNotifyFailure(t *testing.T) {
 	producer := &fakeRecordProducer{produceErr: produceErr}
 	publisher := newKafkaPublisher(producer, false, "_all", time.Second)
 
-	err := publisher.Notify(context.Background(), Event{
+	err := publisher.Notify(t.Context(), Event{
 		EventName: EventObjectCreatedPut,
 		Bucket:    "bucket",
 		Key:       "object",
@@ -228,7 +228,7 @@ func TestKafkaPublisherNotifyDualTopicFailure(t *testing.T) {
 	}}
 	publisher := newKafkaPublisher(producer, true, "_all", time.Second)
 
-	err := publisher.Notify(context.Background(), Event{
+	err := publisher.Notify(t.Context(), Event{
 		EventName: EventObjectCreatedPut,
 		Bucket:    "bucket",
 		Key:       "object",
@@ -260,7 +260,7 @@ func TestKafkaPublisherNotifyValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			producer := &fakeRecordProducer{}
 			publisher := newKafkaPublisher(producer, true, "", time.Second)
-			if err := publisher.Notify(context.Background(), tt.event); err == nil {
+			if err := publisher.Notify(t.Context(), tt.event); err == nil {
 				t.Fatal("Notify() error = nil, want validation error")
 			}
 			if len(producer.records) != 0 {
@@ -274,7 +274,7 @@ func TestKafkaPublisherNotifyWithoutTopics(t *testing.T) {
 	producer := &fakeRecordProducer{}
 	publisher := newKafkaPublisher(producer, false, "", time.Second)
 
-	err := publisher.Notify(context.Background(), Event{
+	err := publisher.Notify(t.Context(), Event{
 		EventName: EventObjectCreatedPut,
 		Bucket:    "bucket",
 		Key:       "object",
