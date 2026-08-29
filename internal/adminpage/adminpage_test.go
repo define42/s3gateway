@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/define42/s3gateway/internal/authn"
 )
 
 func adminLoginSessionCookie(t *testing.T, handler http.Handler, username, password string) *http.Cookie {
@@ -233,6 +235,32 @@ func TestAdminLoginPostSuccessSetsCookieAndRedirects(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected session cookie %q to be set", adminSessionCookieName)
+	}
+}
+
+func TestAdminLoginPostReportsAuthenticationLimit(t *testing.T) {
+	handler := newHandlerWithNilS3(nil)
+	handler.authenticate = func(string, string) (map[string]struct{}, error) {
+		return nil, authn.ErrLimited
+	}
+
+	form := url.Values{
+		"username": []string{"alice"},
+		"password": []string{"secret"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("status mismatch: got=%d want=%d body=%s", rr.Code, http.StatusTooManyRequests, rr.Body.String())
+	}
+	if rr.Header().Get("Retry-After") != "1" {
+		t.Fatalf("Retry-After mismatch: got=%q want=%q", rr.Header().Get("Retry-After"), "1")
+	}
+	if !strings.Contains(rr.Body.String(), "Too many login attempts") {
+		t.Fatalf("missing authentication-limit message: %q", rr.Body.String())
 	}
 }
 

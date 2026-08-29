@@ -9,11 +9,19 @@ import (
 func TestConfigValidateMatrix(t *testing.T) {
 	base := Config{
 		GroupCacheMaxEntries:   1,
+		LDAPOperationTimeout:   time.Second,
+		AuthMaxConcurrent:      1,
+		AuthRatePerSecond:      1,
+		AuthRateBurst:          1,
 		SigV4MaxSkew:           time.Second,
 		ReadHeaderTimeout:      time.Second,
 		IdleTimeout:            time.Second,
 		ShutdownTimeout:        time.Second,
 		MaxHeaderBytes:         1,
+		AdminLoginReadTimeout:  time.Second,
+		ReadinessCheckTimeout:  time.Second,
+		ReadinessCacheTTL:      time.Second,
+		ReadinessAllowedCIDRs:  []string{"127.0.0.1/32"},
 		SplunkHECFlushInterval: time.Second,
 	}
 
@@ -32,6 +40,34 @@ func TestConfigValidateMatrix(t *testing.T) {
 				c.GroupCacheMaxEntries = 0
 			},
 			wantMsg: "LDAP_GROUP_CACHE_MAX_ENTRIES",
+		},
+		{
+			name: "ldap operation timeout",
+			mutate: func(c *Config) {
+				c.LDAPOperationTimeout = 0
+			},
+			wantMsg: "LDAP_OPERATION_TIMEOUT",
+		},
+		{
+			name: "auth max concurrent",
+			mutate: func(c *Config) {
+				c.AuthMaxConcurrent = 0
+			},
+			wantMsg: "AUTH_MAX_CONCURRENT",
+		},
+		{
+			name: "auth rate per second",
+			mutate: func(c *Config) {
+				c.AuthRatePerSecond = 0
+			},
+			wantMsg: "AUTH_RATE_PER_SECOND",
+		},
+		{
+			name: "auth rate burst",
+			mutate: func(c *Config) {
+				c.AuthRateBurst = 0
+			},
+			wantMsg: "AUTH_RATE_BURST",
 		},
 		{
 			name: "sigv4 max skew",
@@ -67,6 +103,41 @@ func TestConfigValidateMatrix(t *testing.T) {
 				c.MaxHeaderBytes = 0
 			},
 			wantMsg: "HTTP_MAX_HEADER_BYTES",
+		},
+		{
+			name: "admin login read timeout",
+			mutate: func(c *Config) {
+				c.AdminLoginReadTimeout = 0
+			},
+			wantMsg: "ADMIN_LOGIN_READ_TIMEOUT",
+		},
+		{
+			name: "readiness check timeout",
+			mutate: func(c *Config) {
+				c.ReadinessCheckTimeout = 0
+			},
+			wantMsg: "READINESS_CHECK_TIMEOUT",
+		},
+		{
+			name: "readiness cache ttl",
+			mutate: func(c *Config) {
+				c.ReadinessCacheTTL = 0
+			},
+			wantMsg: "READINESS_CACHE_TTL",
+		},
+		{
+			name: "readiness cidrs empty",
+			mutate: func(c *Config) {
+				c.ReadinessAllowedCIDRs = nil
+			},
+			wantMsg: "READINESS_ALLOWED_CIDRS",
+		},
+		{
+			name: "readiness cidr invalid",
+			mutate: func(c *Config) {
+				c.ReadinessAllowedCIDRs = []string{"not-a-cidr"}
+			},
+			wantMsg: "READINESS_ALLOWED_CIDRS",
 		},
 		{
 			name: "cookie secret too short",
@@ -315,6 +386,75 @@ func TestApplyDefaultsDoesNotInjectPrivateX25519Key(t *testing.T) {
 			defaultSplunkHECFlushInterval,
 		)
 	}
+	if cfg.LDAPOperationTimeout != defaultLDAPOperationTimeout {
+		t.Fatalf("LDAP operation timeout mismatch: got=%s want=%s", cfg.LDAPOperationTimeout, defaultLDAPOperationTimeout)
+	}
+	if cfg.AuthMaxConcurrent != defaultAuthMaxConcurrent ||
+		cfg.AuthRatePerSecond != defaultAuthRatePerSecond ||
+		cfg.AuthRateBurst != defaultAuthRateBurst {
+		t.Fatalf(
+			"auth defaults mismatch: concurrent=%d rate=%d burst=%d",
+			cfg.AuthMaxConcurrent,
+			cfg.AuthRatePerSecond,
+			cfg.AuthRateBurst,
+		)
+	}
+	if cfg.AdminLoginReadTimeout != defaultAdminLoginReadTimeout ||
+		cfg.ReadinessCheckTimeout != defaultReadinessCheckTimeout ||
+		cfg.ReadinessCacheTTL != defaultReadinessCacheTTL {
+		t.Fatalf(
+			"control-plane timeout defaults mismatch: login=%s check=%s cache=%s",
+			cfg.AdminLoginReadTimeout,
+			cfg.ReadinessCheckTimeout,
+			cfg.ReadinessCacheTTL,
+		)
+	}
+	if len(cfg.ReadinessAllowedCIDRs) != 2 {
+		t.Fatalf("readiness CIDR defaults mismatch: %v", cfg.ReadinessAllowedCIDRs)
+	}
+}
+
+func TestLoadConfigControlPlaneLimits(t *testing.T) {
+	t.Setenv("LDAP_URL", "ldap://ldap.example:389")
+	t.Setenv("LDAP_BASE_DN", "dc=example,dc=com")
+	t.Setenv("S3_ENDPOINT", "https://s3.example")
+	t.Setenv("S3_ACCESS_KEY", "access-key")
+	t.Setenv("S3_SECRET_KEY", "secret-key")
+	t.Setenv("LDAP_OPERATION_TIMEOUT", "7s")
+	t.Setenv("AUTH_MAX_CONCURRENT", "8")
+	t.Setenv("AUTH_RATE_PER_SECOND", "9")
+	t.Setenv("AUTH_RATE_BURST", "10")
+	t.Setenv("ADMIN_LOGIN_READ_TIMEOUT", "4s")
+	t.Setenv("READINESS_CHECK_TIMEOUT", "1500ms")
+	t.Setenv("READINESS_CACHE_TTL", "3s")
+	t.Setenv("READINESS_ALLOWED_CIDRS", "10.0.0.0/8,fd00::/8")
+
+	cfg := LoadConfig()
+	if cfg.LDAPOperationTimeout != 7*time.Second || cfg.AuthMaxConcurrent != 8 ||
+		cfg.AuthRatePerSecond != 9 || cfg.AuthRateBurst != 10 {
+		t.Fatalf(
+			"authentication config mismatch: timeout=%s concurrent=%d rate=%d burst=%d",
+			cfg.LDAPOperationTimeout,
+			cfg.AuthMaxConcurrent,
+			cfg.AuthRatePerSecond,
+			cfg.AuthRateBurst,
+		)
+	}
+	if cfg.AdminLoginReadTimeout != 4*time.Second ||
+		cfg.ReadinessCheckTimeout != 1500*time.Millisecond ||
+		cfg.ReadinessCacheTTL != 3*time.Second {
+		t.Fatalf(
+			"control-plane config mismatch: login=%s check=%s cache=%s",
+			cfg.AdminLoginReadTimeout,
+			cfg.ReadinessCheckTimeout,
+			cfg.ReadinessCacheTTL,
+		)
+	}
+	if len(cfg.ReadinessAllowedCIDRs) != 2 ||
+		cfg.ReadinessAllowedCIDRs[0] != "10.0.0.0/8" ||
+		cfg.ReadinessAllowedCIDRs[1] != "fd00::/8" {
+		t.Fatalf("readiness CIDRs mismatch: %v", cfg.ReadinessAllowedCIDRs)
+	}
 }
 
 func TestLoadConfigSplunkHEC(t *testing.T) {
@@ -382,15 +522,8 @@ func TestLoadConfigKafkaGlobalTopic(t *testing.T) {
 }
 
 func TestCookieSecretValidation(t *testing.T) {
-	base := Config{
-		GroupCacheMaxEntries:   1,
-		SigV4MaxSkew:           time.Second,
-		ReadHeaderTimeout:      time.Second,
-		IdleTimeout:            time.Second,
-		ShutdownTimeout:        time.Second,
-		MaxHeaderBytes:         1,
-		SplunkHECFlushInterval: time.Second,
-	}
+	base := Config{}
+	base.ApplyDefaults()
 
 	// empty string is allowed (ephemeral random keys)
 	cfg := base

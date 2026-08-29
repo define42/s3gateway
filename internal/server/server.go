@@ -6,15 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	adminpage "github.com/define42/s3gateway/internal/adminpage"
+	"github.com/define42/s3gateway/internal/authn"
 	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/define42/s3gateway/internal/config"
 	"github.com/define42/s3gateway/internal/groupcache"
@@ -25,8 +29,6 @@ import (
 	"github.com/define42/s3gateway/internal/uploadnotify"
 	"golang.org/x/sync/singleflight"
 )
-
-const defaultReadyCheckTimeout = 2 * time.Second
 
 const popBasicAuthChallenge = `Basic realm="s3gateway-pop", charset="UTF-8"`
 
@@ -71,6 +73,16 @@ type Server struct {
 	gcache         *groupcache.Cache
 	groupLookupSF  singleflight.Group
 	fetchGroups    func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
+	authLimiter    *authn.Limiter
+
+	readinessAllowedPrefixes []netip.Prefix
+	readinessMu              sync.Mutex
+	readinessCachedAt        time.Time
+	readinessCachedErr       error
+	readinessCacheValid      bool
+	readinessSF              singleflight.Group
+	readinessNow             func() time.Time
+	readinessCheck           func(context.Context) error
 }
 
 // UploadNotifier receives events only after the upstream S3 operation has
@@ -112,6 +124,14 @@ func New(cfg config.Config, up *s3.Client, opts ...Option) *Server {
 		auditHashReady: auditHashReady,
 		gcache:         groupcache.New(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
 		fetchGroups:    ldapinternal.FetchGroupsUPN,
+		authLimiter:    authn.NewLimiter(cfg.AuthMaxConcurrent, cfg.AuthRatePerSecond, cfg.AuthRateBurst),
+		readinessNow:   time.Now,
+	}
+	for _, rawPrefix := range cfg.ReadinessAllowedCIDRs {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(rawPrefix))
+		if err == nil {
+			s.readinessAllowedPrefixes = append(s.readinessAllowedPrefixes, prefix.Masked())
+		}
 	}
 	if !auditHashReady {
 		s.logger.Warn("S3 audit identifiers disabled: could not initialize hash key")
@@ -146,6 +166,11 @@ func (s *Server) GroupsForCredentials(upn, pass string) (map[string]struct{}, er
 		if cached, ok := s.gcache.Get(upn, pass); ok {
 			return cached, nil
 		}
+		release, err := s.authLimiter.TryAcquire()
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 		fetched, err := fetchGroups(s.cfg, upn, pass)
 		if err != nil {
 			return nil, err
@@ -174,6 +199,12 @@ func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Han
 			return
 		}
 		if adminpage.IsBrowser(r) && adminpage.IsAdminRoute(r.URL.Path) {
+			if normalizePath := strings.TrimRight(r.URL.Path, "/"); r.Method == http.MethodPost && normalizePath == "/login" {
+				controller := http.NewResponseController(w)
+				// Keep the deadline through request-body cleanup; net/http replaces it
+				// with the next request's header deadline on a reused connection.
+				_ = controller.SetReadDeadline(time.Now().Add(s.cfg.AdminLoginReadTimeout))
+			}
 			adminHandler.ServeHTTP(w, r)
 			return
 		}
@@ -206,6 +237,11 @@ func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Han
 
 		grps, err := s.GroupsForCredentials(upn, pass)
 		if err != nil {
+			if errors.Is(err, authn.ErrLimited) {
+				w.Header().Set("Retry-After", "1")
+				s3xml.WriteError(w, http.StatusServiceUnavailable, "SlowDown", "Please reduce your request rate")
+				return
+			}
 			s3xml.WriteError(w, http.StatusUnauthorized, "AccessDenied", "Bad credentials")
 			return
 		}
@@ -234,6 +270,11 @@ func (s *Server) authenticatePopBasic(
 	s.setS3AuditPrincipal(r, upn)
 	grps, err := s.GroupsForCredentials(upn, pass)
 	if err != nil {
+		if errors.Is(err, authn.ErrLimited) {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+			return
+		}
 		writePopBasicAuthChallenge(w)
 		return
 	}
@@ -346,7 +387,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if p == "/readyz" {
+		if !s.readinessClientAllowed(r) {
+			http.NotFound(w, r)
+			return
+		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
@@ -646,7 +692,7 @@ func (s *Server) checkLDAPReady(ctx context.Context) error {
 	if strings.TrimSpace(s.cfg.LDAPURL) == "" {
 		return errors.New("url not configured")
 	}
-	timeout := defaultReadyCheckTimeout
+	timeout := s.cfg.ReadinessCheckTimeout
 	if d, ok := ctx.Deadline(); ok {
 		remaining := time.Until(d)
 		if remaining <= 0 {
@@ -686,15 +732,91 @@ func (s *Server) checkReady(ctx context.Context) error {
 	return errors.New(strings.Join(errs, "; "))
 }
 
+type readinessResult struct {
+	err error
+}
+
+func (s *Server) readinessClientAllowed(r *http.Request) bool {
+	if r == nil || strings.TrimSpace(r.RemoteAddr) == "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(r.RemoteAddr)
+	}
+	addr, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	for _, prefix := range s.readinessAllowedPrefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) cachedReadiness(ctx context.Context) error {
+	now := s.readinessNow()
+	if cachedErr, ok := s.readinessCacheAt(now); ok {
+		return cachedErr
+	}
+
+	value, err, _ := s.readinessSF.Do("readiness", func() (any, error) {
+		now := s.readinessNow()
+		if cachedErr, ok := s.readinessCacheAt(now); ok {
+			return readinessResult{err: cachedErr}, nil
+		}
+
+		checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.cfg.ReadinessCheckTimeout)
+		defer cancel()
+		check := s.readinessCheck
+		if check == nil {
+			check = s.checkReady
+		}
+		checkErr := check(checkCtx)
+		checkedAt := s.readinessNow()
+		s.readinessMu.Lock()
+		s.readinessCachedAt = checkedAt
+		s.readinessCachedErr = checkErr
+		s.readinessCacheValid = true
+		s.readinessMu.Unlock()
+		if checkErr != nil {
+			s.auditLogger().Warn("readiness check failed", "error", checkErr)
+		}
+		return readinessResult{err: checkErr}, nil
+	})
+	if err != nil {
+		return err
+	}
+	result, ok := value.(readinessResult)
+	if !ok {
+		return errors.New("invalid readiness result")
+	}
+	return result.err
+}
+
+func (s *Server) readinessCacheAt(now time.Time) (error, bool) {
+	s.readinessMu.Lock()
+	defer s.readinessMu.Unlock()
+	if !s.readinessCacheValid {
+		return nil, false
+	}
+	age := now.Sub(s.readinessCachedAt)
+	if age < 0 || age >= s.cfg.ReadinessCacheTTL {
+		return nil, false
+	}
+	return s.readinessCachedErr, true
+}
+
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
-	ctx, cancel := context.WithTimeout(r.Context(), defaultReadyCheckTimeout)
-	defer cancel()
-	if err := s.checkReady(ctx); err != nil {
+	if err := s.cachedReadiness(r.Context()); err != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		if r.Method != http.MethodHead {
-			_, _ = w.Write([]byte("not ready: " + err.Error() + "\n")) // #nosec G705 -- plain text response, not HTML
+			_, _ = w.Write([]byte("not ready\n"))
 		}
 		return
 	}

@@ -6,6 +6,7 @@ import (
 	"crypto/ecdh"
 	"errors"
 	"log/slog"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -26,6 +27,10 @@ type Config struct {
 	BaseDN               string
 	GroupTTL             time.Duration
 	GroupCacheMaxEntries int
+	LDAPOperationTimeout time.Duration
+	AuthMaxConcurrent    int
+	AuthRatePerSecond    int
+	AuthRateBurst        int
 
 	UpstreamEndpoint       string
 	UpstreamRegion         string
@@ -57,6 +62,10 @@ type Config struct {
 	IdleTimeout               time.Duration
 	ShutdownTimeout           time.Duration
 	MaxHeaderBytes            int
+	AdminLoginReadTimeout     time.Duration
+	ReadinessCheckTimeout     time.Duration
+	ReadinessCacheTTL         time.Duration
+	ReadinessAllowedCIDRs     []string
 	S3GatewayPrivateX25519Key *ecdh.PrivateKey
 
 	AcmeCaDir   string
@@ -74,6 +83,13 @@ const (
 	defaultKafkaPopTimeout          = 30 * time.Second
 	defaultKafkaPopMaxConsumers     = 1000
 	defaultSplunkHECFlushInterval   = 30 * time.Second
+	defaultLDAPOperationTimeout     = 10 * time.Second
+	defaultAuthMaxConcurrent        = 32
+	defaultAuthRatePerSecond        = 20
+	defaultAuthRateBurst            = 40
+	defaultAdminLoginReadTimeout    = 10 * time.Second
+	defaultReadinessCheckTimeout    = 2 * time.Second
+	defaultReadinessCacheTTL        = 5 * time.Second
 
 	// DefaultGroupCacheMaxEntries bounds the in-memory LDAP group cache.
 	DefaultGroupCacheMaxEntries = 10000
@@ -96,6 +112,18 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.GroupCacheMaxEntries == 0 {
 		cfg.GroupCacheMaxEntries = DefaultGroupCacheMaxEntries
+	}
+	if cfg.LDAPOperationTimeout == 0 {
+		cfg.LDAPOperationTimeout = defaultLDAPOperationTimeout
+	}
+	if cfg.AuthMaxConcurrent == 0 {
+		cfg.AuthMaxConcurrent = defaultAuthMaxConcurrent
+	}
+	if cfg.AuthRatePerSecond == 0 {
+		cfg.AuthRatePerSecond = defaultAuthRatePerSecond
+	}
+	if cfg.AuthRateBurst == 0 {
+		cfg.AuthRateBurst = defaultAuthRateBurst
 	}
 	if cfg.UpstreamRegion == "" {
 		cfg.UpstreamRegion = "us-east-1"
@@ -127,6 +155,22 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.MaxHeaderBytes == 0 {
 		cfg.MaxHeaderBytes = DefaultMaxHeaderBytes
 	}
+	if cfg.AdminLoginReadTimeout == 0 {
+		cfg.AdminLoginReadTimeout = defaultAdminLoginReadTimeout
+	}
+	if cfg.ReadinessCheckTimeout == 0 {
+		cfg.ReadinessCheckTimeout = defaultReadinessCheckTimeout
+	}
+	if cfg.ReadinessCacheTTL == 0 {
+		cfg.ReadinessCacheTTL = defaultReadinessCacheTTL
+	}
+	if len(cfg.ReadinessAllowedCIDRs) == 0 {
+		cfg.ReadinessAllowedCIDRs = defaultReadinessAllowedCIDRs()
+	}
+}
+
+func defaultReadinessAllowedCIDRs() []string {
+	return []string{"127.0.0.0/8", "::1/128"}
 }
 
 // Validate checks numeric bounds and cross-field requirements. It expects
@@ -134,6 +178,18 @@ func (cfg *Config) ApplyDefaults() {
 func (cfg Config) Validate() error {
 	if cfg.GroupCacheMaxEntries <= 0 {
 		return errors.New("LDAP_GROUP_CACHE_MAX_ENTRIES must be > 0")
+	}
+	if cfg.LDAPOperationTimeout <= 0 {
+		return errors.New("LDAP_OPERATION_TIMEOUT must be > 0")
+	}
+	if cfg.AuthMaxConcurrent <= 0 {
+		return errors.New("AUTH_MAX_CONCURRENT must be > 0")
+	}
+	if cfg.AuthRatePerSecond <= 0 {
+		return errors.New("AUTH_RATE_PER_SECOND must be > 0")
+	}
+	if cfg.AuthRateBurst <= 0 {
+		return errors.New("AUTH_RATE_BURST must be > 0")
 	}
 	if cfg.SigV4MaxSkew <= 0 {
 		return errors.New("SIGV4_MAX_SKEW must be > 0")
@@ -149,6 +205,23 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.MaxHeaderBytes <= 0 {
 		return errors.New("HTTP_MAX_HEADER_BYTES must be > 0")
+	}
+	if cfg.AdminLoginReadTimeout <= 0 {
+		return errors.New("ADMIN_LOGIN_READ_TIMEOUT must be > 0")
+	}
+	if cfg.ReadinessCheckTimeout <= 0 {
+		return errors.New("READINESS_CHECK_TIMEOUT must be > 0")
+	}
+	if cfg.ReadinessCacheTTL <= 0 {
+		return errors.New("READINESS_CACHE_TTL must be > 0")
+	}
+	if len(cfg.ReadinessAllowedCIDRs) == 0 {
+		return errors.New("READINESS_ALLOWED_CIDRS must contain at least one CIDR")
+	}
+	for _, rawPrefix := range cfg.ReadinessAllowedCIDRs {
+		if _, err := netip.ParsePrefix(strings.TrimSpace(rawPrefix)); err != nil {
+			return errors.New("READINESS_ALLOWED_CIDRS must contain only valid CIDRs")
+		}
 	}
 	if cfg.CookieSecret != "" && len(cfg.CookieSecret) < 32 {
 		return errors.New("COOKIE_SECRET must be at least 32 characters when set")
@@ -349,6 +422,10 @@ func LoadConfig() Config {
 		GroupTTL:             envDuration("LDAP_GROUP_TTL", 2*time.Minute),
 		LDAPDomain:           env("LDAP_DOMAIN", "example.com"),
 		GroupCacheMaxEntries: envInt("LDAP_GROUP_CACHE_MAX_ENTRIES", DefaultGroupCacheMaxEntries),
+		LDAPOperationTimeout: envDuration("LDAP_OPERATION_TIMEOUT", defaultLDAPOperationTimeout),
+		AuthMaxConcurrent:    envInt("AUTH_MAX_CONCURRENT", defaultAuthMaxConcurrent),
+		AuthRatePerSecond:    envInt("AUTH_RATE_PER_SECOND", defaultAuthRatePerSecond),
+		AuthRateBurst:        envInt("AUTH_RATE_BURST", defaultAuthRateBurst),
 
 		UpstreamEndpoint:       envRequired("S3_ENDPOINT"),
 		UpstreamRegion:         env("S3_REGION", "us-east-1"),
@@ -380,11 +457,18 @@ func LoadConfig() Config {
 		IdleTimeout:               envDuration("HTTP_IDLE_TIMEOUT", DefaultIdleTimeout),
 		ShutdownTimeout:           envDuration("HTTP_SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
 		MaxHeaderBytes:            envInt("HTTP_MAX_HEADER_BYTES", DefaultMaxHeaderBytes),
+		AdminLoginReadTimeout:     envDuration("ADMIN_LOGIN_READ_TIMEOUT", defaultAdminLoginReadTimeout),
+		ReadinessCheckTimeout:     envDuration("READINESS_CHECK_TIMEOUT", defaultReadinessCheckTimeout),
+		ReadinessCacheTTL:         envDuration("READINESS_CACHE_TTL", defaultReadinessCacheTTL),
+		ReadinessAllowedCIDRs:     envCSV("READINESS_ALLOWED_CIDRS"),
 		S3GatewayPrivateX25519Key: envEcdhPrivateKey("S3GATEWAY_PRIVATE_X25519_KEY"),
 		AcmeCaDir:                 env("ACME_CA_DIR", ""),
 		AcmeDomains:               env("ACME_DOMAINS", ""),
 		AcmeServer:                env("ACME_SERVER", certmagic.LetsEncryptProductionCA),
 		AcmeDataDir:               env("ACME_DATA_DIR", "./certs"),
+	}
+	if len(cfg.ReadinessAllowedCIDRs) == 0 {
+		cfg.ReadinessAllowedCIDRs = defaultReadinessAllowedCIDRs()
 	}
 	if err := cfg.Validate(); err != nil {
 		slog.Error("config validation failed", "error", err)

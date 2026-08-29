@@ -13,11 +13,11 @@ import (
 	ldap "github.com/go-ldap/ldap/v3"
 )
 
-const defaultLDAPDialTimeout = 5 * time.Second
+const defaultLDAPOperationTimeout = 10 * time.Second
 
 // ==================== AD group lookup ====================
-func ldapDial(ldapURL string) (*ldap.Conn, error) {
-	return DialWithTimeout(ldapURL, defaultLDAPDialTimeout)
+func ldapDial(ldapURL string, timeout time.Duration) (*ldap.Conn, error) {
+	return DialWithTimeout(ldapURL, timeout)
 }
 
 // DialWithTimeout opens an LDAP connection using the URL's scheme and a dialer
@@ -35,11 +35,16 @@ func DialWithTimeout(ldapURL string, timeout time.Duration) (*ldap.Conn, error) 
 // lowercase common names from memberOf and fails unless the search yields
 // exactly one user entry.
 func FetchGroupsUPN(cfg config.Config, upn, password string) (map[string]struct{}, error) {
-	conn, err := ldapDial(cfg.LDAPURL)
+	operationTimeout := cfg.LDAPOperationTimeout
+	if operationTimeout <= 0 {
+		operationTimeout = defaultLDAPOperationTimeout
+	}
+	conn, err := ldapDial(cfg.LDAPURL, operationTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("ldap dial: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+	conn.SetTimeout(operationTimeout)
 
 	upnWithDomain := upn + "@" + ldap.EscapeFilter(cfg.LDAPDomain)
 

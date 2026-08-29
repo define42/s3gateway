@@ -29,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/define42/s3gateway/internal/authn"
 	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/define42/s3gateway/internal/config"
 	"github.com/gorilla/securecookie"
@@ -1087,6 +1088,14 @@ func (h *handler) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 
 	groups, err := h.authenticate(upn, pass)
 	if err != nil {
+		if errors.Is(err, authn.ErrLimited) {
+			w.Header().Set("Retry-After", "1")
+			writeAdminLoginPage(w, r, http.StatusTooManyRequests, adminLoginPageData{
+				Username: upn,
+				Error:    "Too many login attempts. Try again shortly.",
+			})
+			return
+		}
 		writeAdminLoginPage(w, r, http.StatusUnauthorized, adminLoginPageData{
 			Username: upn,
 			Error:    "LDAP login failed. Check your username and password.",

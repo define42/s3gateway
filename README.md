@@ -313,6 +313,10 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 | `LDAP_DOMAIN` | No | `example.com` | Domain appended to the client-supplied LDAP username |
 | `LDAP_GROUP_TTL` | No | `2m` | Successful LDAP group-cache lifetime |
 | `LDAP_GROUP_CACHE_MAX_ENTRIES` | No | `10000` | Maximum group-cache entries; also bounds in-memory admin sessions |
+| `LDAP_OPERATION_TIMEOUT` | No | `10s` | Maximum duration of each LDAP dial, bind, or search operation |
+| `AUTH_MAX_CONCURRENT` | No | `32` | Maximum concurrent LDAP authentication operations |
+| `AUTH_RATE_PER_SECOND` | No | `20` | Global sustained LDAP authentication attempt rate |
+| `AUTH_RATE_BURST` | No | `40` | Maximum burst of LDAP authentication attempts |
 | `S3_REGION` | No | `us-east-1` | Upstream S3 signing region |
 | `S3_FORCE_PATH_STYLE` | No | `true` | Use path-style requests to the upstream S3 service |
 | `SIGV4_MAX_SKEW` | No | `15m` | Maximum allowed absolute age or clock skew of a client request |
@@ -336,6 +340,10 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 | `HTTP_IDLE_TIMEOUT` | No | `120s` | HTTP keep-alive idle timeout |
 | `HTTP_SHUTDOWN_TIMEOUT` | No | `20s` | Graceful-shutdown timeout |
 | `HTTP_MAX_HEADER_BYTES` | No | `1048576` | Maximum request-header size in bytes |
+| `ADMIN_LOGIN_READ_TIMEOUT` | No | `10s` | Route-specific deadline for reading browser login POST bodies |
+| `READINESS_CHECK_TIMEOUT` | No | `2s` | Maximum duration of a live LDAP and S3 readiness check |
+| `READINESS_CACHE_TTL` | No | `5s` | Lifetime of cached readiness success or failure results |
+| `READINESS_ALLOWED_CIDRS` | No | `127.0.0.0/8,::1/128` | Direct-client CIDRs allowed to access `/readyz`; forwarded client headers are ignored |
 | `ACME_DOMAINS` | No | Empty | Comma-separated certificate domains; empty disables ACME HTTPS |
 | `ACME_SERVER` | No | Let's Encrypt production | ACME directory URL |
 | `ACME_DATA_DIR` | No | `./certs` | ACME account and certificate storage directory |

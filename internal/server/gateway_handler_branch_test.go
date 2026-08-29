@@ -1258,6 +1258,9 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 		}
 		for _, tc := range cases {
 			req := httptest.NewRequest(tc.method, tc.target, nil)
+			if req.URL.Path == "/readyz" {
+				req.RemoteAddr = "127.0.0.1:1234"
+			}
 			req = req.WithContext(authz.WithRules(req.Context(), fullTeam2Rule()))
 			rr := httptest.NewRecorder()
 			gw.ServeHTTP(rr, req)
@@ -1516,6 +1519,7 @@ func TestReadyzDependencyChecks(t *testing.T) {
 		gw.cfg.LDAPURL = startLDAPListener(t)
 
 		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
 		rr := httptest.NewRecorder()
 		gw.ServeHTTP(rr, req)
 		if rr.Code != http.StatusOK {
@@ -1532,13 +1536,14 @@ func TestReadyzDependencyChecks(t *testing.T) {
 		gw.cfg.LDAPURL = "ldap://127.0.0.1:1"
 
 		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
 		rr := httptest.NewRecorder()
 		gw.ServeHTTP(rr, req)
 		if rr.Code != http.StatusServiceUnavailable {
 			t.Fatalf("readyz ldap failure status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
 		}
-		if !strings.Contains(rr.Body.String(), "ldap:") {
-			t.Fatalf("expected ldap failure in readyz body: %s", rr.Body.String())
+		if rr.Body.String() != "not ready\n" {
+			t.Fatalf("readyz failure body mismatch: %q", rr.Body.String())
 		}
 	})
 
@@ -1546,13 +1551,14 @@ func TestReadyzDependencyChecks(t *testing.T) {
 		gw := New(config.Config{LDAPURL: startLDAPListener(t)}, nil)
 
 		req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+		req.RemoteAddr = "127.0.0.1:1234"
 		rr := httptest.NewRecorder()
 		gw.ServeHTTP(rr, req)
 		if rr.Code != http.StatusServiceUnavailable {
 			t.Fatalf("readyz s3 failure status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
 		}
-		if !strings.Contains(rr.Body.String(), "s3:") {
-			t.Fatalf("expected s3 failure in readyz body: %s", rr.Body.String())
+		if rr.Body.String() != "not ready\n" {
+			t.Fatalf("readyz failure body mismatch: %q", rr.Body.String())
 		}
 	})
 }
