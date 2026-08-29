@@ -22,7 +22,36 @@ import (
 	"github.com/define42/s3gateway/internal/uploadnotify"
 )
 
-const maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
+const (
+	maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
+
+	maxDeleteObjectsBodyBytes = int64(4 * 1024 * 1024)
+	maxDeleteObjects          = 1000
+	maxDeleteObjectKeyBytes   = 1024
+	maxDeleteVersionIDBytes   = 1024
+	maxDeleteETagBytes        = 256
+)
+
+var deleteObjectsDecodeLimits = s3xml.DecodeLimits{
+	MaxBodyBytes:      maxDeleteObjectsBodyBytes,
+	MaxDepth:          8,
+	MaxElements:       5000,
+	MaxAttributes:     16,
+	MaxAttributeBytes: 2048,
+	ElementLimits: map[string]int{
+		"Object":    maxDeleteObjects,
+		"Key":       maxDeleteObjects,
+		"VersionId": maxDeleteObjects,
+		"ETag":      maxDeleteObjects,
+		"Quiet":     1,
+	},
+	FieldByteLimits: map[string]int{
+		"Key":       maxDeleteObjectKeyBytes,
+		"VersionId": maxDeleteVersionIDBytes,
+		"ETag":      maxDeleteETagBytes,
+		"Quiet":     8,
+	},
+}
 
 type deleteObjectsReqXML struct {
 	XMLName xml.Name                 `xml:"Delete"`
@@ -36,6 +65,12 @@ type deleteObjectReqItemXML struct {
 	ETag      *string `xml:"ETag,omitempty"`
 }
 
+func decodeDeleteObjectsRequest(r io.Reader) (deleteObjectsReqXML, error) {
+	var req deleteObjectsReqXML
+	err := s3xml.DecodeLimited(r, &req, deleteObjectsDecodeLimits)
+	return req, err
+}
+
 func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
@@ -43,7 +78,7 @@ func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	tagging, err := s3xml.DecodeTagging(r.Body)
+	tagging, err := s3xml.DecodeObjectTagging(r.Body)
 	if err != nil {
 		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid tagging payload")
 		return
@@ -164,12 +199,12 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 		return
 	}
 
-	var req deleteObjectsReqXML
-	if err := xml.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, err := decodeDeleteObjectsRequest(r.Body)
+	if err != nil {
 		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid DeleteObjects payload")
 		return
 	}
-	if len(req.Objects) == 0 || len(req.Objects) > 1000 {
+	if len(req.Objects) == 0 || len(req.Objects) > maxDeleteObjects {
 		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "DeleteObjects requires 1..1000 objects")
 		return
 	}

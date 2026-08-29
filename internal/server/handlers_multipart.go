@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/xml"
 	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -18,6 +19,29 @@ import (
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 	"github.com/define42/s3gateway/internal/uploadnotify"
 )
+
+const (
+	maxCompleteMultipartBodyBytes = int64(4 * 1024 * 1024)
+	maxCompleteMultipartParts     = 10_000
+	maxCompleteMultipartETagBytes = 256
+)
+
+var completeMultipartDecodeLimits = s3xml.DecodeLimits{
+	MaxBodyBytes:      maxCompleteMultipartBodyBytes,
+	MaxDepth:          8,
+	MaxElements:       50_000,
+	MaxAttributes:     16,
+	MaxAttributeBytes: 2048,
+	ElementLimits: map[string]int{
+		"Part":       maxCompleteMultipartParts,
+		"PartNumber": maxCompleteMultipartParts,
+		"ETag":       maxCompleteMultipartParts,
+	},
+	FieldByteLimits: map[string]int{
+		"PartNumber": 16,
+		"ETag":       maxCompleteMultipartETagBytes,
+	},
+}
 
 func (s *Server) handleListMultipartUploads(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
@@ -119,6 +143,12 @@ type completeMultipartUpload struct {
 		PartNumber int32  `xml:"PartNumber"`
 		ETag       string `xml:"ETag"`
 	} `xml:"Part"`
+}
+
+func decodeCompleteMultipartUpload(r io.Reader) (completeMultipartUpload, error) {
+	var upload completeMultipartUpload
+	err := s3xml.DecodeLimited(r, &upload, completeMultipartDecodeLimits)
+	return upload, err
 }
 
 func (s *Server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, bucket, key string) {
@@ -343,9 +373,13 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	var cmu completeMultipartUpload
-	if err := xml.NewDecoder(r.Body).Decode(&cmu); err != nil {
+	cmu, err := decodeCompleteMultipartUpload(r.Body)
+	if err != nil {
 		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid XML")
+		return
+	}
+	if len(cmu.Parts) > maxCompleteMultipartParts {
+		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Too many multipart parts")
 		return
 	}
 

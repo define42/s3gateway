@@ -6,10 +6,42 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
+
+const (
+	maxVersioningBodyBytes  = int64(16 * 1024)
+	maxVersioningFieldBytes = 32
+
+	maxObjectTags         = 10
+	maxBucketTags         = 50
+	maxObjectTaggingBytes = int64(64 * 1024)
+	maxBucketTaggingBytes = int64(256 * 1024)
+	maxTagKeyRunes        = 128
+	maxTagValueRunes      = 256
+	maxTagKeyBytes        = maxTagKeyRunes * utf8.UTFMax
+	maxTagValueBytes      = maxTagValueRunes * utf8.UTFMax
+)
+
+var versioningDecodeLimits = DecodeLimits{
+	MaxBodyBytes:      maxVersioningBodyBytes,
+	MaxDepth:          4,
+	MaxElements:       16,
+	MaxAttributes:     4,
+	MaxAttributeBytes: 2048,
+	ElementLimits: map[string]int{
+		"VersioningConfiguration": 1,
+		"Status":                  1,
+		"MfaDelete":               1,
+	},
+	FieldByteLimits: map[string]int{
+		"Status":    maxVersioningFieldBytes,
+		"MfaDelete": maxVersioningFieldBytes,
+	},
+}
 
 type versioningConfigXML struct {
 	XMLName   xml.Name `xml:"VersioningConfiguration"`
@@ -23,7 +55,7 @@ type versioningConfigXML struct {
 // values return an error.
 func DecodeVersioningConfig(r io.Reader) (*types.VersioningConfiguration, error) {
 	var in versioningConfigXML
-	if err := xml.NewDecoder(r).Decode(&in); err != nil {
+	if err := DecodeLimited(r, &in, versioningDecodeLimits); err != nil {
 		return nil, err
 	}
 
@@ -96,12 +128,50 @@ type tagXMLKV struct {
 	Value *string `xml:"Value"`
 }
 
-// DecodeTagging decodes an S3 Tagging document. Every Tag must contain both a
-// Key and Value element, though either element may contain an empty string.
+// DecodeTagging decodes object tagging with S3's ten-tag limit. New call sites
+// should use DecodeObjectTagging or DecodeBucketTagging to make the operation's
+// distinct limit explicit.
 func DecodeTagging(r io.Reader) (*types.Tagging, error) {
+	return DecodeObjectTagging(r)
+}
+
+// DecodeObjectTagging decodes an object Tagging document with S3's ten-tag
+// limit.
+func DecodeObjectTagging(r io.Reader) (*types.Tagging, error) {
+	return decodeTagging(r, maxObjectTaggingBytes, maxObjectTags)
+}
+
+// DecodeBucketTagging decodes a bucket Tagging document with S3's fifty-tag
+// limit.
+func DecodeBucketTagging(r io.Reader) (*types.Tagging, error) {
+	return decodeTagging(r, maxBucketTaggingBytes, maxBucketTags)
+}
+
+func decodeTagging(r io.Reader, maxBodyBytes int64, maxTags int) (*types.Tagging, error) {
 	var in taggingXML
-	if err := xml.NewDecoder(r).Decode(&in); err != nil {
+	limits := DecodeLimits{
+		MaxBodyBytes:      maxBodyBytes,
+		MaxDepth:          6,
+		MaxElements:       4 + 3*maxTags,
+		MaxAttributes:     4,
+		MaxAttributeBytes: 2048,
+		ElementLimits: map[string]int{
+			"Tagging": 1,
+			"TagSet":  1,
+			"Tag":     maxTags,
+			"Key":     maxTags,
+			"Value":   maxTags,
+		},
+		FieldByteLimits: map[string]int{
+			"Key":   maxTagKeyBytes,
+			"Value": maxTagValueBytes,
+		},
+	}
+	if err := DecodeLimited(r, &in, limits); err != nil {
 		return nil, err
+	}
+	if len(in.TagSet) > maxTags {
+		return nil, fmt.Errorf("tag set exceeds %d tags", maxTags)
 	}
 	out := &types.Tagging{
 		TagSet: make([]types.Tag, 0, len(in.TagSet)),
@@ -115,6 +185,12 @@ func DecodeTagging(r io.Reader) (*types.Tagging, error) {
 		}
 		key := *t.Key
 		value := *t.Value
+		if utf8.RuneCountInString(key) > maxTagKeyRunes {
+			return nil, fmt.Errorf("tag[%d] key exceeds %d characters", i, maxTagKeyRunes)
+		}
+		if utf8.RuneCountInString(value) > maxTagValueRunes {
+			return nil, fmt.Errorf("tag[%d] value exceeds %d characters", i, maxTagValueRunes)
+		}
 		out.TagSet = append(out.TagSet, types.Tag{
 			Key:   aws.String(key),
 			Value: aws.String(value),

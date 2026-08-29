@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -17,6 +18,53 @@ import (
 	"github.com/define42/s3gateway/internal/s3http"
 	"github.com/define42/s3gateway/internal/s3xml"
 )
+
+const (
+	maxLifecycleBodyBytes                    = int64(4 * 1024 * 1024)
+	maxLifecycleRules                        = 1000
+	maxLifecycleTransitionsPerRule           = 32
+	maxLifecycleTagsPerAnd                   = 10
+	maxLifecycleRuleIDRunes                  = 255
+	maxLifecyclePrefixRunes                  = 1024
+	maxLifecyclePrefixBytes                  = maxLifecyclePrefixRunes * utf8.UTFMax
+	maxLifecycleTagKeyRunes                  = 128
+	maxLifecycleTagValueRunes                = 256
+	maxLifecycleTagKeyBytes                  = maxLifecycleTagKeyRunes * utf8.UTFMax
+	maxLifecycleTagValueBytes                = maxLifecycleTagValueRunes * utf8.UTFMax
+	maxLifecycleTransitionElements           = maxLifecycleRules * maxLifecycleTransitionsPerRule
+	maxLifecycleNoncurrentTransitionElements = maxLifecycleRules * maxLifecycleTransitionsPerRule
+	maxLifecycleTagElements                  = maxLifecycleRules * (maxLifecycleTagsPerAnd + 1)
+)
+
+var lifecycleDecodeLimits = s3xml.DecodeLimits{
+	MaxBodyBytes:      maxLifecycleBodyBytes,
+	MaxDepth:          16,
+	MaxElements:       100_000,
+	MaxAttributes:     32,
+	MaxAttributeBytes: 2048,
+	ElementLimits: map[string]int{
+		"Rule":                        maxLifecycleRules,
+		"Transition":                  maxLifecycleTransitionElements,
+		"NoncurrentVersionTransition": maxLifecycleNoncurrentTransitionElements,
+		"Tag":                         maxLifecycleTagElements,
+	},
+	FieldByteLimits: map[string]int{
+		"ID":                        maxLifecycleRuleIDRunes * utf8.UTFMax,
+		"Status":                    16,
+		"Prefix":                    maxLifecyclePrefixBytes,
+		"Key":                       maxLifecycleTagKeyBytes,
+		"Value":                     maxLifecycleTagValueBytes,
+		"Date":                      64,
+		"StorageClass":              64,
+		"Days":                      32,
+		"NoncurrentDays":            32,
+		"NewerNoncurrentVersions":   32,
+		"DaysAfterInitiation":       32,
+		"ObjectSizeGreaterThan":     32,
+		"ObjectSizeLessThan":        32,
+		"ExpiredObjectDeleteMarker": 16,
+	},
+}
 
 type lifecycleConfigReqXML struct {
 	XMLName xml.Name           `xml:"LifecycleConfiguration"`
@@ -137,11 +185,25 @@ func decodeLifecycleTag(x *lifecycleTagXML) (*types.Tag, error) {
 	if key == "" {
 		return nil, errors.New("missing lifecycle tag key")
 	}
+	if utf8.RuneCountInString(key) > maxLifecycleTagKeyRunes {
+		return nil, errors.New("lifecycle tag key is too long")
+	}
 	val := strings.TrimSpace(x.Value)
+	if utf8.RuneCountInString(val) > maxLifecycleTagValueRunes {
+		return nil, errors.New("lifecycle tag value is too long")
+	}
 	return &types.Tag{
 		Key:   aws.String(key),
 		Value: aws.String(val),
 	}, nil
+}
+
+func normalizeLifecyclePrefix(raw string) (string, error) {
+	prefix := strings.TrimSpace(raw)
+	if utf8.RuneCountInString(prefix) > maxLifecyclePrefixRunes {
+		return "", errors.New("lifecycle prefix is too long")
+	}
+	return prefix, nil
 }
 
 func encodeLifecycleTag(t *types.Tag) *lifecycleTagXML {
@@ -161,7 +223,11 @@ func decodeLifecycleAnd(x *lifecycleAndXML) (*types.LifecycleRuleAndOperator, er
 	out := &types.LifecycleRuleAndOperator{}
 	var hasPred bool
 	if x.Prefix != nil {
-		out.Prefix = aws.String(strings.TrimSpace(*x.Prefix))
+		prefix, err := normalizeLifecyclePrefix(*x.Prefix)
+		if err != nil {
+			return nil, err
+		}
+		out.Prefix = aws.String(prefix)
 		hasPred = true
 	}
 	if x.ObjectSizeGreaterThan != nil {
@@ -181,6 +247,9 @@ func decodeLifecycleAnd(x *lifecycleAndXML) (*types.LifecycleRuleAndOperator, er
 	if out.ObjectSizeGreaterThan != nil && out.ObjectSizeLessThan != nil &&
 		aws.ToInt64(out.ObjectSizeGreaterThan) >= aws.ToInt64(out.ObjectSizeLessThan) {
 		return nil, errors.New("object size greater-than must be less than object size less-than")
+	}
+	if len(x.Tag) > maxLifecycleTagsPerAnd {
+		return nil, errors.New("too many lifecycle filter tags")
 	}
 	if len(x.Tag) > 0 {
 		out.Tags = make([]types.Tag, 0, len(x.Tag))
@@ -232,7 +301,11 @@ func decodeLifecycleFilter(x *lifecycleFilterXML) (*types.LifecycleRuleFilter, e
 	out := &types.LifecycleRuleFilter{}
 	var topLevelPredicates int
 	if x.Prefix != nil {
-		out.Prefix = aws.String(strings.TrimSpace(*x.Prefix))
+		prefix, err := normalizeLifecyclePrefix(*x.Prefix)
+		if err != nil {
+			return nil, err
+		}
+		out.Prefix = aws.String(prefix)
 		topLevelPredicates++
 	}
 	if x.Tag != nil {
@@ -500,10 +573,10 @@ func encodeLifecycleAbortIncompleteMultipartUpload(a *types.AbortIncompleteMulti
 
 func decodeLifecycleConfigXML(r io.Reader) (*types.BucketLifecycleConfiguration, error) {
 	var in lifecycleConfigReqXML
-	if err := xml.NewDecoder(r).Decode(&in); err != nil {
+	if err := s3xml.DecodeLimited(r, &in, lifecycleDecodeLimits); err != nil {
 		return nil, err
 	}
-	if len(in.Rules) == 0 {
+	if len(in.Rules) == 0 || len(in.Rules) > maxLifecycleRules {
 		return nil, errors.New("missing lifecycle rules")
 	}
 
@@ -522,6 +595,9 @@ func decodeLifecycleConfigXML(r io.Reader) (*types.BucketLifecycleConfiguration,
 		rule := types.LifecycleRule{Status: status}
 		if xr.ID != nil {
 			id := strings.TrimSpace(*xr.ID)
+			if utf8.RuneCountInString(id) > maxLifecycleRuleIDRunes {
+				return nil, fmt.Errorf("rule %d ID is too long", i)
+			}
 			if id != "" {
 				rule.ID = aws.String(id)
 			}
@@ -534,8 +610,12 @@ func decodeLifecycleConfigXML(r io.Reader) (*types.BucketLifecycleConfiguration,
 			return nil, fmt.Errorf("rule %d has invalid filter: %w", i, err)
 		}
 		if xr.Prefix != nil {
+			prefix, err := normalizeLifecyclePrefix(*xr.Prefix)
+			if err != nil {
+				return nil, fmt.Errorf("rule %d has invalid prefix: %w", i, err)
+			}
 			filter = &types.LifecycleRuleFilter{
-				Prefix: aws.String(strings.TrimSpace(*xr.Prefix)),
+				Prefix: aws.String(prefix),
 			}
 		}
 		rule.Filter = filter
@@ -545,6 +625,9 @@ func decodeLifecycleConfigXML(r io.Reader) (*types.BucketLifecycleConfiguration,
 		}
 		rule.Expiration = exp
 
+		if len(xr.Transition) > maxLifecycleTransitionsPerRule {
+			return nil, fmt.Errorf("rule %d has too many transitions", i)
+		}
 		if len(xr.Transition) > 0 {
 			rule.Transitions = make([]types.Transition, 0, len(xr.Transition))
 			for j, xt := range xr.Transition {
@@ -556,6 +639,9 @@ func decodeLifecycleConfigXML(r io.Reader) (*types.BucketLifecycleConfiguration,
 			}
 		}
 
+		if len(xr.NoncurrentVersionTransition) > maxLifecycleTransitionsPerRule {
+			return nil, fmt.Errorf("rule %d has too many noncurrent transitions", i)
+		}
 		if len(xr.NoncurrentVersionTransition) > 0 {
 			rule.NoncurrentVersionTransitions = make([]types.NoncurrentVersionTransition, 0, len(xr.NoncurrentVersionTransition))
 			for j, xt := range xr.NoncurrentVersionTransition {

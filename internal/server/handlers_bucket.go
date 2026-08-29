@@ -205,7 +205,7 @@ func (s *Server) handlePutBucketTagging(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	tagging, err := s3xml.DecodeTagging(r.Body)
+	tagging, err := s3xml.DecodeBucketTagging(r.Body)
 	if err != nil {
 		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid tagging payload")
 		return

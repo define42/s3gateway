@@ -1,12 +1,14 @@
 package server
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/define42/s3gateway/internal/s3xml"
 )
 
 func TestDecodeLifecycleFilterCoverage(t *testing.T) {
@@ -308,4 +310,95 @@ func TestEncodeLifecycleFilterBranches(t *testing.T) {
 			t.Fatalf("encodeLifecycleFilter(objectSizeLessThan) mismatch: %+v", got)
 		}
 	})
+}
+
+func lifecycleRulesDocument(count int) string {
+	return "<LifecycleConfiguration>" +
+		strings.Repeat("<Rule><Status>Enabled</Status></Rule>", count) +
+		"</LifecycleConfiguration>"
+}
+
+func TestDecodeLifecycleConfigLimits(t *testing.T) {
+	var tags strings.Builder
+	for range maxLifecycleTagsPerAnd + 1 {
+		tags.WriteString("<Tag><Key>key</Key><Value>value</Value></Tag>")
+	}
+	tooManyTags := "<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><And>" +
+		tags.String() +
+		"</And></Filter></Rule></LifecycleConfiguration>"
+
+	var transitions strings.Builder
+	for range maxLifecycleTransitionsPerRule + 1 {
+		transitions.WriteString("<Transition><Days>1</Days><StorageClass>GLACIER</StorageClass></Transition>")
+	}
+	tooManyTransitions := "<LifecycleConfiguration><Rule><Status>Enabled</Status>" +
+		transitions.String() +
+		"</Rule></LifecycleConfiguration>"
+
+	tests := []struct {
+		name      string
+		body      string
+		wantErr   error
+		anyError  bool
+		wantRules int
+	}{
+		{
+			name:      "accepts one thousand rules",
+			body:      lifecycleRulesDocument(maxLifecycleRules),
+			wantRules: maxLifecycleRules,
+		},
+		{
+			name:    "rejects rule one thousand and one",
+			body:    lifecycleRulesDocument(maxLifecycleRules + 1),
+			wantErr: s3xml.ErrXMLElementLimit,
+		},
+		{
+			name:    "rejects oversized prefix field",
+			body:    "<LifecycleConfiguration><Rule><Status>Enabled</Status><Prefix>" + strings.Repeat("p", maxLifecyclePrefixBytes+1) + "</Prefix></Rule></LifecycleConfiguration>",
+			wantErr: s3xml.ErrXMLFieldTooLong,
+		},
+		{
+			name:     "rejects prefix character limit",
+			body:     "<LifecycleConfiguration><Rule><Status>Enabled</Status><Prefix>" + strings.Repeat("p", maxLifecyclePrefixRunes+1) + "</Prefix></Rule></LifecycleConfiguration>",
+			anyError: true,
+		},
+		{
+			name:     "rejects oversized rule ID",
+			body:     "<LifecycleConfiguration><Rule><ID>" + strings.Repeat("i", maxLifecycleRuleIDRunes+1) + "</ID><Status>Enabled</Status></Rule></LifecycleConfiguration>",
+			anyError: true,
+		},
+		{
+			name:     "rejects excess tags in And filter",
+			body:     tooManyTags,
+			anyError: true,
+		},
+		{
+			name:     "rejects excess transitions in one rule",
+			body:     tooManyTransitions,
+			anyError: true,
+		},
+		{
+			name:    "rejects oversized body",
+			body:    "<LifecycleConfiguration>" + strings.Repeat(" ", int(maxLifecycleBodyBytes)) + "</LifecycleConfiguration>",
+			wantErr: s3xml.ErrXMLBodyTooLarge,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := decodeLifecycleConfigXML(strings.NewReader(tc.body))
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Fatalf("decodeLifecycleConfigXML() error = %v, want %v", err, tc.wantErr)
+			}
+			if tc.anyError && err == nil {
+				t.Fatalf("decodeLifecycleConfigXML() expected an error")
+			}
+			if tc.wantErr == nil && !tc.anyError && err != nil {
+				t.Fatalf("decodeLifecycleConfigXML() error = %v", err)
+			}
+			if err == nil && len(cfg.Rules) != tc.wantRules {
+				t.Fatalf("decodeLifecycleConfigXML() returned %d rules, want %d", len(cfg.Rules), tc.wantRules)
+			}
+		})
+	}
 }
