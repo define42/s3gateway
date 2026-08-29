@@ -348,6 +348,10 @@ const (
 	maxChunkHeaderLineBytes = 4 * 1024
 	maxTrailerLineBytes     = 16 * 1024
 	maxTrailerLines         = 32
+	// Signed chunks must be buffered until their signatures are verified. Keep
+	// that attacker-controlled allocation bounded; AWS SDKs normally use much
+	// smaller chunks (typically tens of KiB).
+	maxSignedChunkBytes int64 = 16 * 1024 * 1024
 )
 
 var (
@@ -357,6 +361,9 @@ var (
 	// ErrInvalidDecodedContentLength indicates that the decoded content length
 	// is not a non-negative base-10 integer.
 	ErrInvalidDecodedContentLength = errors.New("invalid x-amz-decoded-content-length")
+	// ErrDecodedContentLengthMismatch indicates that aws-chunked frame sizes do
+	// not exactly match x-amz-decoded-content-length.
+	ErrDecodedContentLengthMismatch = errors.New("aws-chunked decoded content length mismatch")
 	// ErrContentLengthRequired indicates that a non-streaming write has unknown
 	// content length.
 	ErrContentLengthRequired = errors.New("content length required")
@@ -429,14 +436,25 @@ func NewAWSChunkSignatureVerifier(auth *Auth, secret string) *AWSChunkSignatureV
 }
 
 func (v *AWSChunkSignatureVerifier) verifyChunk(signatureHex string, chunk []byte) error {
+	sig, err := normalizeChunkSignature(signatureHex)
+	if err != nil {
+		return err
+	}
+	return v.verifyNormalizedChunk(sig, chunk)
+}
+
+func normalizeChunkSignature(signatureHex string) (string, error) {
 	sig := strings.ToLower(strings.TrimSpace(signatureHex))
 	if len(sig) != 64 {
-		return fmt.Errorf("%w: invalid signature length", ErrInvalidChunkSignature)
+		return "", fmt.Errorf("%w: invalid signature length", ErrInvalidChunkSignature)
 	}
 	if _, err := hex.DecodeString(sig); err != nil {
-		return fmt.Errorf("%w: invalid signature encoding", ErrInvalidChunkSignature)
+		return "", fmt.Errorf("%w: invalid signature encoding", ErrInvalidChunkSignature)
 	}
+	return sig, nil
+}
 
+func (v *AWSChunkSignatureVerifier) verifyNormalizedChunk(sig string, chunk []byte) error {
 	emptyHash := sha256.Sum256(nil)
 	chunkHash := sha256.Sum256(chunk)
 	stringToSign := strings.Join([]string{
@@ -616,6 +634,7 @@ func IsChunkSignatureValidationError(err error) bool {
 	return errors.Is(err, ErrInvalidChunkSignature) ||
 		errors.Is(err, ErrMissingChunkSignature) ||
 		errors.Is(err, ErrInvalidChunkHeader) ||
+		errors.Is(err, ErrDecodedContentLengthMismatch) ||
 		errors.Is(err, ErrMissingTrailerSignature) ||
 		errors.Is(err, ErrInvalidTrailer)
 }
@@ -723,6 +742,10 @@ type awsChunkedReader struct {
 	// checksums are running hashes of the decoded payload, verified against
 	// the trailing x-amz-checksum-* header(s) in the trailer modes.
 	checksums []trailerChecksum
+	// decodedBytes is compared with the declared decoded length before each
+	// chunk is accepted and again when the final zero-length chunk arrives.
+	expectedDecodedBytes int64
+	decodedBytes         int64
 
 	// Signed chunks are buffered so their signature is verified before any
 	// byte is handed out.
@@ -739,8 +762,14 @@ type awsChunkedReader struct {
 	err error
 }
 
-func newAWSChunkedReader(r io.Reader, verifier *AWSChunkSignatureVerifier, signedTrailer bool, checksums []trailerChecksum) *awsChunkedReader {
-	return &awsChunkedReader{br: bufio.NewReader(r), verifier: verifier, signedTrailer: signedTrailer, checksums: checksums}
+func newAWSChunkedReader(r io.Reader, verifier *AWSChunkSignatureVerifier, signedTrailer bool, checksums []trailerChecksum, decodedLen int64) *awsChunkedReader {
+	return &awsChunkedReader{
+		br:                   bufio.NewReader(r),
+		verifier:             verifier,
+		signedTrailer:        signedTrailer,
+		checksums:            checksums,
+		expectedDecodedBytes: decodedLen,
+	}
 }
 
 func (r *awsChunkedReader) Read(p []byte) (int, error) {
@@ -774,6 +803,7 @@ func (r *awsChunkedReader) read(p []byte) (int, error) {
 			n, err := r.br.Read(p[:limit])
 			if n > 0 {
 				r.remaining -= int64(n)
+				r.decodedBytes += int64(n)
 				r.hashPayload(p[:n])
 				return n, nil
 			}
@@ -824,11 +854,20 @@ func (r *awsChunkedReader) beginChunk() error {
 				return err
 			}
 		}
+		if r.decodedBytes != r.expectedDecodedBytes {
+			return fmt.Errorf("%w: got %d bytes, expected %d", ErrDecodedContentLengthMismatch, r.decodedBytes, r.expectedDecodedBytes)
+		}
 		if err := r.finishTrailers(); err != nil {
 			return err
 		}
 		r.done = true
 		return nil
+	}
+	if r.verifier != nil && n > maxSignedChunkBytes {
+		return fmt.Errorf("%w: signed chunk exceeds %d-byte limit", ErrInvalidChunkHeader, maxSignedChunkBytes)
+	}
+	if r.decodedBytes > r.expectedDecodedBytes || n > r.expectedDecodedBytes-r.decodedBytes {
+		return fmt.Errorf("%w: chunk of %d bytes exceeds %d remaining bytes", ErrDecodedContentLengthMismatch, n, r.expectedDecodedBytes-r.decodedBytes)
 	}
 
 	if r.verifier == nil {
@@ -838,8 +877,12 @@ func (r *awsChunkedReader) beginChunk() error {
 		return nil
 	}
 
-	if n > int64(^uint(0)>>1) {
-		return fmt.Errorf("%w: chunk too large", ErrInvalidChunkHeader)
+	if sig == "" {
+		return ErrMissingChunkSignature
+	}
+	normalizedSig, err := normalizeChunkSignature(sig)
+	if err != nil {
+		return err
 	}
 	chunk := make([]byte, int(n))
 	if _, err := io.ReadFull(r.br, chunk); err != nil {
@@ -849,12 +892,10 @@ func (r *awsChunkedReader) beginChunk() error {
 		return err
 	}
 
-	if sig == "" {
-		return ErrMissingChunkSignature
-	}
-	if err := r.verifier.verifyChunk(sig, chunk); err != nil {
+	if err := r.verifier.verifyNormalizedChunk(normalizedSig, chunk); err != nil {
 		return err
 	}
+	r.decodedBytes += n
 	r.hashPayload(chunk)
 
 	r.buf = chunk
@@ -1068,7 +1109,7 @@ func DecodeBodyForS3Write(r *http.Request, verifier *AWSChunkSignatureVerifier) 
 		if err != nil {
 			return nil, 0, err
 		}
-		reader := newAWSChunkedReader(r.Body, verifier, signedTrailer, checksums)
+		reader := newAWSChunkedReader(r.Body, verifier, signedTrailer, checksums, decodedLen)
 		rc := &awsChunkedReadCloser{
 			reader: reader,
 			guard:  trailerGuardReader{r: reader},

@@ -390,6 +390,52 @@ func TestDecodeChunkHeaderLineTooLong(t *testing.T) {
 	}
 }
 
+func TestDecodeSignedPayloadSizeBounds(t *testing.T) {
+	auth := newTestAuth()
+	payload := []byte("abc")
+	chunkSig := signTestChunk(auth, strings.ToLower(auth.SignatureHex), payload)
+	finalSig := signTestChunk(auth, chunkSig, nil)
+
+	tests := []struct {
+		name       string
+		body       string
+		decodedLen string
+		wantErr    error
+	}{
+		{
+			name:       "individual chunk exceeds allocation limit",
+			body:       fmt.Sprintf("%x;chunk-signature=%s\r\n", int64(1)<<40, strings.Repeat("0", 64)),
+			decodedLen: fmt.Sprintf("%d", int64(1)<<40),
+			wantErr:    sigv4.ErrInvalidChunkHeader,
+		},
+		{
+			name: "cumulative chunks exceed declared length",
+			body: fmt.Sprintf("%x;chunk-signature=%s\r\n%s\r\n", len(payload), chunkSig, payload) +
+				"3;chunk-signature=" + strings.Repeat("0", 64) + "\r\n",
+			decodedLen: "5",
+			wantErr:    sigv4.ErrDecodedContentLengthMismatch,
+		},
+		{
+			name: "final count is shorter than declared length",
+			body: fmt.Sprintf("%x;chunk-signature=%s\r\n%s\r\n", len(payload), chunkSig, payload) +
+				"0;chunk-signature=" + finalSig + "\r\n\r\n",
+			decodedLen: "4",
+			wantErr:    sigv4.ErrDecodedContentLengthMismatch,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := newStreamingRequest(sigv4.StreamingSignedPayload, tc.body, 0)
+			req.Header.Set("x-amz-decoded-content-length", tc.decodedLen)
+			_, err := decodeAll(t, req, sigv4.NewAWSChunkSignatureVerifier(auth, testSecret))
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("expected %v, got: %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 func TestDecodeUnsignedPayloadTrailerTruncatedChunk(t *testing.T) {
 	body := "b\r\nhello" // claims 11 bytes, delivers 5, then EOF
 	req := newStreamingRequest(sigv4.StreamingUnsignedPayloadTrailer, body, 11)
