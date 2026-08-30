@@ -129,6 +129,33 @@
       text-decoration-thickness: 0.08em;
       text-underline-offset: 0.16em;
     }
+    a:focus-visible, button:focus-visible {
+      outline: 3px solid var(--accent-2);
+      outline-offset: 3px;
+    }
+    .top-nav {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+    }
+    .top-nav a {
+      display: inline-flex;
+      min-height: 44px;
+      align-items: center;
+      border: 1px solid var(--panel-border);
+      border-radius: 999px;
+      padding: 0.55rem 0.9rem;
+      background: rgba(7, 13, 28, 0.58);
+      color: var(--text);
+      font-weight: 650;
+      text-decoration: none;
+    }
+    .top-nav a:hover { border-color: rgba(109, 245, 200, 0.55); }
+    .top-nav a[aria-current="page"] {
+      color: #04101f;
+      border-color: transparent;
+      background: linear-gradient(110deg, var(--accent) 0%, var(--accent-2) 100%);
+    }
     .table-wrap {
       overflow-x: auto;
       border: 1px solid var(--panel-border);
@@ -219,6 +246,20 @@
       th, td {
         min-width: 180px;
       }
+      .top-nav {
+        width: 100%;
+      }
+      .top-nav a {
+        flex: 1 1 auto;
+        justify-content: center;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
     }
     @keyframes panel-in {
       from {
@@ -240,7 +281,13 @@
   <main>
     <section class="panel">
       <div class="topline">
-        <p><a href="/admin">Back to admin</a></p>
+        <nav class="top-nav" aria-label="Admin navigation">
+          <a href="/admin" aria-current="page">Buckets</a>
+          <a href="/admin/kafka-topics">Kafka topics</a>
+        </nav>
+        <form class="inline" method="post" action="/logout">
+          <button class="btn small" type="submit">Log out</button>
+        </form>
       </div>
       <h1>Bucket: <code>{{.BucketName}}</code></h1>
       <p>Signed in as <strong>{{.Username}}</strong></p>

@@ -138,6 +138,7 @@ func TestIsAdminRoute(t *testing.T) {
 		{path: "/", want: true},
 		{path: "/login", want: true},
 		{path: "/admin", want: true},
+		{path: "/admin/kafka-topics", want: true},
 		{path: "/admin/create-bucket", want: true},
 		{path: "/admin/bucket", want: true},
 		{path: "/admin/bucket/download", want: true},
@@ -349,6 +350,9 @@ func TestAdminDashboardWithSessionRendersGroupsAndBuckets(t *testing.T) {
 	}
 	if !strings.Contains(body, "/admin/bucket?name=team2-logs") {
 		t.Fatalf("missing bucket link for readable bucket in admin page: %q", body)
+	}
+	if !strings.Contains(body, `href="/admin/kafka-topics"`) {
+		t.Fatalf("missing Kafka topics navigation link in admin page: %q", body)
 	}
 	if !strings.Contains(body, "Read permission required to list objects.") {
 		t.Fatalf("missing no-read-permission message in admin page: %q", body)
@@ -620,6 +624,9 @@ func TestAdminBucketPagePagination(t *testing.T) {
 	}
 	if !strings.Contains(page1Body, "cursor=tok2") {
 		t.Fatalf("missing next cursor on page1: %q", page1Body)
+	}
+	if !strings.Contains(page1Body, `href="/admin/kafka-topics"`) {
+		t.Fatalf("missing Kafka topics navigation link in bucket page: %q", page1Body)
 	}
 
 	page2URL := adminBucketPageURL("team2-logs", "tok2", []string{""})

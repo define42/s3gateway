@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kafka Topics · S3 Gateway Admin</title>
+  <style>
+    :root {
+      --bg-0: #05070d;
+      --bg-1: #0d1323;
+      --bg-2: #101a33;
+      --panel: rgba(16, 24, 46, 0.78);
+      --panel-border: rgba(112, 153, 255, 0.24);
+      --text: #e7ecf8;
+      --muted: #9eb2ce;
+      --accent: #3ab8ff;
+      --accent-2: #6df5c8;
+      --error: #ff8ea5;
+      --table-header: rgba(34, 52, 90, 0.78);
+      --row-alt: rgba(12, 20, 40, 0.45);
+      --link: #9fd9ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Sora", "IBM Plex Sans", "Avenir Next", "Trebuchet MS", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 500px at 8% -10%, rgba(58, 184, 255, 0.28), transparent 72%),
+        radial-gradient(1000px 440px at 92% 2%, rgba(109, 245, 200, 0.16), transparent 72%),
+        linear-gradient(165deg, var(--bg-0) 0%, var(--bg-1) 46%, var(--bg-2) 100%);
+      position: relative;
+      overflow-x: hidden;
+    }
+    body::before, body::after {
+      content: "";
+      position: fixed;
+      z-index: -1;
+      border-radius: 999px;
+      filter: blur(56px);
+      opacity: 0.7;
+      pointer-events: none;
+    }
+    body::before {
+      width: 290px;
+      height: 290px;
+      background: rgba(58, 184, 255, 0.32);
+      top: 12%;
+      right: 4%;
+      animation: float-orb 9s ease-in-out infinite;
+    }
+    body::after {
+      width: 220px;
+      height: 220px;
+      background: rgba(109, 245, 200, 0.2);
+      bottom: 8%;
+      left: 4%;
+      animation: float-orb 10s ease-in-out infinite reverse;
+    }
+    .skip-link {
+      position: absolute;
+      left: 1rem;
+      top: -5rem;
+      z-index: 10;
+      border-radius: 8px;
+      padding: 0.65rem 0.9rem;
+      color: #04101f;
+      background: var(--accent-2);
+    }
+    .skip-link:focus { top: 1rem; }
+    main {
+      width: min(95vw, 1180px);
+      margin: 2rem auto;
+      padding: 0 1rem 2rem;
+      display: grid;
+      gap: 1rem;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--panel-border);
+      border-radius: 16px;
+      padding: 1.25rem;
+      box-shadow:
+        0 24px 80px rgba(2, 8, 22, 0.64),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      backdrop-filter: blur(12px);
+      animation: panel-in 220ms ease-out;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    h1, h2 { margin-top: 0; margin-bottom: 0.5rem; }
+    p { margin: 0.5rem 0; }
+    a {
+      color: var(--link);
+      text-decoration-thickness: 0.08em;
+      text-underline-offset: 0.16em;
+    }
+    a:focus-visible, button:focus-visible {
+      outline: 3px solid var(--accent-2);
+      outline-offset: 3px;
+    }
+    .muted { color: var(--muted); }
+    .error {
+      margin-top: 0.9rem;
+      border: 1px solid rgba(255, 142, 165, 0.38);
+      border-radius: 10px;
+      padding: 0.75rem 0.9rem;
+      color: var(--error);
+      background: rgba(77, 17, 36, 0.34);
+      font-weight: 600;
+    }
+    .top-nav {
+      display: flex;
+      gap: 0.4rem;
+      flex-wrap: wrap;
+      margin-top: 1rem;
+    }
+    .top-nav a {
+      display: inline-flex;
+      min-height: 44px;
+      align-items: center;
+      border: 1px solid var(--panel-border);
+      border-radius: 999px;
+      padding: 0.55rem 0.9rem;
+      background: rgba(7, 13, 28, 0.58);
+      color: var(--text);
+      font-weight: 650;
+      text-decoration: none;
+    }
+    .top-nav a:hover { border-color: rgba(109, 245, 200, 0.55); }
+    .top-nav a[aria-current="page"] {
+      color: #04101f;
+      border-color: transparent;
+      background: linear-gradient(110deg, var(--accent) 0%, var(--accent-2) 100%);
+    }
+    .logout-form { margin: 0; }
+    button, .refresh {
+      display: inline-flex;
+      min-height: 44px;
+      align-items: center;
+      border: 0;
+      border-radius: 999px;
+      padding: 0.66rem 1.08rem;
+      font-size: 0.95rem;
+      font-weight: 650;
+      color: #04101f;
+      background: linear-gradient(110deg, var(--accent) 0%, var(--accent-2) 100%);
+      cursor: pointer;
+      text-decoration: none;
+      box-shadow: 0 8px 28px rgba(58, 184, 255, 0.26);
+    }
+    .summary-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      margin-top: 0.9rem;
+    }
+    .summaries {
+      display: flex;
+      gap: 0.45rem;
+      flex-wrap: wrap;
+    }
+    .summary {
+      display: inline-block;
+      border: 1px solid var(--panel-border);
+      border-radius: 999px;
+      padding: 0.32rem 0.72rem;
+      background: rgba(9, 16, 34, 0.7);
+      color: #c5d7f4;
+      font-size: 0.92rem;
+    }
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      margin-top: 0.9rem;
+      background: rgba(7, 13, 28, 0.58);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    caption {
+      padding: 0.75rem;
+      color: var(--muted);
+      text-align: left;
+    }
+    th, td {
+      border: 1px solid rgba(120, 156, 238, 0.17);
+      padding: 0.75rem;
+      text-align: left;
+      vertical-align: middle;
+    }
+    th {
+      background: var(--table-header);
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    tbody tr:nth-child(even) { background: var(--row-alt); }
+    code {
+      border: 1px solid rgba(120, 156, 238, 0.22);
+      border-radius: 6px;
+      padding: 0.08rem 0.3rem;
+      color: #d7e4ff;
+      background: rgba(124, 155, 232, 0.16);
+    }
+    .badge {
+      display: inline-block;
+      border: 1px solid rgba(109, 245, 200, 0.28);
+      border-radius: 999px;
+      padding: 0.24rem 0.54rem;
+      color: #cbfff0;
+      background: linear-gradient(120deg, rgba(58, 184, 255, 0.26), rgba(109, 245, 200, 0.22));
+      font-size: 0.82rem;
+      white-space: nowrap;
+    }
+    .badge.warning {
+      border-color: rgba(255, 142, 165, 0.38);
+      color: #ffd3dc;
+      background: rgba(77, 17, 36, 0.4);
+    }
+    @media (max-width: 700px) {
+      main { margin-top: 1rem; }
+      .panel { border-radius: 14px; padding: 1rem; }
+      .top-nav a { flex: 1 1 auto; justify-content: center; }
+      th, td { min-width: 145px; }
+      th:first-child, td:first-child { min-width: 230px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+    @keyframes panel-in {
+      from { opacity: 0; transform: translateY(9px) scale(0.99); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes float-orb {
+      0%, 100% { transform: translateY(0) translateX(0); }
+      50% { transform: translateY(-10px) translateX(4px); }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <main id="main-content">
+    <section class="panel">
+      <div class="header">
+        <div>
+          <h1>Kafka Topics</h1>
+          <p>Signed in as <strong>{{.Username}}</strong></p>
+          <p class="muted">Generated: {{.GeneratedAt}}</p>
+        </div>
+        <form class="logout-form" method="post" action="/logout">
+          <button type="submit">Log out</button>
+        </form>
+      </div>
+
+      <nav class="top-nav" aria-label="Admin navigation">
+        <a href="/admin">Buckets</a>
+        <a href="/admin/kafka-topics" aria-current="page">Kafka topics</a>
+      </nav>
+
+      <div class="summary-row">
+        <div class="summaries">
+          <span class="summary"><strong>Topics:</strong> {{.TotalTopics}}</span>
+          <span class="summary"><strong>Known elements:</strong> {{.KnownElements}}</span>
+          {{if .UnavailableTopics}}
+          <span class="summary"><strong>Unavailable:</strong> {{.UnavailableTopics}}</span>
+          {{end}}
+        </div>
+        <a class="refresh" href="/admin/kafka-topics">Refresh</a>
+      </div>
+
+      {{if .Error}}
+      <p class="error" role="alert">{{.Error}}</p>
+      {{end}}
+      <p class="muted">Element counts are calculated from each partition's current start and end offsets.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="topic-list-heading">
+      <h2 id="topic-list-heading">Topic inventory</h2>
+      {{if .Topics}}
+      <div class="table-wrap">
+        <table>
+          <caption>Kafka topics and their current retained offset spans.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Topic</th>
+              <th scope="col">Type</th>
+              <th scope="col">Partitions</th>
+              <th scope="col">Elements</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Topics}}
+            <tr>
+              <td><code>{{.Name}}</code></td>
+              <td>
+                {{if .IsInternal}}
+                <span class="badge">Internal</span>
+                {{else}}
+                <span class="badge">Application</span>
+                {{end}}
+              </td>
+              <td><code>{{.Partitions}}</code></td>
+              <td>
+                {{if .HasUnavailableData}}
+                <span class="badge warning">Unavailable</span>
+                {{else}}
+                <code>{{.Elements}}</code>
+                {{end}}
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else if not .Error}}
+      <p class="muted">No Kafka topics found.</p>
+      {{end}}
+    </section>
+  </main>
+</body>
+</html>

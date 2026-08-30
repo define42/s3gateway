@@ -11,6 +11,7 @@ import (
 	"github.com/define42/s3gateway/internal/adminpage"
 	"github.com/define42/s3gateway/internal/config"
 	"github.com/define42/s3gateway/internal/kafkapop"
+	"github.com/define42/s3gateway/internal/kafkatopic"
 	"github.com/define42/s3gateway/internal/server"
 	"github.com/define42/s3gateway/internal/uploadnotify"
 	"github.com/define42/s3gateway/internal/upstream"
@@ -33,6 +34,7 @@ func boot(cfg config.Config) (*http.Server, func(), error) {
 	}
 
 	var serverOptions []server.Option
+	var adminOptions []adminpage.Option
 	var cleanupFunctions []func()
 	cleanup := sync.OnceFunc(func() {
 		for _, cleanupFunction := range slices.Backward(cleanupFunctions) {
@@ -51,6 +53,15 @@ func boot(cfg config.Config) (*http.Server, func(), error) {
 		}
 		cleanupFunctions = append(cleanupFunctions, publisher.Close)
 		serverOptions = append(serverOptions, server.WithUploadNotifier(publisher))
+		adminOptions = append(adminOptions, adminpage.WithUploadNotifier(publisher))
+
+		topicLister, err := kafkatopic.New(cfg.KafkaBrokers, cfg.KafkaNotificationTimeout)
+		if err != nil {
+			cleanup()
+			return nil, cleanup, fmt.Errorf("init kafka topic lister: %w", err)
+		}
+		cleanupFunctions = append(cleanupFunctions, topicLister.Close)
+		adminOptions = append(adminOptions, adminpage.WithKafkaTopicLister(topicLister))
 
 		popManager, err := kafkapop.New(kafkapop.Options{
 			Brokers:      cfg.KafkaBrokers,
@@ -72,6 +83,7 @@ func boot(cfg config.Config) (*http.Server, func(), error) {
 		cfg.GroupCacheMaxEntries,
 		cfg.RequiredUploadMetadataKeys,
 		gateway.GroupsForCredentialsContext,
+		adminOptions...,
 	)
 	httpServer := server.NewHTTPServer(
 		cfg,

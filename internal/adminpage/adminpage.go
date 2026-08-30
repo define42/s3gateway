@@ -32,6 +32,8 @@ import (
 	"github.com/define42/s3gateway/internal/authn"
 	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/define42/s3gateway/internal/config"
+	"github.com/define42/s3gateway/internal/kafkatopic"
+	"github.com/define42/s3gateway/internal/uploadnotify"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 )
@@ -86,7 +88,7 @@ func normalizeAdminRoutePath(path string) string {
 // interface. It ignores trailing slashes on non-root paths.
 func IsAdminRoute(path string) bool {
 	switch normalizeAdminRoutePath(path) {
-	case "/", "/login", "/admin", "/admin/create-bucket", "/admin/bucket", "/admin/bucket/download", "/admin/bucket/upload", "/admin/bucket/delete", "/logout":
+	case "/", "/login", "/admin", "/admin/kafka-topics", "/admin/create-bucket", "/admin/bucket", "/admin/bucket/download", "/admin/bucket/upload", "/admin/bucket/delete", "/logout":
 		return true
 	default:
 		return false
@@ -1732,11 +1734,19 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 					redirectToBucket("", "Could not upload object.")
 					return
 				}
+				h.notifyUpload(r, uploadnotify.Event{
+					EventName: uploadnotify.EventObjectCreatedPut,
+					Bucket:    bucket,
+					Key:       finalKey,
+					ETag:      strings.Trim(aws.ToString(putOut.ETag), `"`),
+					VersionID: aws.ToString(putOut.VersionId),
+					Uploader:  strings.TrimSpace(session.Username),
+				})
 				redirectToBucket("Uploaded object: "+finalKey, "")
 				return
 			}
 
-			_, err = h.s3.CompleteMultipartUpload(r.Context(), &s3.CompleteMultipartUploadInput{
+			completeOut, err := h.s3.CompleteMultipartUpload(r.Context(), &s3.CompleteMultipartUploadInput{
 				Bucket:   &bucket,
 				Key:      &finalKey,
 				UploadId: &uploadID,
@@ -1744,12 +1754,21 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 					Parts: completedParts,
 				},
 			})
-			if err != nil {
+			if err != nil || completeOut == nil {
 				redirectToBucket("", "Could not upload object.")
 				return
 			}
 
 			completed = true
+			h.notifyUpload(r, uploadnotify.Event{
+				EventName: uploadnotify.EventObjectCreatedCompleteMultipartUpload,
+				Bucket:    bucket,
+				Key:       finalKey,
+				ETag:      strings.Trim(aws.ToString(completeOut.ETag), `"`),
+				VersionID: aws.ToString(completeOut.VersionId),
+				UploadID:  uploadID,
+				Uploader:  strings.TrimSpace(session.Username),
+			})
 			redirectToBucket("Uploaded object: "+finalKey, "")
 			return
 		default:
@@ -1848,12 +1867,74 @@ func (h *handler) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
+// UploadNotifier receives successful browser-upload events.
+type UploadNotifier interface {
+	Notify(context.Context, uploadnotify.Event) error
+}
+
+// KafkaTopicLister returns Kafka topic statistics for the admin interface.
+type KafkaTopicLister interface {
+	List(context.Context) ([]kafkatopic.Topic, error)
+}
+
+// Option configures the admin HTTP handler.
+type Option func(*handler)
+
+// WithUploadNotifier publishes successful browser uploads through notifier.
+func WithUploadNotifier(notifier UploadNotifier) Option {
+	return func(h *handler) {
+		h.uploadNotifier = notifier
+	}
+}
+
+// WithKafkaTopicLister enables the Kafka topics admin page.
+func WithKafkaTopicLister(lister KafkaTopicLister) Option {
+	return func(h *handler) {
+		h.kafkaTopicLister = lister
+	}
+}
+
 type handler struct {
 	s3                         *s3.Client
 	webSessions                *AdminGorillaStore
 	authenticate               func(upn, pass string) (map[string]struct{}, error)
 	authenticateContext        func(context.Context, string, string) (map[string]struct{}, error)
 	requiredUploadMetadataKeys []string // normalized (lowercase, no x-amz-meta- prefix) keys required on uploads
+	uploadNotifier             UploadNotifier
+	kafkaTopicLister           KafkaTopicLister
+}
+
+func (h *handler) notifyUpload(r *http.Request, event uploadnotify.Event) {
+	if h == nil || h.uploadNotifier == nil {
+		return
+	}
+
+	event.SchemaVersion = uploadnotify.SchemaVersion
+	event.OccurredAt = time.Now().UTC()
+
+	ctx := context.Background()
+	if r != nil {
+		ctx = context.WithoutCancel(r.Context())
+	}
+	if err := h.uploadNotifier.Notify(ctx, event); err != nil {
+		slog.WarnContext(
+			ctx,
+			"failed to publish admin upload notification",
+			"error", err,
+			"event_name", event.EventName,
+			"bucket", event.Bucket,
+			"key", event.Key,
+		)
+	}
+}
+
+func applyOptions(h *handler, options ...Option) *handler {
+	for _, option := range options {
+		if option != nil {
+			option(h)
+		}
+	}
+	return h
 }
 
 // missingRequiredMetadata returns the required keys absent from meta (in the
@@ -1887,6 +1968,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleAdminLogin(w, r)
 	case "/admin":
 		h.handleAdminDashboard(w, r)
+	case "/admin/kafka-topics":
+		h.handleAdminKafkaTopics(w, r)
 	case "/admin/create-bucket":
 		h.handleAdminCreateBucket(w, r)
 	case "/admin/bucket":
@@ -1906,40 +1989,40 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // NewHandler constructs the admin HTTP handler with an in-memory session
 // backend. requiredUploadMetadataKeys are enforced by the upload form.
-func NewHandler(s3Client *s3.Client, cookieSecret string, maxSessions int, requiredUploadMetadataKeys []string, authenticate func(upn, pass string) (map[string]struct{}, error)) http.Handler {
+func NewHandler(s3Client *s3.Client, cookieSecret string, maxSessions int, requiredUploadMetadataKeys []string, authenticate func(upn, pass string) (map[string]struct{}, error), options ...Option) http.Handler {
 	sessions := NewAdminSessionStore(defaultAdminSessionTTL, maxSessions)
 	webSessions := NewAdminGorillaStore(cookieSecret, defaultAdminSessionTTL, sessions)
-	return &handler{
+	return applyOptions(&handler{
 		s3:                         s3Client,
 		webSessions:                webSessions,
 		authenticate:               authenticate,
 		requiredUploadMetadataKeys: requiredUploadMetadataKeys,
-	}
+	}, options...)
 }
 
 // NewHandlerWithContext constructs the admin handler with a request-aware
 // authentication callback. The request context carries ingress attribution to
 // layered authentication controls.
-func NewHandlerWithContext(s3Client *s3.Client, cookieSecret string, maxSessions int, requiredUploadMetadataKeys []string, authenticate func(context.Context, string, string) (map[string]struct{}, error)) http.Handler {
+func NewHandlerWithContext(s3Client *s3.Client, cookieSecret string, maxSessions int, requiredUploadMetadataKeys []string, authenticate func(context.Context, string, string) (map[string]struct{}, error), options ...Option) http.Handler {
 	sessions := NewAdminSessionStore(defaultAdminSessionTTL, maxSessions)
 	webSessions := NewAdminGorillaStore(cookieSecret, defaultAdminSessionTTL, sessions)
-	return &handler{
+	return applyOptions(&handler{
 		s3:                         s3Client,
 		webSessions:                webSessions,
 		authenticateContext:        authenticate,
 		requiredUploadMetadataKeys: requiredUploadMetadataKeys,
-	}
+	}, options...)
 }
 
 // NewHandlerWithSessions constructs the admin HTTP handler with a caller-owned
 // session store. It is intended for callers that need to control session
 // lifetime or persistence.
-func NewHandlerWithSessions(s3Client *s3.Client, webSessions *AdminGorillaStore, authenticate func(upn, pass string) (map[string]struct{}, error)) http.Handler {
-	return &handler{
+func NewHandlerWithSessions(s3Client *s3.Client, webSessions *AdminGorillaStore, authenticate func(upn, pass string) (map[string]struct{}, error), options ...Option) http.Handler {
+	return applyOptions(&handler{
 		s3:           s3Client,
 		webSessions:  webSessions,
 		authenticate: authenticate,
-	}
+	}, options...)
 }
 
 func (h *handler) authenticateCredentials(ctx context.Context, upn, pass string) (map[string]struct{}, error) {
@@ -1953,10 +2036,11 @@ func (h *handler) authenticateCredentials(ctx context.Context, upn, pass string)
 }
 
 var (
-	//go:embed webtemplate/admin-login.html webtemplate/admin-dashboard.html webtemplate/admin-bucket.html
+	//go:embed webtemplate/admin-login.html webtemplate/admin-dashboard.html webtemplate/admin-bucket.html webtemplate/admin-kafka-topics.html
 	adminWebTemplatesFS embed.FS
 
-	adminLoginTmpl     = template.Must(template.ParseFS(adminWebTemplatesFS, "webtemplate/admin-login.html"))
-	adminDashboardTmpl = template.Must(template.ParseFS(adminWebTemplatesFS, "webtemplate/admin-dashboard.html"))
-	adminBucketTmpl    = template.Must(template.ParseFS(adminWebTemplatesFS, "webtemplate/admin-bucket.html"))
+	adminLoginTmpl       = template.Must(template.ParseFS(adminWebTemplatesFS, "webtemplate/admin-login.html"))
+	adminDashboardTmpl   = template.Must(template.ParseFS(adminWebTemplatesFS, "webtemplate/admin-dashboard.html"))
+	adminBucketTmpl      = template.Must(template.ParseFS(adminWebTemplatesFS, "webtemplate/admin-bucket.html"))
+	adminKafkaTopicsTmpl = template.Must(template.ParseFS(adminWebTemplatesFS, "webtemplate/admin-kafka-topics.html"))
 )

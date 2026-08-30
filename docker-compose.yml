@@ -16,6 +16,30 @@ services:
     volumes:
       - ./testldap/gateway-config.cfg:/app/config/config.cfg:ro
 
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v25.2.4
+    command:
+      - redpanda
+      - start
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+      - --rpc-addr=redpanda:33145
+      - --advertise-rpc-addr=redpanda:33145
+      - --mode=dev-container
+      - --smp=1
+      - --default-log-level=info
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "info", "-X", "brokers=localhost:9092"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 5s
+    ports:
+      - "19092:19092"
+      - "9644:9644"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+
   s3gateway:
     build:
       context: .
@@ -30,16 +54,24 @@ services:
       S3_SECRET_KEY: minioadmin
       S3_FORCE_PATH_STYLE: "true"
       S3GATEWAY_PRIVATE_X25519_KEY: ${S3GATEWAY_PRIVATE_X25519_KEY:?generate and export the X25519 key pair first}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-redpanda:9092}
+      ENABLE_KAFKA_BUCKET_TOPIC: ${ENABLE_KAFKA_BUCKET_TOPIC:-false}
+      KAFKA_GLOBAL_TOPIC: ${KAFKA_GLOBAL_TOPIC:-_all}
       SPLUNK_HEC_ENDPOINT: ${SPLUNK_HEC_ENDPOINT:-}
       SPLUNK_HEC_TOKEN: ${SPLUNK_HEC_TOKEN:-}
       SPLUNK_HEC_INDEX: ${SPLUNK_HEC_INDEX:-}
       SPLUNK_HEC_FLUSH_INTERVAL: ${SPLUNK_HEC_FLUSH_INTERVAL:-30s}
       S3_AUDIT_HASH_KEY: ${S3_AUDIT_HASH_KEY:-}
     depends_on:
-      - minio
-      - ldapserver
+      minio:
+        condition: service_started
+      ldapserver:
+        condition: service_started
+      redpanda:
+        condition: service_healthy
     ports:
       - "8080:8080"
 
 volumes:
   minio-data:
+  redpanda-data:
