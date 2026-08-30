@@ -1,6 +1,6 @@
 # s3gateway
 
-> A Go HTTP gateway for path-style S3 clients that authenticates AWS Signature Version 4 requests with LDAP credentials, authorizes bucket namespaces from LDAP groups, and proxies allowed operations to an S3-compatible backend.
+> A Go authentication and authorization proxy for path-style S3 clients that validates AWS Signature Version 4 requests using LDAP credentials, derives bucket permissions from LDAP groups, and forwards permitted operations to an S3-compatible backend.
 
 ## Project status
 

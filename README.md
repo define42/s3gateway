@@ -2,10 +2,11 @@
 
 [![Go Version](https://img.shields.io/github/go-mod/go-version/define42/s3gateway)](https://go.dev/) [![Go](https://github.com/define42/s3gateway/actions/workflows/go.yml/badge.svg)](https://github.com/define42/s3gateway/actions/workflows/go.yml) [![CodeQL](https://github.com/define42/s3gateway/actions/workflows/codeql.yml/badge.svg)](https://github.com/define42/s3gateway/actions/workflows/codeql.yml) [![Codecov](https://codecov.io/gh/define42/s3gateway/graph/badge.svg?token=GVN99Z1NQC)](https://codecov.io/gh/define42/s3gateway) [![Release](https://img.shields.io/github/v/release/define42/s3gateway)](https://github.com/define42/s3gateway/releases/latest)
 
-s3gateway is an HTTP gateway for path-style S3 clients. It authenticates AWS
-Signature Version 4 (SigV4) requests with LDAP credentials, derives bucket
-permissions from LDAP groups, and proxies permitted operations to an
-S3-compatible backend such as MinIO, Ceph Object Gateway, or Amazon S3.
+s3gateway is an authentication and authorization proxy for path-style S3
+clients. It validates AWS Signature Version 4 (SigV4) requests using LDAP
+credentials, derives bucket permissions from LDAP groups, and forwards
+permitted operations to an S3-compatible backend such as MinIO, Ceph Object
+Gateway, or Amazon S3.
 
 ## Demo
 
