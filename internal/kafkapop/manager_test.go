@@ -292,6 +292,8 @@ func TestManagerEvictsIdleConsumer(t *testing.T) {
 func TestManagerRejectsNewConsumerAtActiveLimit(t *testing.T) {
 	handling := make(chan struct{})
 	release := make(chan struct{})
+	releaseHandler := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseHandler)
 	client := &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
 		return fetchWithRecord(&kgo.Record{Topic: "images"})
 	}}
@@ -316,9 +318,109 @@ func TestManagerRejectsNewConsumerAtActiveLimit(t *testing.T) {
 	if !errors.Is(err, ErrConsumerLimit) {
 		t.Fatalf("second Consume() error = %v, want ErrConsumerLimit", err)
 	}
-	close(release)
+	releaseHandler()
 	if err := <-done; err != nil {
 		t.Fatalf("first Consume() error = %v", err)
+	}
+}
+
+func TestManagerCloseWaitsForInProgressConsume(t *testing.T) {
+	handling := make(chan struct{})
+	release := make(chan struct{})
+	releaseHandler := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseHandler)
+	client := &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
+		return fetchWithRecord(&kgo.Record{Topic: "images"})
+	}}
+	manager := newManager(time.Second, 1, func(_, _ string) (consumerClient, error) {
+		return client, nil
+	})
+
+	consumeDone := make(chan error, 1)
+	go func() {
+		consumeDone <- manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error {
+			close(handling)
+			<-release
+			return nil
+		})
+	}()
+	<-handling
+
+	closeDone := make(chan struct{})
+	go func() {
+		manager.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+		t.Fatal("Close() returned while the consume callback was active")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	releaseHandler()
+	if err := <-consumeDone; err != nil {
+		t.Fatalf("Consume() error = %v", err)
+	}
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not finish after the consume callback returned")
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.closeCount != 1 {
+		t.Fatalf("client close count = %d, want 1", client.closeCount)
+	}
+}
+
+func TestManagerSerializesConsumersWithSameKey(t *testing.T) {
+	firstHandling := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	releaseHandler := sync.OnceFunc(func() { close(releaseFirst) })
+	t.Cleanup(releaseHandler)
+	client := &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
+		return fetchWithRecord(&kgo.Record{Topic: "images"})
+	}}
+	manager := newManager(time.Second, 1, func(_, _ string) (consumerClient, error) {
+		return client, nil
+	})
+	defer manager.Close()
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error {
+			close(firstHandling)
+			<-releaseFirst
+			return nil
+		})
+	}()
+	<-firstHandling
+
+	secondHandling := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error {
+			close(secondHandling)
+			return nil
+		})
+	}()
+	select {
+	case <-secondHandling:
+		t.Fatal("second callback ran before the first callback returned")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	releaseHandler()
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first Consume() error = %v", err)
+	}
+	select {
+	case <-secondHandling:
+	case <-time.After(time.Second):
+		t.Fatal("second callback did not run after the first callback returned")
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second Consume() error = %v", err)
 	}
 }
 

@@ -34,6 +34,7 @@ import (
 )
 
 func TestLdapS3upstreamWithClient(t *testing.T) {
+	requireIntegration(t)
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -225,6 +226,7 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 }
 
 func TestLdapS3upstreamWithMinioClient(t *testing.T) {
+	requireIntegration(t)
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -321,6 +323,7 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 }
 
 func TestLdapS3upstreamListBuckets(t *testing.T) {
+	requireIntegration(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
@@ -409,6 +412,7 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 }
 
 func TestLdapS3upstreamListObjectsV2(t *testing.T) {
+	requireIntegration(t)
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -501,6 +505,7 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 }
 
 func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
+	requireIntegration(t)
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -693,6 +698,7 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 }
 
 func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
+	requireIntegration(t)
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -885,6 +891,7 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 }
 
 func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
+	requireIntegration(t)
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -1118,6 +1125,7 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 }
 
 func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
+	requireIntegration(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
@@ -1859,6 +1867,7 @@ func TestHandleGetObjectAttributesIncludesChecksum(t *testing.T) {
 }
 
 func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
+	requireIntegration(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 
@@ -2002,6 +2011,7 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 }
 
 func TestFullIntegrationPerformance(t *testing.T) {
+	requireIntegration(t)
 	if testing.Short() {
 		t.Skip("skipping full integration performance test in short mode")
 	}
@@ -2161,6 +2171,7 @@ func TestFullIntegrationPerformance(t *testing.T) {
 }
 
 func TestLdapS3upstreamHeadAndDeleteBucket(t *testing.T) {
+	requireIntegration(t)
 	env := setupIntegrationEnv(t)
 	bucket := fmt.Sprintf("team2-head-%d", time.Now().UnixNano())
 	key := "head/object.txt"
@@ -2241,6 +2252,7 @@ func TestLdapS3upstreamHeadAndDeleteBucket(t *testing.T) {
 }
 
 func TestLdapS3upstreamCopyObjectAndUploadPartCopy(t *testing.T) {
+	requireIntegration(t)
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -2385,6 +2397,7 @@ func TestLdapS3upstreamCopyObjectAndUploadPartCopy(t *testing.T) {
 }
 
 func TestLdapS3upstreamCopySourceBucketAuthorization(t *testing.T) {
+	requireIntegration(t)
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -2476,6 +2489,7 @@ func TestLdapS3upstreamCopySourceBucketAuthorization(t *testing.T) {
 }
 
 func TestLdapS3upstreamDeleteObjectsVersioningAndListObjectVersions(t *testing.T) {
+	requireIntegration(t)
 	env := setupIntegrationEnv(t)
 	bucket := fmt.Sprintf("team2-versions-%d", time.Now().UnixNano())
 	key := "versions/item.txt"
@@ -2651,6 +2665,7 @@ func TestLdapS3upstreamDeleteObjectsVersioningAndListObjectVersions(t *testing.T
 }
 
 func TestLdapS3upstreamListObjectsV2FullSemantics(t *testing.T) {
+	requireIntegration(t)
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}

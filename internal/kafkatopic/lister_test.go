@@ -3,6 +3,7 @@ package kafkatopic
 import (
 	"context"
 	"errors"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -261,6 +262,180 @@ func TestListerClose(t *testing.T) {
 	lister.Close()
 	if !closed {
 		t.Fatal("Close() did not close the Kafka admin client")
+	}
+}
+
+func TestListerReturnsDetailedConsumerGroupFailures(t *testing.T) {
+	offsetErr := errors.New("partition coordinator unavailable")
+	stub := &adminClientStub{
+		details: kadm.TopicDetails{
+			"uploads": {
+				Topic: "uploads",
+				Partitions: kadm.PartitionDetails{
+					0: {Topic: "uploads", Partition: 0},
+					1: {Topic: "uploads", Partition: 1},
+				},
+			},
+		},
+		startOffsets: kadm.ListedOffsets{
+			"uploads": {
+				0: {Topic: "uploads", Partition: 0, Offset: 0},
+				1: {Topic: "uploads", Partition: 1, Offset: 0},
+			},
+		},
+		endOffsets: kadm.ListedOffsets{
+			"uploads": {
+				0: {Topic: "uploads", Partition: 0, Offset: 10},
+				1: {Topic: "uploads", Partition: 1, Offset: 10},
+			},
+		},
+		groups: kadm.ListedGroups{
+			"scanner": {Group: "scanner", State: "Stable"},
+		},
+		fetched: kadm.FetchOffsetsResponses{
+			"scanner": {
+				Group: "scanner",
+				Fetched: kadm.OffsetResponses{
+					"uploads": {
+						0: {Offset: kadm.Offset{Topic: "uploads", Partition: 0, At: -1}},
+						1: {
+							Offset: kadm.Offset{Topic: "uploads", Partition: 1, At: 7},
+							Err:    offsetErr,
+						},
+					},
+					"deleted-topic": {
+						0: {Offset: kadm.Offset{Topic: "deleted-topic", Partition: 0, At: 3}},
+					},
+				},
+			},
+		},
+	}
+
+	topics, err := newLister(stub, nil, time.Second).List(t.Context())
+	if !errors.Is(err, offsetErr) {
+		t.Fatalf("List() error = %v, want wrapped partition error", err)
+	}
+	if len(topics) != 1 {
+		t.Fatalf("List() topics = %d, want 1", len(topics))
+	}
+	topic := topics[0]
+	if !topic.HasUnavailableConsumerGroups {
+		t.Fatal("topic did not report unavailable consumer group data")
+	}
+	if len(topic.ConsumerGroups) != 1 || len(topic.ConsumerGroups[0].Offsets) != 2 {
+		t.Fatalf("consumer groups = %+v, want scanner with two offsets", topic.ConsumerGroups)
+	}
+	if topic.ConsumerGroups[0].Offsets[0].IsCommitted {
+		t.Fatal("offset -1 was reported as committed")
+	}
+	if !topic.ConsumerGroups[0].Offsets[1].HasUnavailableData {
+		t.Fatal("partition error was not represented in the topic result")
+	}
+}
+
+func TestListerMarksMissingAndFailedGroupResponsesUnavailable(t *testing.T) {
+	responseErr := errors.New("fetch offsets failed")
+	listErr := errors.New("one coordinator failed")
+	tests := []struct {
+		name      string
+		groupsErr error
+		fetched   kadm.FetchOffsetsResponses
+		wantErr   error
+	}{
+		{
+			name:    "missing response",
+			fetched: kadm.FetchOffsetsResponses{},
+		},
+		{
+			name: "failed response",
+			fetched: kadm.FetchOffsetsResponses{
+				"scanner": {Group: "scanner", Err: responseErr},
+			},
+			wantErr: responseErr,
+		},
+		{
+			name:      "partial list failure with usable group",
+			groupsErr: listErr,
+			fetched: kadm.FetchOffsetsResponses{
+				"scanner": {Group: "scanner", Fetched: kadm.OffsetResponses{}},
+			},
+			wantErr: listErr,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := &adminClientStub{
+				details: kadm.TopicDetails{
+					"uploads": {
+						Topic:      "uploads",
+						Partitions: kadm.PartitionDetails{},
+					},
+				},
+				groups: kadm.ListedGroups{
+					"scanner": {Group: "scanner", State: "Stable"},
+				},
+				groupsErr: tt.groupsErr,
+				fetched:   tt.fetched,
+			}
+
+			topics, err := newLister(stub, nil, time.Second).List(t.Context())
+			if err == nil {
+				t.Fatal("List() error = nil, want partial-data error")
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("List() error = %v, want wrapped %v", err, tt.wantErr)
+			}
+			if len(topics) != 1 || !topics[0].HasUnavailableConsumerGroups {
+				t.Fatalf("List() topics = %+v, want unavailable consumer group data", topics)
+			}
+		})
+	}
+}
+
+func TestListerDetectsElementOverflowAndAggregatesOffsetErrors(t *testing.T) {
+	startErr := errors.New("partial start offset failure")
+	stub := &adminClientStub{
+		details: kadm.TopicDetails{
+			"uploads": {
+				Topic: "uploads",
+				Partitions: kadm.PartitionDetails{
+					0: {Topic: "uploads", Partition: 0},
+					1: {Topic: "uploads", Partition: 1},
+				},
+			},
+		},
+		startOffsets: kadm.ListedOffsets{
+			"uploads": {
+				0: {Topic: "uploads", Partition: 0, Offset: 0},
+				1: {Topic: "uploads", Partition: 1, Offset: 0},
+			},
+		},
+		startErr: startErr,
+		endOffsets: kadm.ListedOffsets{
+			"uploads": {
+				0: {Topic: "uploads", Partition: 0, Offset: math.MaxInt64},
+				1: {Topic: "uploads", Partition: 1, Offset: 1},
+			},
+		},
+	}
+
+	topics, err := newLister(stub, nil, time.Second).List(t.Context())
+	if !errors.Is(err, startErr) {
+		t.Fatalf("List() error = %v, want wrapped start offset error", err)
+	}
+	if len(topics) != 1 || topics[0].Elements != math.MaxInt64 || !topics[0].HasUnavailableData {
+		t.Fatalf("List() topics = %+v, want saturated partial result", topics)
+	}
+}
+
+func TestListerRejectsMissingContextAndAdmin(t *testing.T) {
+	lister := newLister(&adminClientStub{}, nil, time.Second)
+	if _, err := lister.List(nil); err == nil { //nolint:staticcheck // Verify the documented nil-context guard.
+		t.Fatal("List(nil) error = nil, want context error")
+	}
+	if _, err := (*Lister)(nil).List(t.Context()); err == nil {
+		t.Fatal("nil Lister.List() error = nil, want configuration error")
 	}
 }
 

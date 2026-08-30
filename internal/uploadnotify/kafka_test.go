@@ -19,6 +19,30 @@ type fakeRecordProducer struct {
 	closeCalls int
 }
 
+type pendingProduce struct {
+	ctx      context.Context
+	record   *kgo.Record
+	callback func(*kgo.Record, error)
+}
+
+type asyncRecordProducer struct {
+	pending chan pendingProduce
+}
+
+func newAsyncRecordProducer() *asyncRecordProducer {
+	return &asyncRecordProducer{pending: make(chan pendingProduce, 2)}
+}
+
+func (p *asyncRecordProducer) Produce(
+	ctx context.Context,
+	record *kgo.Record,
+	callback func(*kgo.Record, error),
+) {
+	p.pending <- pendingProduce{ctx: ctx, record: record, callback: callback}
+}
+
+func (*asyncRecordProducer) Close() {}
+
 func (p *fakeRecordProducer) Produce(_ context.Context, record *kgo.Record, callback func(*kgo.Record, error)) {
 	p.records = append(p.records, record)
 	produceErr := p.produceErr
@@ -239,6 +263,84 @@ func TestKafkaPublisherNotifyDualTopicFailure(t *testing.T) {
 	if len(producer.records) != 2 {
 		t.Fatalf("produced record count = %d, want 2", len(producer.records))
 	}
+}
+
+func TestKafkaPublisherNotifyAcceptsOutOfOrderAsyncAcknowledgements(t *testing.T) {
+	producer := newAsyncRecordProducer()
+	publisher := newKafkaPublisher(producer, true, "_all", time.Second)
+	done := make(chan error, 1)
+	go func() {
+		done <- publisher.Notify(t.Context(), Event{
+			EventName: EventObjectCreatedPut,
+			Bucket:    "bucket",
+			Key:       "object",
+		})
+	}()
+
+	first := <-producer.pending
+	second := <-producer.pending
+	if first.record.Topic != "bucket" || second.record.Topic != "_all" {
+		t.Fatalf("produced topics = %q, %q, want bucket, _all", first.record.Topic, second.record.Topic)
+	}
+	second.callback(second.record, nil)
+	first.callback(first.record, nil)
+
+	if err := <-done; err != nil {
+		t.Fatalf("Notify() error = %v", err)
+	}
+}
+
+func TestKafkaPublisherNotifyTimeoutAllowsLateAcknowledgement(t *testing.T) {
+	producer := newAsyncRecordProducer()
+	publisher := newKafkaPublisher(producer, false, "_all", 20*time.Millisecond)
+	done := make(chan error, 1)
+	go func() {
+		done <- publisher.Notify(t.Context(), Event{
+			EventName: EventObjectCreatedPut,
+			Bucket:    "bucket",
+			Key:       "object",
+		})
+	}()
+	pending := <-producer.pending
+
+	err := <-done
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Notify() error = %v, want deadline exceeded", err)
+	}
+	if !errors.Is(pending.ctx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("producer context error = %v, want deadline exceeded", pending.ctx.Err())
+	}
+	callbackDone := make(chan struct{})
+	go func() {
+		pending.callback(pending.record, nil)
+		close(callbackDone)
+	}()
+	select {
+	case <-callbackDone:
+	case <-time.After(time.Second):
+		t.Fatal("late producer callback blocked after Notify returned")
+	}
+}
+
+func TestKafkaPublisherNotifyHonorsCallerCancellation(t *testing.T) {
+	producer := newAsyncRecordProducer()
+	publisher := newKafkaPublisher(producer, false, "_all", time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- publisher.Notify(ctx, Event{
+			EventName: EventObjectCreatedPut,
+			Bucket:    "bucket",
+			Key:       "object",
+		})
+	}()
+	pending := <-producer.pending
+	cancel()
+
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Notify() error = %v, want context canceled", err)
+	}
+	pending.callback(pending.record, nil)
 }
 
 func TestKafkaPublisherNotifyValidation(t *testing.T) {

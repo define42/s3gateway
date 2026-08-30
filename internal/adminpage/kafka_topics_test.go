@@ -93,6 +93,37 @@ func TestAdminKafkaTopics(t *testing.T) {
 			wantCalls: 1,
 		},
 		{
+			name: "renders unavailable and uncommitted consumer offsets",
+			lister: &kafkaTopicListerStub{topics: []kafkatopic.Topic{
+				{
+					Name:                         "uploads",
+					Partitions:                   2,
+					Elements:                     10,
+					HasUnavailableConsumerGroups: true,
+					ConsumerGroups: []kafkatopic.ConsumerGroup{{
+						Name:  "scanner",
+						State: "Stable",
+						Offsets: []kafkatopic.ConsumerGroupOffset{
+							{Partition: 0, HasUnavailableData: true},
+							{Partition: 1, CurrentOffset: -1},
+						},
+					}},
+				},
+				{Name: "without-consumers", Partitions: 1},
+			}},
+			method:          http.MethodGet,
+			isAuthenticated: true,
+			wantStatus:      http.StatusOK,
+			wantBody: []string{
+				"Some offsets unavailable",
+				`aria-label="Partition 0, offset unavailable"`,
+				`aria-label="Partition 1, not committed"`,
+				"without-consumers",
+				">None<",
+			},
+			wantCalls: 1,
+		},
+		{
 			name:       "redirects unauthenticated user",
 			lister:     &kafkaTopicListerStub{},
 			method:     http.MethodGet,

@@ -24,7 +24,7 @@ jobs:
 
       - name: Run full integration benchmarks
         run: |
-          go test -run '^$' \
+          go test -tags=integration -run '^$' \
             -bench '^BenchmarkFullIntegrationGateway(PutObject|GetObject)$' \
             -benchmem -count=3 -benchtime=3x ./... | tee benchmark.txt
 

@@ -142,10 +142,10 @@ func (m *Manager) Consume(
 	if err != nil {
 		return err
 	}
-	defer m.release(consumer)
-
-	consumer.mu.Lock()
-	defer consumer.mu.Unlock()
+	defer func() {
+		consumer.mu.Unlock()
+		m.release(consumer)
+	}()
 
 	pollCtx, cancelPoll := context.WithTimeout(ctx, m.timeout)
 	fetches := consumer.client.PollRecords(pollCtx, 1)
@@ -207,6 +207,7 @@ func (m *Manager) acquire(topic, group string) (*groupConsumer, error) {
 	if consumer := m.consumers[key]; consumer != nil {
 		consumer.users++
 		consumer.lastUsed = now
+		consumer.mu.Lock()
 		m.mu.Unlock()
 		return consumer, nil
 	}
@@ -243,6 +244,7 @@ func (m *Manager) acquire(topic, group string) (*groupConsumer, error) {
 		delete(m.consumers, evictionKey)
 	}
 	m.consumers[key] = consumer
+	consumer.mu.Lock()
 	m.mu.Unlock()
 
 	if evicted != nil {

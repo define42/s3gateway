@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +21,11 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-const redpandaTestImage = "docker.redpanda.com/redpandadata/redpanda:v25.2.4"
+const (
+	glauthTestImage   = "glauth/glauth@sha256:b3efd79fc32ac626ad1b18e36ab42fac2e2ac662454582fdfa21cc82efab786b"
+	minioTestImage    = "minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+	redpandaTestImage = "docker.redpanda.com/redpandadata/redpanda:v25.2.4"
+)
 
 // ModuleRoot returns the absolute path of the module root directory,
 // derived from the compile-time location of this source file
@@ -110,7 +115,7 @@ func StartGlauthWithConfig(ctx context.Context, tb testing.TB, cfg string, schem
 	}
 
 	req := testcontainers.ContainerRequest{
-		Image:        "glauth/glauth:latest",
+		Image:        glauthTestImage,
 		ExposedPorts: []string{"389/tcp"},
 		Env: map[string]string{
 			"GLAUTH_CONFIG": "/app/config/config.cfg",
@@ -133,6 +138,10 @@ func StartGlauthWithConfig(ctx context.Context, tb testing.TB, cfg string, schem
 	if err != nil {
 		tb.Fatalf("failed to start glauth container: %v", err)
 	}
+	cleanup := sync.OnceFunc(func() {
+		_ = container.Terminate(context.Background())
+	})
+	tb.Cleanup(cleanup)
 
 	host, err := container.Host(ctx)
 	if err != nil {
@@ -145,9 +154,7 @@ func StartGlauthWithConfig(ctx context.Context, tb testing.TB, cfg string, schem
 
 	url := fmt.Sprintf("%s://%s:%s", scheme, host, port.Port())
 
-	return url, func() {
-		_ = container.Terminate(context.Background())
-	}
+	return url, cleanup
 }
 
 // StartMinio starts a MinIO container and returns its endpoint URL plus a cleanup function.
@@ -155,7 +162,7 @@ func StartMinio(ctx context.Context, tb testing.TB, accessKey string, secretKey 
 	tb.Helper()
 
 	req := testcontainers.ContainerRequest{
-		Image:        "minio/minio:latest",
+		Image:        minioTestImage,
 		ExposedPorts: []string{"9000/tcp"},
 		Env: map[string]string{
 			"MINIO_ROOT_USER":     accessKey,
@@ -182,6 +189,10 @@ func StartMinio(ctx context.Context, tb testing.TB, accessKey string, secretKey 
 	if err != nil {
 		tb.Fatalf("failed to start minio container: %v", err)
 	}
+	cleanup := sync.OnceFunc(func() {
+		_ = container.Terminate(context.Background())
+	})
+	tb.Cleanup(cleanup)
 
 	host, err := container.Host(ctx)
 	if err != nil {
@@ -195,9 +206,7 @@ func StartMinio(ctx context.Context, tb testing.TB, accessKey string, secretKey 
 
 	endpoint := fmt.Sprintf("http://%s:%s", host, port.Port())
 
-	return endpoint, func() {
-		_ = container.Terminate(context.Background())
-	}
+	return endpoint, cleanup
 }
 
 // StartRedpanda starts a single-node Redpanda container with automatic topic
@@ -216,16 +225,17 @@ func StartRedpanda(ctx context.Context, tb testing.TB) (string, func()) {
 		}
 		tb.Fatalf("failed to start redpanda container: %v", err)
 	}
+	cleanup := sync.OnceFunc(func() {
+		_ = testcontainers.TerminateContainer(container)
+	})
+	tb.Cleanup(cleanup)
 
 	broker, err := container.KafkaSeedBroker(ctx)
 	if err != nil {
-		_ = testcontainers.TerminateContainer(container)
 		tb.Fatalf("get redpanda kafka seed broker: %v", err)
 	}
 
-	return broker, func() {
-		_ = testcontainers.TerminateContainer(container)
-	}
+	return broker, cleanup
 }
 
 // NewS3Client creates a new AWS S3 client configured to talk to the given endpoint.

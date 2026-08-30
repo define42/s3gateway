@@ -58,9 +58,9 @@ type handlerCore struct {
 	dropped      uint64
 	closed       bool
 
-	flushMu sync.Mutex
-	cancel  context.CancelFunc
-	done    chan struct{}
+	flushPermit chan struct{}
+	cancel      context.CancelFunc
+	done        chan struct{}
 
 	closeOnce sync.Once
 	closeErr  error
@@ -116,9 +116,11 @@ func NewHandler(options Options) (*Handler, error) {
 		diagnostic: slog.New(slog.NewJSONHandler(errorWriter, &slog.HandlerOptions{
 			Level: slog.LevelWarn,
 		})),
-		cancel: cancel,
-		done:   make(chan struct{}),
+		flushPermit: make(chan struct{}, 1),
+		cancel:      cancel,
+		done:        make(chan struct{}),
 	}
+	core.flushPermit <- struct{}{}
 	handler := &Handler{
 		core:  core,
 		local: options.LocalHandler,
@@ -294,8 +296,12 @@ func (h *handlerCore) enqueue(payload []byte) {
 }
 
 func (h *handlerCore) flush(ctx context.Context) error {
-	h.flushMu.Lock()
-	defer h.flushMu.Unlock()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("waiting to flush Splunk HEC logs: %w", ctx.Err())
+	case <-h.flushPermit:
+	}
+	defer func() { h.flushPermit <- struct{}{} }()
 
 	pending, dropped := h.takePending()
 	if dropped > 0 {

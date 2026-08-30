@@ -209,6 +209,42 @@ func TestLimiterTrustedCredentialEligibilityExpires(t *testing.T) {
 	}
 }
 
+func TestLimiterMarkAuthenticatedRefreshesExpiryAndLRU(t *testing.T) {
+	limits := permissiveLimits()
+	limits.MaxKeys = 2
+	limits.TrustedCredentialTTL = time.Minute
+	limiter := NewLimiter(limits)
+	now := time.Unix(1_700_000_000, 0)
+	setLimiterTime(limiter, &now)
+
+	first := NewAttempt("192.0.2.1", "first", "password")
+	second := NewAttempt("192.0.2.2", "second", "password")
+	third := NewAttempt("192.0.2.3", "third", "password")
+	limiter.MarkAuthenticated(first)
+	limiter.MarkAuthenticated(second)
+	now = now.Add(30 * time.Second)
+	limiter.MarkAuthenticated(first)
+	limiter.MarkAuthenticated(third)
+
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	firstCredential, firstPresent := limiter.trustedCredentials[first.credentialKey]
+	_, secondPresent := limiter.trustedCredentials[second.credentialKey]
+	_, thirdPresent := limiter.trustedCredentials[third.credentialKey]
+	if !firstPresent || secondPresent || !thirdPresent {
+		t.Fatalf(
+			"trusted credentials contain first=%t second=%t third=%t, want true false true",
+			firstPresent,
+			secondPresent,
+			thirdPresent,
+		)
+	}
+	wantExpiry := now.Add(limits.TrustedCredentialTTL)
+	if !firstCredential.expires.Equal(wantExpiry) {
+		t.Fatalf("refreshed expiry = %v, want %v", firstCredential.expires, wantExpiry)
+	}
+}
+
 func TestLimiterRateLimitsAtIngressPerClient(t *testing.T) {
 	limits := permissiveLimits()
 	limits.IngressPerClientRatePerSecond = 1

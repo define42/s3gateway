@@ -1,3 +1,5 @@
+//go:build integration
+
 package app_test
 
 import (
@@ -11,6 +13,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,7 +32,7 @@ func startCephRGW(ctx context.Context, t *testing.T) (endpoint string, container
 	t.Helper()
 
 	req := testcontainers.ContainerRequest{
-		Image:        "ceph/daemon:latest",
+		Image:        "ceph/daemon@sha256:261bbe628f4b438f5bf10de5a8ee05282f2697a5a2cb7ff7668f776b61b9d586",
 		Privileged:   true,
 		ExposedPorts: []string{"7480/tcp"},
 		Env: map[string]string{
@@ -58,6 +61,10 @@ func startCephRGW(ctx context.Context, t *testing.T) (endpoint string, container
 	if err != nil {
 		t.Fatalf("start ceph: %v", err)
 	}
+	terminate = sync.OnceFunc(func() {
+		_ = container.Terminate(context.Background())
+	})
+	t.Cleanup(terminate)
 
 	host, err := container.Host(ctx)
 	if err != nil {
@@ -70,10 +77,6 @@ func startCephRGW(ctx context.Context, t *testing.T) (endpoint string, container
 	}
 
 	endpoint = fmt.Sprintf("http://%s:%s", host, port.Port())
-
-	terminate = func() {
-		_ = container.Terminate(ctx)
-	}
 
 	return endpoint, container, terminate
 }

@@ -261,6 +261,25 @@ func TestHandlerCloseFlushesOnce(t *testing.T) {
 	}
 }
 
+func TestHandlerCloseHonorsDeadlineWhileAnotherFlushIsActive(t *testing.T) {
+	handler := newTestHandler(t, "http://127.0.0.1:1", time.Hour, io.Discard)
+
+	// Holding the permit models a flush that is already sending a request.
+	<-handler.core.flushPermit
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := handler.Close(ctx)
+	handler.core.flushPermit <- struct{}{}
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close() error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("Close() ignored its deadline and took %v", elapsed)
+	}
+}
+
 func TestBatchEventCount(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -22,16 +23,38 @@ import (
 
 const splunkHECCloseTimeout = 10 * time.Second
 
+type runDependencies struct {
+	loadConfig       func() config.Config
+	configureLogging func(config.Config, slog.Handler) (*splunkhec.Handler, error)
+	boot             func(config.Config) (*http.Server, func(), error)
+	listen           func(*http.Server, config.Config) (net.Listener, bool, error)
+	notifyContext    func(context.Context, ...os.Signal) (context.Context, context.CancelFunc)
+}
+
+func defaultRunDependencies() runDependencies {
+	return runDependencies{
+		loadConfig:       config.LoadConfig,
+		configureLogging: configureSplunkLogging,
+		boot:             boot,
+		listen:           listenForGateway,
+		notifyContext:    signal.NotifyContext,
+	}
+}
+
 // Run starts the configured HTTP or ACME-managed HTTPS server, waits for a
 // server failure or termination signal, and performs a bounded graceful
 // shutdown. It returns 0 after a clean server stop and 1 when initialization or
 // serving reports an error.
 func Run() int {
+	return run(defaultRunDependencies())
+}
+
+func run(dependencies runDependencies) int {
 	localHandler := slog.NewJSONHandler(os.Stdout, nil)
 	slog.SetDefault(slog.New(localHandler))
 
-	cfg := config.LoadConfig()
-	splunkHandler, err := configureSplunkLogging(cfg, localHandler)
+	cfg := dependencies.loadConfig()
+	splunkHandler, err := dependencies.configureLogging(cfg, localHandler)
 	if err != nil {
 		slog.Error("failed to configure Splunk HEC logging", "error", err)
 		return 1
@@ -40,94 +63,45 @@ func Run() int {
 		defer closeSplunkLogging(splunkHandler)
 	}
 
-	httpServer, cleanup, err := boot(cfg)
+	httpServer, cleanup, err := dependencies.boot(cfg)
 	if err != nil {
 		slog.Error("failed to boot s3 gateway", "error", err)
 		return 1
 	}
 	defer cleanup()
 
-	serverErr := make(chan error, 1)
-
-	// Will hold the TLS listener if ACME is enabled.
-	var tlsListener net.Listener
-
-	go func() {
-		sent := false
-		sendServerErr := func(err error) {
-			if sent {
-				return
-			}
-			serverErr <- err
-			sent = true
-		}
-
-		// Ensure we always signal back to prevent deadlocks.
-		defer func() {
-			sendServerErr(nil)
-		}()
-
-		if strings.TrimSpace(cfg.AcmeDomains) != "" {
-			slog.Info("starting ACME certificate manager", "domains", cfg.AcmeDomains)
-
-			rawDomains := strings.Split(cfg.AcmeDomains, ",")
-			domains := make([]string, 0, len(rawDomains))
-			for _, domain := range rawDomains {
-				domain = strings.TrimSpace(domain)
-				if domain != "" {
-					domains = append(domains, domain)
-				}
-			}
-			if len(domains) == 0 {
-				sendServerErr(errors.New("no valid ACME domains provided"))
-				return
-			}
-
-			certmagic.DefaultACME.Agreed = true
-			certmagic.Default.Storage = &certmagic.FileStorage{Path: cfg.AcmeDataDir}
-			if cfg.AcmeCaDir != "" {
-				privateCA, err := certreader.ReadCertificates(cfg.AcmeCaDir)
-				if err != nil {
-					sendServerErr(fmt.Errorf("failed to read ACME CA certificates: %w", err))
-					return
-				}
-				certmagic.DefaultACME.TrustedRoots = privateCA
-			}
-			certmagic.DefaultACME.CA = cfg.AcmeServer
-
-			listener, err := certmagic.Listen(domains)
-			if err != nil {
-				sendServerErr(fmt.Errorf("ACME listen error: %w", err))
-				return
-			}
-			tlsListener = listener
-
-			slog.Info("starting HTTPS server", "addr", listener.Addr().String())
-			err = httpServer.Serve(listener)
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
-				sendServerErr(fmt.Errorf("https server error: %w", err))
-				return
-			}
-
-			sendServerErr(nil)
-			return
-		}
-
-		slog.Info("starting HTTP server", "addr", httpServer.Addr)
-		err := httpServer.ListenAndServe()
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			sendServerErr(fmt.Errorf("http server error: %w", err))
-			return
-		}
-		sendServerErr(nil)
-	}()
-
-	shutdownSignalsCtx, stop := signal.NotifyContext(
+	shutdownSignalsCtx, stop := dependencies.notifyContext(
 		context.Background(),
 		os.Interrupt,
 		syscall.SIGTERM,
 	)
 	defer stop()
+
+	listener, isTLS, err := dependencies.listen(httpServer, cfg)
+	if err != nil {
+		slog.Error("failed to listen", "error", err)
+		return 1
+	}
+	if shutdownSignalsCtx.Err() != nil {
+		_ = listener.Close()
+		return 0
+	}
+
+	protocol := "HTTP"
+	if isTLS {
+		protocol = "HTTPS"
+	}
+	slog.Info("starting "+protocol+" server", "addr", listener.Addr().String())
+
+	serverErr := make(chan error, 1)
+	go func() {
+		err := httpServer.Serve(listener)
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- fmt.Errorf("%s server error: %w", strings.ToLower(protocol), err)
+			return
+		}
+		serverErr <- nil
+	}()
 
 	select {
 	case err := <-serverErr:
@@ -146,11 +120,6 @@ func Run() int {
 	)
 	defer cancel()
 
-	// Close the listener to unblock Serve when ACME is enabled.
-	if tlsListener != nil {
-		_ = tlsListener.Close()
-	}
-
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		slog.Warn("graceful shutdown failed", "error", err)
 		_ = httpServer.Close()
@@ -161,6 +130,68 @@ func Run() int {
 		return 1
 	}
 	return 0
+}
+
+func listenForGateway(httpServer *http.Server, cfg config.Config) (net.Listener, bool, error) {
+	return listenForGatewayWith(httpServer, cfg, gatewayListenDependencies{
+		listenTCP:        net.Listen,
+		readCertificates: certreader.ReadCertificates,
+		listenTLS:        certmagic.Listen,
+	})
+}
+
+type gatewayListenDependencies struct {
+	listenTCP        func(network, address string) (net.Listener, error)
+	readCertificates func(string) (*x509.CertPool, error)
+	listenTLS        func([]string) (net.Listener, error)
+}
+
+func listenForGatewayWith(
+	httpServer *http.Server,
+	cfg config.Config,
+	dependencies gatewayListenDependencies,
+) (net.Listener, bool, error) {
+	if strings.TrimSpace(cfg.AcmeDomains) == "" {
+		addr := httpServer.Addr
+		if addr == "" {
+			addr = ":http"
+		}
+		listener, err := dependencies.listenTCP("tcp", addr)
+		if err != nil {
+			return nil, false, fmt.Errorf("listen for HTTP traffic: %w", err)
+		}
+		return listener, false, nil
+	}
+
+	rawDomains := strings.Split(cfg.AcmeDomains, ",")
+	domains := make([]string, 0, len(rawDomains))
+	for _, domain := range rawDomains {
+		domain = strings.TrimSpace(domain)
+		if domain != "" {
+			domains = append(domains, domain)
+		}
+	}
+	if len(domains) == 0 {
+		return nil, false, errors.New("no valid ACME domains provided")
+	}
+
+	slog.Info("starting ACME certificate manager", "domains", cfg.AcmeDomains)
+	certmagic.DefaultACME.Agreed = true
+	certmagic.Default.Storage = &certmagic.FileStorage{Path: cfg.AcmeDataDir}
+	if cfg.AcmeCaDir != "" {
+		privateCA, err := dependencies.readCertificates(cfg.AcmeCaDir)
+		if err != nil {
+			return nil, false, fmt.Errorf("failed to read ACME CA certificates: %w", err)
+		}
+		certmagic.DefaultACME.TrustedRoots = privateCA
+	}
+	certmagic.DefaultACME.CA = cfg.AcmeServer
+
+	listener, err := dependencies.listenTLS(domains)
+	if err != nil {
+		return nil, false, fmt.Errorf("ACME listen error: %w", err)
+	}
+	return listener, true, nil
 }
 
 func configureSplunkLogging(cfg config.Config, localHandler slog.Handler) (*splunkhec.Handler, error) {
