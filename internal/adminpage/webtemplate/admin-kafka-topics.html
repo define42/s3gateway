@@ -228,6 +228,33 @@
       color: #ffd3dc;
       background: rgba(77, 17, 36, 0.4);
     }
+    .consumer-group-list {
+      display: grid;
+      gap: 0.35rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .consumer-group-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      padding-bottom: 0.35rem;
+      border-bottom: 1px solid rgba(120, 156, 238, 0.17);
+    }
+    .consumer-group-item:last-child {
+      padding-bottom: 0;
+      border-bottom: 0;
+    }
+    .consumer-offset {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      color: var(--muted);
+      font-size: 0.86rem;
+      white-space: nowrap;
+    }
     @media (max-width: 700px) {
       main { margin-top: 1rem; }
       .panel { border-radius: 14px; padding: 1rem; }
@@ -399,6 +426,8 @@
       color: #ff7b72;
       background: rgba(248, 81, 73, 0.1);
     }
+    .consumer-groups-cell { min-width: 310px; }
+    .consumer-group-item { border-bottom-color: #21262d; }
     @media (max-width: 700px) {
       main { width: min(calc(100% - 1rem), 1180px); margin-top: 0.5rem; }
       .panel { border-radius: 6px; }
@@ -445,7 +474,7 @@
       {{if .Error}}
       <p class="error" role="alert">{{.Error}}</p>
       {{end}}
-      <p class="muted">Element counts are calculated from each partition's current start and end offsets.</p>
+      <p class="muted">Element counts use each partition's current start and end offsets. Consumer-group offsets are committed next-record positions.</p>
     </section>
 
     <section class="panel" aria-labelledby="topic-list-heading">
@@ -460,6 +489,7 @@
               <th scope="col">Type</th>
               <th scope="col">Partitions</th>
               <th scope="col">Elements</th>
+              <th scope="col">Consumer groups</th>
             </tr>
           </thead>
           <tbody>
@@ -479,6 +509,37 @@
                 <span class="badge warning">Unavailable</span>
                 {{else}}
                 <code>{{.Elements}}</code>
+                {{end}}
+              </td>
+              <td class="consumer-groups-cell">
+                {{if .HasUnavailableConsumerGroups}}
+                <span class="badge warning">Some offsets unavailable</span>
+                {{end}}
+                {{if .ConsumerGroups}}
+                <ul class="consumer-group-list">
+                  {{range .ConsumerGroups}}
+                  <li class="consumer-group-item">
+                    <code>{{.Name}}</code>
+                    {{range .Offsets}}
+                    {{if .HasUnavailableData}}
+                    <span class="consumer-offset" aria-label="Partition {{.Partition}}, offset unavailable">
+                      <span aria-hidden="true">p<code>{{.Partition}}</code> → unavailable</span>
+                    </span>
+                    {{else if .IsCommitted}}
+                    <span class="consumer-offset" aria-label="Partition {{.Partition}}, current offset {{.CurrentOffset}}">
+                      <span aria-hidden="true">p<code>{{.Partition}}</code> → <code>{{.CurrentOffset}}</code></span>
+                    </span>
+                    {{else}}
+                    <span class="consumer-offset" aria-label="Partition {{.Partition}}, not committed">
+                      <span aria-hidden="true">p<code>{{.Partition}}</code> → not committed</span>
+                    </span>
+                    {{end}}
+                    {{end}}
+                  </li>
+                  {{end}}
+                </ul>
+                {{else if not .HasUnavailableConsumerGroups}}
+                <span class="muted">None</span>
                 {{end}}
               </td>
             </tr>

@@ -345,4 +345,16 @@ func TestBootRedpandaGlobalPopIntegration(t *testing.T) {
 	if !strings.Contains(allTopicRow, "<code>2</code>") {
 		t.Fatalf("Kafka _all row is missing element count 2: %q", allTopicRow)
 	}
+	groupIndex := strings.Index(topicsHTML[topicIndex:], "<code>testuser:integration</code>")
+	if groupIndex < 0 {
+		t.Fatalf("Kafka _all topic is missing consumer group testuser:integration: %q", topicsHTML[topicIndex:])
+	}
+	groupHTML := topicsHTML[topicIndex+groupIndex:]
+	groupRow, _, found := strings.Cut(groupHTML, "</tr>")
+	if !found {
+		t.Fatalf("Kafka consumer group row is incomplete: %q", groupHTML)
+	}
+	if !strings.Contains(groupRow, "<code>2</code>") {
+		t.Fatalf("Kafka consumer group row is missing current offset 2: %q", groupRow)
+	}
 }

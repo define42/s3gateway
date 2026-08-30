@@ -16,10 +16,28 @@ import (
 // Topic contains the current offset-based statistics for one Kafka topic.
 // Elements is the sum of each partition's end offset minus its start offset.
 type Topic struct {
-	Name               string
-	Partitions         int
-	Elements           int64
-	IsInternal         bool
+	Name                         string
+	Partitions                   int
+	Elements                     int64
+	IsInternal                   bool
+	HasUnavailableData           bool
+	HasUnavailableConsumerGroups bool
+	ConsumerGroups               []ConsumerGroup
+}
+
+// ConsumerGroup contains the committed offsets for one group on a topic.
+type ConsumerGroup struct {
+	Name    string
+	State   string
+	Offsets []ConsumerGroupOffset
+}
+
+// ConsumerGroupOffset is the current committed offset for one partition.
+// Kafka interprets CurrentOffset as the next record the group will consume.
+type ConsumerGroupOffset struct {
+	Partition          int32
+	CurrentOffset      int64
+	IsCommitted        bool
 	HasUnavailableData bool
 }
 
@@ -27,6 +45,8 @@ type adminClient interface {
 	ListTopicsWithInternal(context.Context, ...string) (kadm.TopicDetails, error)
 	ListStartOffsets(context.Context, ...string) (kadm.ListedOffsets, error)
 	ListEndOffsets(context.Context, ...string) (kadm.ListedOffsets, error)
+	ListGroups(context.Context, ...string) (kadm.ListedGroups, error)
+	FetchManyOffsets(context.Context, ...string) kadm.FetchOffsetsResponses
 }
 
 var _ adminClient = (*kadm.Client)(nil)
@@ -136,6 +156,8 @@ func (l *Lister) List(ctx context.Context) ([]Topic, error) {
 		topics = append(topics, topic)
 	}
 
+	consumerGroupErr := l.addConsumerGroups(listCtx, topics)
+
 	var offsetErrors []error
 	if startErr != nil {
 		offsetErrors = append(offsetErrors, fmt.Errorf("list start offsets: %w", startErr))
@@ -143,5 +165,98 @@ func (l *Lister) List(ctx context.Context) ([]Topic, error) {
 	if endErr != nil {
 		offsetErrors = append(offsetErrors, fmt.Errorf("list end offsets: %w", endErr))
 	}
+	if consumerGroupErr != nil {
+		offsetErrors = append(offsetErrors, consumerGroupErr)
+	}
 	return topics, errors.Join(offsetErrors...)
+}
+
+func (l *Lister) addConsumerGroups(ctx context.Context, topics []Topic) error {
+	groups, listErr := l.admin.ListGroups(ctx)
+	if listErr != nil {
+		markConsumerGroupsUnavailable(topics)
+	}
+
+	groupNames := groups.Groups()
+	if len(groupNames) == 0 {
+		if listErr != nil {
+			return fmt.Errorf("list consumer groups: %w", listErr)
+		}
+		return nil
+	}
+
+	topicIndexes := make(map[string]int, len(topics))
+	for i := range topics {
+		topicIndexes[topics[i].Name] = i
+	}
+
+	fetched := l.admin.FetchManyOffsets(ctx, groupNames...)
+	groupErrors := make([]error, 0, len(groupNames)+1)
+	if listErr != nil {
+		groupErrors = append(groupErrors, fmt.Errorf("list consumer groups: %w", listErr))
+	}
+
+	for _, listedGroup := range groups.Sorted() {
+		response, ok := fetched[listedGroup.Group]
+		if !ok {
+			markConsumerGroupsUnavailable(topics)
+			groupErrors = append(
+				groupErrors,
+				fmt.Errorf("fetch consumer group %q offsets: response is missing", listedGroup.Group),
+			)
+			continue
+		}
+		if response.Err != nil {
+			markConsumerGroupsUnavailable(topics)
+			groupErrors = append(
+				groupErrors,
+				fmt.Errorf("fetch consumer group %q offsets: %w", listedGroup.Group, response.Err),
+			)
+			continue
+		}
+
+		offsetsByTopic := make(map[int][]ConsumerGroupOffset)
+		for _, offset := range response.Fetched.Sorted() {
+			topicIndex, exists := topicIndexes[offset.Topic]
+			if !exists {
+				continue
+			}
+			unavailable := offset.Err != nil
+			if unavailable {
+				topics[topicIndex].HasUnavailableConsumerGroups = true
+				groupErrors = append(
+					groupErrors,
+					fmt.Errorf(
+						"fetch consumer group %q topic %q partition %d offset: %w",
+						listedGroup.Group,
+						offset.Topic,
+						offset.Partition,
+						offset.Err,
+					),
+				)
+			}
+			offsetsByTopic[topicIndex] = append(offsetsByTopic[topicIndex], ConsumerGroupOffset{
+				Partition:          offset.Partition,
+				CurrentOffset:      offset.At,
+				IsCommitted:        offset.At >= 0,
+				HasUnavailableData: unavailable,
+			})
+		}
+
+		for topicIndex, offsets := range offsetsByTopic {
+			topics[topicIndex].ConsumerGroups = append(topics[topicIndex].ConsumerGroups, ConsumerGroup{
+				Name:    listedGroup.Group,
+				State:   listedGroup.State,
+				Offsets: offsets,
+			})
+		}
+	}
+
+	return errors.Join(groupErrors...)
+}
+
+func markConsumerGroupsUnavailable(topics []Topic) {
+	for i := range topics {
+		topics[i].HasUnavailableConsumerGroups = true
+	}
 }

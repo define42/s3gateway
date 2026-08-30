@@ -287,6 +287,10 @@ suffix. The console lists permitted buckets and objects and supports bucket
 creation plus object upload, download, and deletion according to the same LDAP
 group permissions as the S3 API.
 
+When Kafka is configured, the **Kafka topics** page shows retained element
+counts and each topic's consumer groups with their committed offsets by
+partition. A committed offset is the next record that group will consume.
+
 Admin sessions expire 30 minutes after login and are stored in process memory.
 They are invalidated on restart and are not shared between gateway replicas.
 Set `COOKIE_SECRET` to the same strong value on persistent deployments so the
@@ -390,8 +394,8 @@ gateway replicas, because application limiter state is not shared.
 
 When `KAFKA_BROKERS` is configured, the S3 API publishes a JSON event after the
 upstream confirms `PutObject` or `CompleteMultipartUpload`. Multipart initiation
-and individual part uploads do not produce events. Admin-console uploads and
-copy operations do not currently produce events.
+and individual part uploads do not produce events. Admin-console uploads publish
+the same events as S3 uploads. Copy operations do not currently produce events.
 
 Enable bucket topics to publish each event to the topic whose name matches its
 bucket:

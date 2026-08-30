@@ -30,13 +30,27 @@ func TestAdminKafkaTopics(t *testing.T) {
 		isAuthenticated bool
 		wantStatus      int
 		wantBody        []string
+		wantBodyCount   map[string]int
 		wantCalls       int
 	}{
 		{
 			name: "renders topic counts",
 			lister: &kafkaTopicListerStub{topics: []kafkatopic.Topic{
 				{Name: "__consumer_offsets", Partitions: 3, Elements: 7, IsInternal: true},
-				{Name: "_all", Partitions: 1, Elements: 42},
+				{
+					Name:       "_all",
+					Partitions: 1,
+					Elements:   42,
+					ConsumerGroups: []kafkatopic.ConsumerGroup{{
+						Name:  "testuser:testgroup",
+						State: "Empty",
+						Offsets: []kafkatopic.ConsumerGroupOffset{{
+							Partition:     0,
+							CurrentOffset: 17,
+							IsCommitted:   true,
+						}},
+					}},
+				},
 			}},
 			method:          http.MethodGet,
 			isAuthenticated: true,
@@ -50,8 +64,13 @@ func TestAdminKafkaTopics(t *testing.T) {
 				"<code>42</code>",
 				"Internal",
 				"Application",
+				"Consumer groups",
+				"testuser:testgroup",
+				`aria-label="Partition 0, current offset 17"`,
+				"<code>17</code>",
 			},
-			wantCalls: 1,
+			wantBodyCount: map[string]int{"Consumer groups": 1},
+			wantCalls:     1,
 		},
 		{
 			name: "renders partial offset failure",
@@ -66,8 +85,12 @@ func TestAdminKafkaTopics(t *testing.T) {
 			method:          http.MethodGet,
 			isAuthenticated: true,
 			wantStatus:      http.StatusBadGateway,
-			wantBody:        []string{"Some Kafka topic offsets could not be loaded.", "_all", "Unavailable"},
-			wantCalls:       1,
+			wantBody: []string{
+				"Some Kafka topic or consumer-group offsets could not be loaded.",
+				"_all",
+				"Unavailable",
+			},
+			wantCalls: 1,
 		},
 		{
 			name:       "redirects unauthenticated user",
@@ -103,6 +126,11 @@ func TestAdminKafkaTopics(t *testing.T) {
 			for _, want := range tt.wantBody {
 				if !strings.Contains(rr.Body.String(), want) {
 					t.Fatalf("body missing %q: %q", want, rr.Body.String())
+				}
+			}
+			for text, want := range tt.wantBodyCount {
+				if got := strings.Count(rr.Body.String(), text); got != want {
+					t.Fatalf("body count for %q = %d, want %d: %q", text, got, want, rr.Body.String())
 				}
 			}
 			if tt.lister.calls != tt.wantCalls {

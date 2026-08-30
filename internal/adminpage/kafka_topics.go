@@ -59,8 +59,10 @@ func (h *handler) handleAdminKafkaTopics(w http.ResponseWriter, r *http.Request)
 	data.Topics = topics
 	data.TotalTopics = len(topics)
 	for _, topic := range topics {
-		if topic.HasUnavailableData {
+		if topic.HasUnavailableData || topic.HasUnavailableConsumerGroups {
 			data.UnavailableTopics++
+		}
+		if topic.HasUnavailableData {
 			continue
 		}
 		data.KnownElements += topic.Elements
@@ -70,7 +72,7 @@ func (h *handler) handleAdminKafkaTopics(w http.ResponseWriter, r *http.Request)
 		if len(topics) == 0 {
 			data.Error = "Could not load Kafka topics."
 		} else {
-			data.Error = "Some Kafka topic offsets could not be loaded."
+			data.Error = "Some Kafka topic or consumer-group offsets could not be loaded."
 		}
 		writeAdminKafkaTopicsPage(w, r, http.StatusBadGateway, data)
 		return
