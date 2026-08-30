@@ -22,15 +22,28 @@ import (
 type Config struct {
 	ListenAddr string
 
-	LDAPURL              string
-	LDAPDomain           string
-	BaseDN               string
-	GroupTTL             time.Duration
-	GroupCacheMaxEntries int
-	LDAPOperationTimeout time.Duration
-	AuthMaxConcurrent    int
-	AuthRatePerSecond    int
-	AuthRateBurst        int
+	LDAPURL                       string
+	LDAPDomain                    string
+	BaseDN                        string
+	GroupTTL                      time.Duration
+	GroupCacheMaxEntries          int
+	LDAPOperationTimeout          time.Duration
+	AuthMaxConcurrent             int
+	AuthRatePerSecond             int
+	AuthRateBurst                 int
+	AuthReservedConcurrent        int
+	AuthReservedRatePerSecond     int
+	AuthReservedBurst             int
+	AuthPerIPMaxConcurrent        int
+	AuthPerIPRatePerSecond        int
+	AuthPerIPBurst                int
+	AuthPerPrincipalMaxConcurrent int
+	AuthPerPrincipalRatePerSecond int
+	AuthPerPrincipalBurst         int
+	AuthIngressPerIPRatePerSecond int
+	AuthIngressPerIPBurst         int
+	AuthTrustedCredentialTTL      time.Duration
+	TrustedProxyCIDRs             []string
 
 	UpstreamEndpoint       string
 	UpstreamRegion         string
@@ -75,21 +88,33 @@ type Config struct {
 }
 
 const (
-	defaultSigV4MaxSkew             = 15 * time.Minute
-	defaultReadTimeout              = 0 * time.Second
-	defaultWriteTimeout             = 0 * time.Second
-	defaultShutdownTimeout          = 20 * time.Second
-	defaultKafkaNotificationTimeout = 5 * time.Second
-	defaultKafkaPopTimeout          = 30 * time.Second
-	defaultKafkaPopMaxConsumers     = 1000
-	defaultSplunkHECFlushInterval   = 30 * time.Second
-	defaultLDAPOperationTimeout     = 10 * time.Second
-	defaultAuthMaxConcurrent        = 32
-	defaultAuthRatePerSecond        = 20
-	defaultAuthRateBurst            = 40
-	defaultAdminLoginReadTimeout    = 10 * time.Second
-	defaultReadinessCheckTimeout    = 2 * time.Second
-	defaultReadinessCacheTTL        = 5 * time.Second
+	defaultSigV4MaxSkew                  = 15 * time.Minute
+	defaultReadTimeout                   = 0 * time.Second
+	defaultWriteTimeout                  = 0 * time.Second
+	defaultShutdownTimeout               = 20 * time.Second
+	defaultKafkaNotificationTimeout      = 5 * time.Second
+	defaultKafkaPopTimeout               = 30 * time.Second
+	defaultKafkaPopMaxConsumers          = 1000
+	defaultSplunkHECFlushInterval        = 30 * time.Second
+	defaultLDAPOperationTimeout          = 10 * time.Second
+	defaultAuthMaxConcurrent             = 32
+	defaultAuthRatePerSecond             = 20
+	defaultAuthRateBurst                 = 40
+	defaultAuthReservedConcurrent        = 8
+	defaultAuthReservedRatePerSecond     = 5
+	defaultAuthReservedBurst             = 10
+	defaultAuthPerIPMaxConcurrent        = 4
+	defaultAuthPerIPRatePerSecond        = 5
+	defaultAuthPerIPBurst                = 10
+	defaultAuthPerPrincipalMaxConcurrent = 2
+	defaultAuthPerPrincipalRatePerSecond = 2
+	defaultAuthPerPrincipalBurst         = 4
+	defaultAuthIngressPerIPRatePerSecond = 5
+	defaultAuthIngressPerIPBurst         = 40
+	defaultAuthTrustedCredentialTTL      = 15 * time.Minute
+	defaultAdminLoginReadTimeout         = 10 * time.Second
+	defaultReadinessCheckTimeout         = 2 * time.Second
+	defaultReadinessCacheTTL             = 5 * time.Second
 
 	// DefaultGroupCacheMaxEntries bounds the in-memory LDAP group cache.
 	DefaultGroupCacheMaxEntries = 10000
@@ -124,6 +149,42 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.AuthRateBurst == 0 {
 		cfg.AuthRateBurst = defaultAuthRateBurst
+	}
+	if cfg.AuthReservedConcurrent == 0 {
+		cfg.AuthReservedConcurrent = defaultReservedLimit(cfg.AuthMaxConcurrent, defaultAuthReservedConcurrent)
+	}
+	if cfg.AuthReservedRatePerSecond == 0 {
+		cfg.AuthReservedRatePerSecond = defaultReservedLimit(cfg.AuthRatePerSecond, defaultAuthReservedRatePerSecond)
+	}
+	if cfg.AuthReservedBurst == 0 {
+		cfg.AuthReservedBurst = defaultReservedLimit(cfg.AuthRateBurst, defaultAuthReservedBurst)
+	}
+	if cfg.AuthPerIPMaxConcurrent == 0 {
+		cfg.AuthPerIPMaxConcurrent = defaultAuthPerIPMaxConcurrent
+	}
+	if cfg.AuthPerIPRatePerSecond == 0 {
+		cfg.AuthPerIPRatePerSecond = defaultAuthPerIPRatePerSecond
+	}
+	if cfg.AuthPerIPBurst == 0 {
+		cfg.AuthPerIPBurst = defaultAuthPerIPBurst
+	}
+	if cfg.AuthPerPrincipalMaxConcurrent == 0 {
+		cfg.AuthPerPrincipalMaxConcurrent = defaultAuthPerPrincipalMaxConcurrent
+	}
+	if cfg.AuthPerPrincipalRatePerSecond == 0 {
+		cfg.AuthPerPrincipalRatePerSecond = defaultAuthPerPrincipalRatePerSecond
+	}
+	if cfg.AuthPerPrincipalBurst == 0 {
+		cfg.AuthPerPrincipalBurst = defaultAuthPerPrincipalBurst
+	}
+	if cfg.AuthIngressPerIPRatePerSecond == 0 {
+		cfg.AuthIngressPerIPRatePerSecond = defaultAuthIngressPerIPRatePerSecond
+	}
+	if cfg.AuthIngressPerIPBurst == 0 {
+		cfg.AuthIngressPerIPBurst = defaultAuthIngressPerIPBurst
+	}
+	if cfg.AuthTrustedCredentialTTL == 0 {
+		cfg.AuthTrustedCredentialTTL = defaultAuthTrustedCredentialTTL
 	}
 	if cfg.UpstreamRegion == "" {
 		cfg.UpstreamRegion = "us-east-1"
@@ -169,6 +230,20 @@ func (cfg *Config) ApplyDefaults() {
 	}
 }
 
+func defaultReservedLimit(total, configuredDefault int) int {
+	if total <= 1 {
+		return 0
+	}
+	reserved := total / 4
+	if reserved == 0 {
+		reserved = 1
+	}
+	if reserved > configuredDefault {
+		return configuredDefault
+	}
+	return reserved
+}
+
 func defaultReadinessAllowedCIDRs() []string {
 	return []string{"127.0.0.0/8", "::1/128"}
 }
@@ -193,6 +268,51 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.AuthRateBurst <= 0 {
 		return errors.New("AUTH_RATE_BURST must be > 0")
+	}
+	reserveDisabled := cfg.AuthReservedConcurrent == 0 &&
+		cfg.AuthReservedRatePerSecond == 0 && cfg.AuthReservedBurst == 0
+	if !reserveDisabled {
+		if cfg.AuthReservedConcurrent <= 0 || cfg.AuthReservedConcurrent >= cfg.AuthMaxConcurrent {
+			return errors.New("AUTH_RESERVED_MAX_CONCURRENT must be > 0 and < AUTH_MAX_CONCURRENT")
+		}
+		if cfg.AuthReservedRatePerSecond <= 0 || cfg.AuthReservedRatePerSecond >= cfg.AuthRatePerSecond {
+			return errors.New("AUTH_RESERVED_RATE_PER_SECOND must be > 0 and < AUTH_RATE_PER_SECOND")
+		}
+		if cfg.AuthReservedBurst <= 0 || cfg.AuthReservedBurst >= cfg.AuthRateBurst {
+			return errors.New("AUTH_RESERVED_BURST must be > 0 and < AUTH_RATE_BURST")
+		}
+	}
+	if cfg.AuthPerIPMaxConcurrent <= 0 {
+		return errors.New("AUTH_PER_IP_MAX_CONCURRENT must be > 0")
+	}
+	if cfg.AuthPerIPRatePerSecond <= 0 {
+		return errors.New("AUTH_PER_IP_RATE_PER_SECOND must be > 0")
+	}
+	if cfg.AuthPerIPBurst <= 0 {
+		return errors.New("AUTH_PER_IP_BURST must be > 0")
+	}
+	if cfg.AuthPerPrincipalMaxConcurrent <= 0 {
+		return errors.New("AUTH_PER_PRINCIPAL_MAX_CONCURRENT must be > 0")
+	}
+	if cfg.AuthPerPrincipalRatePerSecond <= 0 {
+		return errors.New("AUTH_PER_PRINCIPAL_RATE_PER_SECOND must be > 0")
+	}
+	if cfg.AuthPerPrincipalBurst <= 0 {
+		return errors.New("AUTH_PER_PRINCIPAL_BURST must be > 0")
+	}
+	if cfg.AuthIngressPerIPRatePerSecond <= 0 {
+		return errors.New("AUTH_INGRESS_PER_IP_RATE_PER_SECOND must be > 0")
+	}
+	if cfg.AuthIngressPerIPBurst <= 0 {
+		return errors.New("AUTH_INGRESS_PER_IP_BURST must be > 0")
+	}
+	if cfg.AuthTrustedCredentialTTL <= 0 {
+		return errors.New("AUTH_TRUSTED_CREDENTIAL_TTL must be > 0")
+	}
+	for _, rawPrefix := range cfg.TrustedProxyCIDRs {
+		if _, err := netip.ParsePrefix(strings.TrimSpace(rawPrefix)); err != nil {
+			return errors.New("TRUSTED_PROXY_CIDRS must contain only valid CIDRs")
+		}
 	}
 	if cfg.SigV4MaxSkew <= 0 {
 		return errors.New("SIGV4_MAX_SKEW must be > 0")
@@ -414,18 +534,34 @@ func envCSVMetadataKeys(key string) []string {
 // defaults. It logs and terminates the process with exit status 1 when a
 // required variable is missing or a value is invalid.
 func LoadConfig() Config {
+	authMaxConcurrent := envInt("AUTH_MAX_CONCURRENT", defaultAuthMaxConcurrent)
+	authRatePerSecond := envInt("AUTH_RATE_PER_SECOND", defaultAuthRatePerSecond)
+	authRateBurst := envInt("AUTH_RATE_BURST", defaultAuthRateBurst)
 	cfg := Config{
 		ListenAddr: env("LISTEN_ADDR", ":8080"),
 
-		LDAPURL:              envRequired("LDAP_URL"),
-		BaseDN:               envRequired("LDAP_BASE_DN"),
-		GroupTTL:             envDuration("LDAP_GROUP_TTL", 2*time.Minute),
-		LDAPDomain:           env("LDAP_DOMAIN", "example.com"),
-		GroupCacheMaxEntries: envInt("LDAP_GROUP_CACHE_MAX_ENTRIES", DefaultGroupCacheMaxEntries),
-		LDAPOperationTimeout: envDuration("LDAP_OPERATION_TIMEOUT", defaultLDAPOperationTimeout),
-		AuthMaxConcurrent:    envInt("AUTH_MAX_CONCURRENT", defaultAuthMaxConcurrent),
-		AuthRatePerSecond:    envInt("AUTH_RATE_PER_SECOND", defaultAuthRatePerSecond),
-		AuthRateBurst:        envInt("AUTH_RATE_BURST", defaultAuthRateBurst),
+		LDAPURL:                       envRequired("LDAP_URL"),
+		BaseDN:                        envRequired("LDAP_BASE_DN"),
+		GroupTTL:                      envDuration("LDAP_GROUP_TTL", 2*time.Minute),
+		LDAPDomain:                    env("LDAP_DOMAIN", "example.com"),
+		GroupCacheMaxEntries:          envInt("LDAP_GROUP_CACHE_MAX_ENTRIES", DefaultGroupCacheMaxEntries),
+		LDAPOperationTimeout:          envDuration("LDAP_OPERATION_TIMEOUT", defaultLDAPOperationTimeout),
+		AuthMaxConcurrent:             authMaxConcurrent,
+		AuthRatePerSecond:             authRatePerSecond,
+		AuthRateBurst:                 authRateBurst,
+		AuthReservedConcurrent:        envInt("AUTH_RESERVED_MAX_CONCURRENT", defaultReservedLimit(authMaxConcurrent, defaultAuthReservedConcurrent)),
+		AuthReservedRatePerSecond:     envInt("AUTH_RESERVED_RATE_PER_SECOND", defaultReservedLimit(authRatePerSecond, defaultAuthReservedRatePerSecond)),
+		AuthReservedBurst:             envInt("AUTH_RESERVED_BURST", defaultReservedLimit(authRateBurst, defaultAuthReservedBurst)),
+		AuthPerIPMaxConcurrent:        envInt("AUTH_PER_IP_MAX_CONCURRENT", defaultAuthPerIPMaxConcurrent),
+		AuthPerIPRatePerSecond:        envInt("AUTH_PER_IP_RATE_PER_SECOND", defaultAuthPerIPRatePerSecond),
+		AuthPerIPBurst:                envInt("AUTH_PER_IP_BURST", defaultAuthPerIPBurst),
+		AuthPerPrincipalMaxConcurrent: envInt("AUTH_PER_PRINCIPAL_MAX_CONCURRENT", defaultAuthPerPrincipalMaxConcurrent),
+		AuthPerPrincipalRatePerSecond: envInt("AUTH_PER_PRINCIPAL_RATE_PER_SECOND", defaultAuthPerPrincipalRatePerSecond),
+		AuthPerPrincipalBurst:         envInt("AUTH_PER_PRINCIPAL_BURST", defaultAuthPerPrincipalBurst),
+		AuthIngressPerIPRatePerSecond: envInt("AUTH_INGRESS_PER_IP_RATE_PER_SECOND", defaultAuthIngressPerIPRatePerSecond),
+		AuthIngressPerIPBurst:         envInt("AUTH_INGRESS_PER_IP_BURST", defaultAuthIngressPerIPBurst),
+		AuthTrustedCredentialTTL:      envDuration("AUTH_TRUSTED_CREDENTIAL_TTL", defaultAuthTrustedCredentialTTL),
+		TrustedProxyCIDRs:             envCSV("TRUSTED_PROXY_CIDRS"),
 
 		UpstreamEndpoint:       envRequired("S3_ENDPOINT"),
 		UpstreamRegion:         env("S3_REGION", "us-east-1"),

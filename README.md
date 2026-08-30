@@ -320,9 +320,22 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 | `LDAP_GROUP_TTL` | No | `2m` | Successful LDAP group and rejected-credential cache lifetime |
 | `LDAP_GROUP_CACHE_MAX_ENTRIES` | No | `10000` | Maximum group-cache entries; also bounds in-memory admin sessions |
 | `LDAP_OPERATION_TIMEOUT` | No | `10s` | Maximum duration of each LDAP dial, bind, or search operation |
-| `AUTH_MAX_CONCURRENT` | No | `32` | Maximum concurrent LDAP authentication operations |
-| `AUTH_RATE_PER_SECOND` | No | `20` | Global sustained LDAP authentication attempt rate |
-| `AUTH_RATE_BURST` | No | `40` | Maximum burst of LDAP authentication attempts |
+| `AUTH_MAX_CONCURRENT` | No | `32` | Total concurrent LDAP authentication operations, including the reserve |
+| `AUTH_RATE_PER_SECOND` | No | `20` | Total sustained LDAP authentication rate, including the reserve |
+| `AUTH_RATE_BURST` | No | `40` | Total LDAP authentication burst, including the reserve |
+| `AUTH_RESERVED_MAX_CONCURRENT` | No | `8` | Concurrent LDAP capacity reserved for credentials that authenticated successfully within `AUTH_TRUSTED_CREDENTIAL_TTL` |
+| `AUTH_RESERVED_RATE_PER_SECOND` | No | `5` | Sustained LDAP rate reserved for recently successful credentials |
+| `AUTH_RESERVED_BURST` | No | `10` | LDAP burst reserved for recently successful credentials |
+| `AUTH_PER_IP_MAX_CONCURRENT` | No | `4` | Maximum concurrent LDAP authentication operations for one client IP |
+| `AUTH_PER_IP_RATE_PER_SECOND` | No | `5` | Sustained LDAP authentication rate for one client IP |
+| `AUTH_PER_IP_BURST` | No | `10` | LDAP authentication burst for one client IP |
+| `AUTH_PER_PRINCIPAL_MAX_CONCURRENT` | No | `2` | Maximum concurrent LDAP authentication operations for one normalized username |
+| `AUTH_PER_PRINCIPAL_RATE_PER_SECOND` | No | `2` | Sustained LDAP authentication rate for one normalized username |
+| `AUTH_PER_PRINCIPAL_BURST` | No | `4` | LDAP authentication burst for one normalized username |
+| `AUTH_INGRESS_PER_IP_RATE_PER_SECOND` | No | `5` | Early per-IP rate for authentication-bearing HTTP requests, before credential parsing or login-body reads; successful authentication restores the token |
+| `AUTH_INGRESS_PER_IP_BURST` | No | `40` | Early per-IP burst for authentication-bearing HTTP requests; successful authentication restores the token |
+| `AUTH_TRUSTED_CREDENTIAL_TTL` | No | `15m` | How long a successfully authenticated credential fingerprint may use reserved LDAP capacity |
+| `TRUSTED_PROXY_CIDRS` | No | Empty | Proxy CIDRs allowed to supply `X-Forwarded-For` for authentication rate-limit attribution |
 | `S3_REGION` | No | `us-east-1` | Upstream S3 signing region |
 | `S3_FORCE_PATH_STYLE` | No | `true` | Use path-style requests to the upstream S3 service |
 | `SIGV4_MAX_SKEW` | No | `15m` | Maximum allowed absolute age or clock skew of a client request |
@@ -358,6 +371,20 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 When `COOKIE_SECRET` is empty, the gateway generates ephemeral cookie keys and
 logs a warning. Set it to a strong secret in production, but remember that the
 session records themselves remain local to each process.
+
+Authentication limits are layered. An LDAP cache miss must pass both its
+per-client-IP and per-principal limits before it can use the shared global
+pool. The reserved portion of the global totals is available only to an exact
+credential pair that authenticated successfully during
+`AUTH_TRUSTED_CREDENTIAL_TTL`; a claimed username alone never unlocks it.
+Limiter state is bounded by `LDAP_GROUP_CACHE_MAX_ENTRIES` and is process-local.
+
+By default, client-IP attribution uses the direct TCP peer and ignores all
+forwarding headers. Configure `TRUSTED_PROXY_CIDRS` only with addresses of
+proxies that sanitize or append `X-Forwarded-For`. The gateway then walks the
+header from right to left and selects the nearest untrusted address. Deploy an
+edge or load-balancer rate limit as well when traffic is distributed across
+gateway replicas, because application limiter state is not shared.
 
 ### Kafka upload notifications
 

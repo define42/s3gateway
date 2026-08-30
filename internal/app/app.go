@@ -66,12 +66,12 @@ func boot(cfg config.Config) (*http.Server, func(), error) {
 	}
 
 	gateway := server.New(cfg, up, serverOptions...)
-	adminHandler := adminpage.NewHandler(
+	adminHandler := adminpage.NewHandlerWithContext(
 		up,
 		cfg.CookieSecret,
 		cfg.GroupCacheMaxEntries,
 		cfg.RequiredUploadMetadataKeys,
-		gateway.GroupsForCredentials,
+		gateway.GroupsForCredentialsContext,
 	)
 	httpServer := server.NewHTTPServer(
 		cfg,

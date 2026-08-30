@@ -14,5 +14,5 @@ func adminWebpageHandler(s *Server) http.Handler {
 			return nil, nil
 		})
 	}
-	return adminpage.NewHandler(s.up, s.cfg.CookieSecret, s.cfg.GroupCacheMaxEntries, s.cfg.RequiredUploadMetadataKeys, s.GroupsForCredentials)
+	return adminpage.NewHandlerWithContext(s.up, s.cfg.CookieSecret, s.cfg.GroupCacheMaxEntries, s.cfg.RequiredUploadMetadataKeys, s.GroupsForCredentialsContext)
 }

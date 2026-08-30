@@ -72,6 +72,94 @@ func TestAdminLoginBodyReadDeadline(t *testing.T) {
 	}
 }
 
+func TestAuthenticationIngressRateLimitRunsBeforeAdminHandler(t *testing.T) {
+	gw := New(config.Config{
+		AuthIngressPerIPRatePerSecond: 1,
+		AuthIngressPerIPBurst:         1,
+	}, nil)
+	var calls atomic.Int32
+	adminHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler := gw.WithAuth(http.NotFoundHandler(), adminHandler)
+
+	serve := func(remoteAddress string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/login", nil)
+		req.RemoteAddr = remoteAddress
+		req.Header.Set("Accept", "text/html")
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
+	}
+
+	if rr := serve("192.0.2.1:1234"); rr.Code != http.StatusNoContent {
+		t.Fatalf("first status = %d, want %d", rr.Code, http.StatusNoContent)
+	}
+	if rr := serve("192.0.2.1:5678"); rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("limited status = %d, want %d", rr.Code, http.StatusTooManyRequests)
+	} else if rr.Header().Get("Retry-After") != "1" {
+		t.Fatalf("Retry-After = %q, want 1", rr.Header().Get("Retry-After"))
+	}
+	if rr := serve("192.0.2.2:1234"); rr.Code != http.StatusNoContent {
+		t.Fatalf("independent client status = %d, want %d", rr.Code, http.StatusNoContent)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("admin handler calls = %d, want 2", got)
+	}
+}
+
+func TestAuthenticationClientIPTrustsOnlyConfiguredProxies(t *testing.T) {
+	tests := []struct {
+		name          string
+		trustedCIDRs  []string
+		remoteAddress string
+		forwardedFor  string
+		want          string
+	}{
+		{
+			name:          "direct client cannot spoof forwarding header",
+			remoteAddress: "192.0.2.10:1234",
+			forwardedFor:  "198.51.100.20",
+			want:          "192.0.2.10",
+		},
+		{
+			name:          "trusted proxy supplies client",
+			trustedCIDRs:  []string{"10.0.0.0/8"},
+			remoteAddress: "10.0.0.10:1234",
+			forwardedFor:  "198.51.100.20",
+			want:          "198.51.100.20",
+		},
+		{
+			name:          "rightmost untrusted address wins",
+			trustedCIDRs:  []string{"10.0.0.0/8"},
+			remoteAddress: "10.0.0.10:1234",
+			forwardedFor:  "203.0.113.99, 198.51.100.20, 10.0.0.11",
+			want:          "198.51.100.20",
+		},
+		{
+			name:          "malformed forwarding header falls back to peer",
+			trustedCIDRs:  []string{"10.0.0.0/8"},
+			remoteAddress: "10.0.0.10:1234",
+			forwardedFor:  "not-an-ip",
+			want:          "10.0.0.10",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			gw := New(config.Config{TrustedProxyCIDRs: test.trustedCIDRs}, nil)
+			req := httptest.NewRequest(http.MethodGet, "/bucket", nil)
+			req.RemoteAddr = test.remoteAddress
+			req.Header.Set("X-Forwarded-For", test.forwardedFor)
+			if got := gw.authenticationClientIP(req); got != test.want {
+				t.Fatalf("client IP = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestGroupsForCredentialsLimitsConcurrentLDAPCalls(t *testing.T) {
 	gw := New(config.Config{
 		AuthMaxConcurrent: 1,

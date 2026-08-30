@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +32,8 @@ import (
 )
 
 const popBasicAuthChallenge = `Basic realm="s3gateway-pop", charset="UTF-8"`
+
+const maxForwardedForHops = 32
 
 // EffectiveShutdownTimeout returns the configured shutdown timeout after
 // applying the default when it is zero.
@@ -60,20 +63,23 @@ type ctxKey string
 
 const ctxUploaderKey ctxKey = "uploader-upn"
 
+type authClientIPContextKey struct{}
+
 // Server authenticates gateway requests, enforces LDAP-derived authorization,
 // and dispatches supported path-style S3 operations to an upstream client.
 type Server struct {
-	cfg            config.Config
-	up             *s3.Client
-	uploadNotifier UploadNotifier
-	popConsumer    PopConsumer
-	logger         *slog.Logger
-	auditHashKeys  [auditHashScopeCount][sha256.Size]byte
-	auditHashReady bool
-	gcache         *groupcache.Cache
-	groupLookupSF  singleflight.Group
-	fetchGroups    func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
-	authLimiter    *authn.Limiter
+	cfg                  config.Config
+	up                   *s3.Client
+	uploadNotifier       UploadNotifier
+	popConsumer          PopConsumer
+	logger               *slog.Logger
+	auditHashKeys        [auditHashScopeCount][sha256.Size]byte
+	auditHashReady       bool
+	gcache               *groupcache.Cache
+	groupLookupSF        singleflight.Group
+	fetchGroups          func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
+	authLimiter          *authn.Limiter
+	trustedProxyPrefixes []netip.Prefix
 
 	readinessAllowedPrefixes []netip.Prefix
 	readinessMu              sync.Mutex
@@ -124,8 +130,31 @@ func New(cfg config.Config, up *s3.Client, opts ...Option) *Server {
 		auditHashReady: auditHashReady,
 		gcache:         groupcache.New(cfg.GroupTTL, cfg.GroupCacheMaxEntries),
 		fetchGroups:    ldapinternal.FetchGroupsUPN,
-		authLimiter:    authn.NewLimiter(cfg.AuthMaxConcurrent, cfg.AuthRatePerSecond, cfg.AuthRateBurst),
-		readinessNow:   time.Now,
+		authLimiter: authn.NewLimiter(authn.Limits{
+			MaxConcurrent:                 cfg.AuthMaxConcurrent,
+			RatePerSecond:                 cfg.AuthRatePerSecond,
+			Burst:                         cfg.AuthRateBurst,
+			ReservedConcurrent:            cfg.AuthReservedConcurrent,
+			ReservedRatePerSecond:         cfg.AuthReservedRatePerSecond,
+			ReservedBurst:                 cfg.AuthReservedBurst,
+			PerClientMaxConcurrent:        cfg.AuthPerIPMaxConcurrent,
+			PerClientRatePerSecond:        cfg.AuthPerIPRatePerSecond,
+			PerClientBurst:                cfg.AuthPerIPBurst,
+			PerPrincipalMaxConcurrent:     cfg.AuthPerPrincipalMaxConcurrent,
+			PerPrincipalRatePerSecond:     cfg.AuthPerPrincipalRatePerSecond,
+			PerPrincipalBurst:             cfg.AuthPerPrincipalBurst,
+			IngressPerClientRatePerSecond: cfg.AuthIngressPerIPRatePerSecond,
+			IngressPerClientBurst:         cfg.AuthIngressPerIPBurst,
+			MaxKeys:                       cfg.GroupCacheMaxEntries,
+			TrustedCredentialTTL:          cfg.AuthTrustedCredentialTTL,
+		}),
+		readinessNow: time.Now,
+	}
+	for _, rawPrefix := range cfg.TrustedProxyCIDRs {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(rawPrefix))
+		if err == nil {
+			s.trustedProxyPrefixes = append(s.trustedProxyPrefixes, prefix.Masked())
+		}
 	}
 	for _, rawPrefix := range cfg.ReadinessAllowedCIDRs {
 		prefix, err := netip.ParsePrefix(strings.TrimSpace(rawPrefix))
@@ -144,16 +173,23 @@ func New(cfg config.Config, up *s3.Client, opts ...Option) *Server {
 	return s
 }
 
-// GroupsForCredentials returns LDAP groups for a username and password, using
-// the credential-bound cache and coalescing concurrent identical lookups. The
-// returned map is detached from cached state.
+// GroupsForCredentials returns LDAP groups without request-specific client
+// attribution. HTTP request paths should use GroupsForCredentialsContext.
 func (s *Server) GroupsForCredentials(upn, pass string) (map[string]struct{}, error) {
+	return s.GroupsForCredentialsContext(context.Background(), upn, pass)
+}
+
+// GroupsForCredentialsContext returns LDAP groups for a username and password,
+// using the credential-bound cache and coalescing concurrent identical
+// lookups. The returned map is detached from cached state.
+func (s *Server) GroupsForCredentialsContext(ctx context.Context, upn, pass string) (map[string]struct{}, error) {
 	if upn == "" || pass == "" {
 		return nil, errors.New("missing credentials")
 	}
 
 	grps, ok := s.gcache.Get(upn, pass)
 	if ok {
+		s.authLimiter.RefundIngress(authClientIPFromContext(ctx))
 		return grps, nil
 	}
 	if s.gcache.Rejected(upn, pass) {
@@ -165,6 +201,7 @@ func (s *Server) GroupsForCredentials(upn, pass string) (map[string]struct{}, er
 	if fetchGroups == nil {
 		fetchGroups = ldapinternal.FetchGroupsUPN
 	}
+	attempt := authn.NewAttempt(authClientIPFromContext(ctx), upn, pass)
 	v, err, _ := s.groupLookupSF.Do(sfKey, func() (any, error) {
 		if cached, ok := s.gcache.Get(upn, pass); ok {
 			return cached, nil
@@ -172,7 +209,7 @@ func (s *Server) GroupsForCredentials(upn, pass string) (map[string]struct{}, er
 		if s.gcache.Rejected(upn, pass) {
 			return nil, authn.ErrRejectedCredentials
 		}
-		release, err := s.authLimiter.TryAcquire()
+		release, err := s.authLimiter.TryAcquire(attempt)
 		if err != nil {
 			return nil, err
 		}
@@ -185,11 +222,13 @@ func (s *Server) GroupsForCredentials(upn, pass string) (map[string]struct{}, er
 			return nil, err
 		}
 		s.gcache.Set(upn, pass, fetched)
+		s.authLimiter.MarkAuthenticated(attempt)
 		return fetched, nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	s.authLimiter.RefundIngress(authClientIPFromContext(ctx))
 	shared, ok := v.(map[string]struct{})
 	if !ok {
 		return nil, errors.New("internal auth error")
@@ -205,6 +244,13 @@ func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Han
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
 			next.ServeHTTP(w, r)
+			return
+		}
+
+		clientIP := s.authenticationClientIP(r)
+		r = r.WithContext(context.WithValue(r.Context(), authClientIPContextKey{}, clientIP))
+		if isAuthenticationIngressRequest(r) && !s.authLimiter.AllowIngress(clientIP) {
+			writeAuthenticationIngressLimited(w, r)
 			return
 		}
 		if adminpage.IsBrowser(r) && adminpage.IsAdminRoute(r.URL.Path) {
@@ -244,7 +290,7 @@ func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Han
 		}
 		s.setS3AuditPrincipal(r, upn)
 
-		grps, err := s.GroupsForCredentials(upn, pass)
+		grps, err := s.GroupsForCredentialsContext(r.Context(), upn, pass)
 		if err != nil {
 			if errors.Is(err, authn.ErrLimited) {
 				w.Header().Set("Retry-After", "1")
@@ -277,7 +323,7 @@ func (s *Server) authenticatePopBasic(
 	}
 
 	s.setS3AuditPrincipal(r, upn)
-	grps, err := s.GroupsForCredentials(upn, pass)
+	grps, err := s.GroupsForCredentialsContext(r.Context(), upn, pass)
 	if err != nil {
 		if errors.Is(err, authn.ErrLimited) {
 			w.Header().Set("Retry-After", "1")
@@ -292,6 +338,98 @@ func (s *Server) authenticatePopBasic(
 	ctx := authz.WithRules(r.Context(), authz.RulesFromGroups(grps))
 	ctx = context.WithValue(ctx, ctxUploaderKey, upn)
 	next.ServeHTTP(w, r.WithContext(ctx))
+}
+
+func isAuthenticationIngressRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if adminpage.IsBrowser(r) && adminpage.IsAdminRoute(r.URL.Path) {
+		return r.Method == http.MethodPost && strings.TrimRight(r.URL.Path, "/") == "/login"
+	}
+	return true
+}
+
+func writeAuthenticationIngressLimited(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Retry-After", "1")
+	if adminpage.IsBrowser(r) && adminpage.IsAdminRoute(r.URL.Path) {
+		http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+		return
+	}
+	if isPopAPIPath(r.URL.Path) {
+		http.Error(w, http.StatusText(http.StatusTooManyRequests), http.StatusTooManyRequests)
+		return
+	}
+	s3xml.WriteError(w, http.StatusServiceUnavailable, "SlowDown", "Please reduce your request rate")
+}
+
+func authClientIPFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return "unknown"
+	}
+	clientIP, _ := ctx.Value(authClientIPContextKey{}).(string)
+	if clientIP == "" {
+		return "unknown"
+	}
+	return clientIP
+}
+
+func (s *Server) authenticationClientIP(r *http.Request) string {
+	if r == nil {
+		return "unknown"
+	}
+	peer, ok := parseRemoteIP(r.RemoteAddr)
+	if !ok {
+		return "unknown"
+	}
+	if !prefixesContain(s.trustedProxyPrefixes, peer) {
+		return peer.String()
+	}
+
+	forwarded := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
+	parts := strings.Split(forwarded, ",")
+	if forwarded == "" || len(parts) > maxForwardedForHops {
+		return peer.String()
+	}
+	addresses := make([]netip.Addr, 0, len(parts))
+	for _, part := range parts {
+		address, err := netip.ParseAddr(strings.TrimSpace(part))
+		if err != nil {
+			return peer.String()
+		}
+		addresses = append(addresses, address.Unmap())
+	}
+	for _, address := range slices.Backward(addresses) {
+		if !prefixesContain(s.trustedProxyPrefixes, address) {
+			return address.String()
+		}
+	}
+	return addresses[0].String()
+}
+
+func parseRemoteIP(remoteAddress string) (netip.Addr, bool) {
+	remoteAddress = strings.TrimSpace(remoteAddress)
+	if remoteAddress == "" {
+		return netip.Addr{}, false
+	}
+	host, _, err := net.SplitHostPort(remoteAddress)
+	if err != nil {
+		host = remoteAddress
+	}
+	address, err := netip.ParseAddr(strings.Trim(host, "[]"))
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return address.Unmap(), true
+}
+
+func prefixesContain(prefixes []netip.Prefix, address netip.Addr) bool {
+	for _, prefix := range prefixes {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
 }
 
 func writePopBasicAuthChallenge(w http.ResponseWriter) {

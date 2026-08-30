@@ -33,22 +33,34 @@ func setRequiredX25519PrivateKeyEnv(t *testing.T) {
 
 func TestConfigValidateMatrix(t *testing.T) {
 	base := Config{
-		S3GatewayPrivateX25519Key: mustTestX25519PrivateKey(t),
-		GroupCacheMaxEntries:      1,
-		LDAPOperationTimeout:      time.Second,
-		AuthMaxConcurrent:         1,
-		AuthRatePerSecond:         1,
-		AuthRateBurst:             1,
-		SigV4MaxSkew:              time.Second,
-		ReadHeaderTimeout:         time.Second,
-		IdleTimeout:               time.Second,
-		ShutdownTimeout:           time.Second,
-		MaxHeaderBytes:            1,
-		AdminLoginReadTimeout:     time.Second,
-		ReadinessCheckTimeout:     time.Second,
-		ReadinessCacheTTL:         time.Second,
-		ReadinessAllowedCIDRs:     []string{"127.0.0.1/32"},
-		SplunkHECFlushInterval:    time.Second,
+		S3GatewayPrivateX25519Key:     mustTestX25519PrivateKey(t),
+		GroupCacheMaxEntries:          1,
+		LDAPOperationTimeout:          time.Second,
+		AuthMaxConcurrent:             4,
+		AuthRatePerSecond:             4,
+		AuthRateBurst:                 4,
+		AuthReservedConcurrent:        1,
+		AuthReservedRatePerSecond:     1,
+		AuthReservedBurst:             1,
+		AuthPerIPMaxConcurrent:        1,
+		AuthPerIPRatePerSecond:        1,
+		AuthPerIPBurst:                1,
+		AuthPerPrincipalMaxConcurrent: 1,
+		AuthPerPrincipalRatePerSecond: 1,
+		AuthPerPrincipalBurst:         1,
+		AuthIngressPerIPRatePerSecond: 1,
+		AuthIngressPerIPBurst:         1,
+		AuthTrustedCredentialTTL:      time.Minute,
+		SigV4MaxSkew:                  time.Second,
+		ReadHeaderTimeout:             time.Second,
+		IdleTimeout:                   time.Second,
+		ShutdownTimeout:               time.Second,
+		MaxHeaderBytes:                1,
+		AdminLoginReadTimeout:         time.Second,
+		ReadinessCheckTimeout:         time.Second,
+		ReadinessCacheTTL:             time.Second,
+		ReadinessAllowedCIDRs:         []string{"127.0.0.1/32"},
+		SplunkHECFlushInterval:        time.Second,
 	}
 
 	if err := base.Validate(); err != nil {
@@ -101,6 +113,97 @@ func TestConfigValidateMatrix(t *testing.T) {
 				c.AuthRateBurst = 0
 			},
 			wantMsg: "AUTH_RATE_BURST",
+		},
+		{
+			name: "auth reserved max concurrent",
+			mutate: func(c *Config) {
+				c.AuthReservedConcurrent = c.AuthMaxConcurrent
+			},
+			wantMsg: "AUTH_RESERVED_MAX_CONCURRENT",
+		},
+		{
+			name: "auth reserved rate",
+			mutate: func(c *Config) {
+				c.AuthReservedRatePerSecond = c.AuthRatePerSecond
+			},
+			wantMsg: "AUTH_RESERVED_RATE_PER_SECOND",
+		},
+		{
+			name: "auth reserved burst",
+			mutate: func(c *Config) {
+				c.AuthReservedBurst = c.AuthRateBurst
+			},
+			wantMsg: "AUTH_RESERVED_BURST",
+		},
+		{
+			name: "auth per IP concurrency",
+			mutate: func(c *Config) {
+				c.AuthPerIPMaxConcurrent = 0
+			},
+			wantMsg: "AUTH_PER_IP_MAX_CONCURRENT",
+		},
+		{
+			name: "auth per IP rate",
+			mutate: func(c *Config) {
+				c.AuthPerIPRatePerSecond = 0
+			},
+			wantMsg: "AUTH_PER_IP_RATE_PER_SECOND",
+		},
+		{
+			name: "auth per IP burst",
+			mutate: func(c *Config) {
+				c.AuthPerIPBurst = 0
+			},
+			wantMsg: "AUTH_PER_IP_BURST",
+		},
+		{
+			name: "auth per principal concurrency",
+			mutate: func(c *Config) {
+				c.AuthPerPrincipalMaxConcurrent = 0
+			},
+			wantMsg: "AUTH_PER_PRINCIPAL_MAX_CONCURRENT",
+		},
+		{
+			name: "auth per principal rate",
+			mutate: func(c *Config) {
+				c.AuthPerPrincipalRatePerSecond = 0
+			},
+			wantMsg: "AUTH_PER_PRINCIPAL_RATE_PER_SECOND",
+		},
+		{
+			name: "auth per principal burst",
+			mutate: func(c *Config) {
+				c.AuthPerPrincipalBurst = 0
+			},
+			wantMsg: "AUTH_PER_PRINCIPAL_BURST",
+		},
+		{
+			name: "auth ingress per IP rate",
+			mutate: func(c *Config) {
+				c.AuthIngressPerIPRatePerSecond = 0
+			},
+			wantMsg: "AUTH_INGRESS_PER_IP_RATE_PER_SECOND",
+		},
+		{
+			name: "auth ingress per IP burst",
+			mutate: func(c *Config) {
+				c.AuthIngressPerIPBurst = 0
+			},
+			wantMsg: "AUTH_INGRESS_PER_IP_BURST",
+		},
+		{
+			name: "auth trusted credential TTL",
+			mutate: func(c *Config) {
+				c.AuthTrustedCredentialTTL = 0
+			},
+			wantMsg: "AUTH_TRUSTED_CREDENTIAL_TTL",
+		},
+		{
+			name: "trusted proxy CIDR",
+			mutate: func(c *Config) {
+				c.TrustedProxyCIDRs = []string{"not-a-cidr"}
+			},
+			wantMsg: "TRUSTED_PROXY_CIDRS",
 		},
 		{
 			name: "sigv4 max skew",
@@ -432,6 +535,20 @@ func TestApplyDefaultsDoesNotInjectPrivateX25519Key(t *testing.T) {
 			cfg.AuthRateBurst,
 		)
 	}
+	if cfg.AuthReservedConcurrent != defaultAuthReservedConcurrent ||
+		cfg.AuthReservedRatePerSecond != defaultAuthReservedRatePerSecond ||
+		cfg.AuthReservedBurst != defaultAuthReservedBurst ||
+		cfg.AuthPerIPMaxConcurrent != defaultAuthPerIPMaxConcurrent ||
+		cfg.AuthPerIPRatePerSecond != defaultAuthPerIPRatePerSecond ||
+		cfg.AuthPerIPBurst != defaultAuthPerIPBurst ||
+		cfg.AuthPerPrincipalMaxConcurrent != defaultAuthPerPrincipalMaxConcurrent ||
+		cfg.AuthPerPrincipalRatePerSecond != defaultAuthPerPrincipalRatePerSecond ||
+		cfg.AuthPerPrincipalBurst != defaultAuthPerPrincipalBurst ||
+		cfg.AuthIngressPerIPRatePerSecond != defaultAuthIngressPerIPRatePerSecond ||
+		cfg.AuthIngressPerIPBurst != defaultAuthIngressPerIPBurst ||
+		cfg.AuthTrustedCredentialTTL != defaultAuthTrustedCredentialTTL {
+		t.Fatalf("layered authentication defaults mismatch: %+v", cfg)
+	}
 	if cfg.AdminLoginReadTimeout != defaultAdminLoginReadTimeout ||
 		cfg.ReadinessCheckTimeout != defaultReadinessCheckTimeout ||
 		cfg.ReadinessCacheTTL != defaultReadinessCacheTTL {
@@ -462,6 +579,7 @@ func TestLoadConfigControlPlaneLimits(t *testing.T) {
 	t.Setenv("READINESS_CHECK_TIMEOUT", "1500ms")
 	t.Setenv("READINESS_CACHE_TTL", "3s")
 	t.Setenv("READINESS_ALLOWED_CIDRS", "10.0.0.0/8,fd00::/8")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.1.0.0/16,fd01::/48")
 
 	cfg := LoadConfig()
 	if cfg.LDAPOperationTimeout != 7*time.Second || cfg.AuthMaxConcurrent != 8 ||
@@ -472,6 +590,15 @@ func TestLoadConfigControlPlaneLimits(t *testing.T) {
 			cfg.AuthMaxConcurrent,
 			cfg.AuthRatePerSecond,
 			cfg.AuthRateBurst,
+		)
+	}
+	if cfg.AuthReservedConcurrent != 2 ||
+		cfg.AuthReservedRatePerSecond != 2 || cfg.AuthReservedBurst != 2 {
+		t.Fatalf(
+			"derived authentication reserve mismatch: concurrent=%d rate=%d burst=%d",
+			cfg.AuthReservedConcurrent,
+			cfg.AuthReservedRatePerSecond,
+			cfg.AuthReservedBurst,
 		)
 	}
 	if cfg.AdminLoginReadTimeout != 4*time.Second ||
@@ -488,6 +615,11 @@ func TestLoadConfigControlPlaneLimits(t *testing.T) {
 		cfg.ReadinessAllowedCIDRs[0] != "10.0.0.0/8" ||
 		cfg.ReadinessAllowedCIDRs[1] != "fd00::/8" {
 		t.Fatalf("readiness CIDRs mismatch: %v", cfg.ReadinessAllowedCIDRs)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 2 ||
+		cfg.TrustedProxyCIDRs[0] != "10.1.0.0/16" ||
+		cfg.TrustedProxyCIDRs[1] != "fd01::/48" {
+		t.Fatalf("trusted proxy CIDRs mismatch: %v", cfg.TrustedProxyCIDRs)
 	}
 }
 

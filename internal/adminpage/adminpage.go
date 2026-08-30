@@ -1086,7 +1086,7 @@ func (h *handler) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	groups, err := h.authenticate(upn, pass)
+	groups, err := h.authenticateCredentials(r.Context(), upn, pass)
 	if err != nil {
 		if errors.Is(err, authn.ErrLimited) {
 			w.Header().Set("Retry-After", "1")
@@ -1852,6 +1852,7 @@ type handler struct {
 	s3                         *s3.Client
 	webSessions                *AdminGorillaStore
 	authenticate               func(upn, pass string) (map[string]struct{}, error)
+	authenticateContext        func(context.Context, string, string) (map[string]struct{}, error)
 	requiredUploadMetadataKeys []string // normalized (lowercase, no x-amz-meta- prefix) keys required on uploads
 }
 
@@ -1916,6 +1917,20 @@ func NewHandler(s3Client *s3.Client, cookieSecret string, maxSessions int, requi
 	}
 }
 
+// NewHandlerWithContext constructs the admin handler with a request-aware
+// authentication callback. The request context carries ingress attribution to
+// layered authentication controls.
+func NewHandlerWithContext(s3Client *s3.Client, cookieSecret string, maxSessions int, requiredUploadMetadataKeys []string, authenticate func(context.Context, string, string) (map[string]struct{}, error)) http.Handler {
+	sessions := NewAdminSessionStore(defaultAdminSessionTTL, maxSessions)
+	webSessions := NewAdminGorillaStore(cookieSecret, defaultAdminSessionTTL, sessions)
+	return &handler{
+		s3:                         s3Client,
+		webSessions:                webSessions,
+		authenticateContext:        authenticate,
+		requiredUploadMetadataKeys: requiredUploadMetadataKeys,
+	}
+}
+
 // NewHandlerWithSessions constructs the admin HTTP handler with a caller-owned
 // session store. It is intended for callers that need to control session
 // lifetime or persistence.
@@ -1925,6 +1940,16 @@ func NewHandlerWithSessions(s3Client *s3.Client, webSessions *AdminGorillaStore,
 		webSessions:  webSessions,
 		authenticate: authenticate,
 	}
+}
+
+func (h *handler) authenticateCredentials(ctx context.Context, upn, pass string) (map[string]struct{}, error) {
+	if h.authenticateContext != nil {
+		return h.authenticateContext(ctx, upn, pass)
+	}
+	if h.authenticate == nil {
+		return nil, errors.New("admin authentication is not configured")
+	}
+	return h.authenticate(upn, pass)
 }
 
 var (
