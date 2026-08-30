@@ -23,6 +23,7 @@ import (
 const (
 	popAPIPathPrefix     = "/api/pop/"
 	popGlobalScope       = "_all"
+	popAllowedMethods    = "GET, POST"
 	maxKafkaGroupIDBytes = 249
 )
 
@@ -44,6 +45,10 @@ type PopConsumer interface {
 func isPopAPIPath(path string) bool {
 	return path == "/api/pop" || path == "/api/pop/" ||
 		strings.HasPrefix(path, popAPIPathPrefix)
+}
+
+func isPopAPIMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodPost
 }
 
 func parsePopAPIPath(path string) (scope string, group string, ok bool) {
@@ -94,8 +99,9 @@ func (s *Server) handlePopAPI(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
+	w.Header().Set("Cache-Control", "no-store")
+	if !isPopAPIMethod(r.Method) {
+		w.Header().Set("Allow", popAllowedMethods)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}

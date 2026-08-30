@@ -455,6 +455,8 @@ When Kafka notifications are configured, authenticated clients can consume an
 upload event and stream its corresponding object with:
 
 ```http
+GET /api/pop/{bucket}/{group}
+GET /api/pop/_all/{group}
 POST /api/pop/{bucket}/{group}
 POST /api/pop/_all/{group}
 ```
@@ -473,12 +475,18 @@ The fully namespaced ID may be at most 249 bytes long. This prevents another
 user from consuming through Alice's group; the same requested group name is
 independent for every user.
 
+`GET` and `POST` have identical consuming semantics: either method streams one
+object and commits its Kafka offset after successful delivery. Consequently,
+`GET` is state-changing and is not safe or idempotent. Do not expose these URLs
+to link previewers, browser prefetchers, crawlers, or caches. Pop responses use
+`Cache-Control: no-store`.
+
 Basic credentials must be sent only over HTTPS because HTTP Basic encoding does
 not encrypt them. For example:
 
 ```bash
 curl --user 'user' \
-  --request POST https://s3.example.com/api/pop/images/scanner
+  https://s3.example.com/api/pop/images/scanner
 ```
 
 With the password omitted from `--user`, curl prompts for it instead of placing

@@ -228,7 +228,7 @@ func classifyS3Request(r *http.Request) s3AuditRequest {
 		if scope != popGlobalScope {
 			request.bucket = scope
 		}
-		if r.Method != http.MethodPost {
+		if !isPopAPIMethod(r.Method) {
 			request.action = unsupportedS3Action
 		}
 		return request

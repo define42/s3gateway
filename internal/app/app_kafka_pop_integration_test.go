@@ -125,11 +125,11 @@ func TestBootRedpandaGlobalPopIntegration(t *testing.T) {
 		header http.Header
 		body   []byte
 	}
-	popGlobal := func() popResult {
+	popGlobal := func(method string) popResult {
 		t.Helper()
 		popRequest, requestErr := http.NewRequestWithContext(
 			ctx,
-			http.MethodPost,
+			method,
 			gateway.URL+"/api/pop/_all/integration",
 			nil,
 		)
@@ -154,7 +154,7 @@ func TestBootRedpandaGlobalPopIntegration(t *testing.T) {
 		}
 	}
 
-	s3Pop := popGlobal()
+	s3Pop := popGlobal(http.MethodGet)
 	if s3Pop.status != http.StatusOK {
 		t.Fatalf(
 			"global pop status = %d, want %d; body=%q",
@@ -275,7 +275,7 @@ func TestBootRedpandaGlobalPopIntegration(t *testing.T) {
 		)
 	}
 
-	uiPop := popGlobal()
+	uiPop := popGlobal(http.MethodPost)
 	if uiPop.status != http.StatusOK {
 		t.Fatalf(
 			"UI global pop status = %d, want %d; body=%q",

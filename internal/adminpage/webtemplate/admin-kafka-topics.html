@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23161b22'/%3E%3Cpath d='M6 5 3 8l3 3M10 5l3 3-3 3' fill='none' stroke='%23f0f6fc' stroke-width='1.5'/%3E%3C/svg%3E">
   <title>Kafka Topics · S3 Gateway Admin</title>
   <style>
     :root {
@@ -248,6 +249,165 @@
     @keyframes float-orb {
       0%, 100% { transform: translateY(0) translateX(0); }
       50% { transform: translateY(-10px) translateX(4px); }
+    }
+
+    /* GitHub Dark / Primer-inspired theme */
+    :root {
+      color-scheme: dark;
+      --bg-0: #0d1117;
+      --bg-1: #0d1117;
+      --bg-2: #0d1117;
+      --panel: #0d1117;
+      --panel-border: #30363d;
+      --text: #f0f6fc;
+      --muted: #8b949e;
+      --accent: #2f81f7;
+      --accent-2: #238636;
+      --error: #ff7b72;
+      --table-header: #161b22;
+      --row-alt: rgba(110, 118, 129, 0.08);
+      --link: #58a6ff;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      background: var(--bg-0);
+    }
+    body::before, body::after { display: none; }
+    .skip-link {
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      color: #fff;
+      background: #1f6feb;
+    }
+    main {
+      width: min(calc(100% - 2rem), 1180px);
+      margin: 1.5rem auto;
+      padding: 0 0 2rem;
+    }
+    .panel {
+      min-width: 0;
+      border-radius: 6px;
+      padding: 1rem;
+      background: var(--panel);
+      box-shadow: none;
+      backdrop-filter: none;
+      animation: none;
+    }
+    .header { align-items: flex-start; }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      line-height: 1.25;
+    }
+    h2 { font-size: 1.25rem; font-weight: 600; }
+    a:focus-visible, button:focus-visible {
+      outline: 2px solid #2f81f7;
+      outline-offset: 2px;
+    }
+    .error {
+      border-color: rgba(248, 81, 73, 0.4);
+      border-radius: 6px;
+      color: var(--error);
+      background: rgba(248, 81, 73, 0.1);
+      font-weight: 500;
+    }
+    .top-nav {
+      gap: 0;
+      flex-wrap: nowrap;
+      margin-top: 1rem;
+      border-bottom: 1px solid #21262d;
+      overflow-x: auto;
+    }
+    .top-nav a {
+      min-height: 40px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      padding: 0.5rem 1rem;
+      color: #8b949e;
+      background: transparent;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .top-nav a:hover {
+      border-color: transparent;
+      color: #f0f6fc;
+      background: rgba(177, 186, 196, 0.08);
+    }
+    .top-nav a[aria-current="page"] {
+      border-bottom-color: #f78166;
+      color: #f0f6fc;
+      background: transparent;
+      font-weight: 600;
+    }
+    button, .refresh {
+      min-height: 34px;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 0.45rem 0.85rem;
+      color: #c9d1d9;
+      background: #21262d;
+      box-shadow: 0 1px 0 rgba(1, 4, 9, 0.4);
+    }
+    button:hover, .refresh:hover {
+      color: #f0f6fc;
+      background: #30363d;
+    }
+    .summary-row { margin-top: 1rem; }
+    .summary {
+      border-color: #30363d;
+      border-radius: 2rem;
+      color: #8b949e;
+      background: #21262d;
+    }
+    .summary strong { color: #c9d1d9; }
+    .table-wrap {
+      border-color: #30363d;
+      border-radius: 6px;
+      background: #0d1117;
+    }
+    caption { color: #8b949e; }
+    th, td {
+      border-color: #30363d;
+      padding: 0.625rem 0.75rem;
+    }
+    th {
+      color: #c9d1d9;
+      background: #161b22;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+    tbody tr:nth-child(even) { background: var(--row-alt); }
+    tbody tr:hover { background: rgba(177, 186, 196, 0.08); }
+    code {
+      border: 0;
+      border-radius: 6px;
+      padding: 0.12rem 0.35rem;
+      color: #c9d1d9;
+      background: rgba(110, 118, 129, 0.4);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .badge {
+      border-color: #30363d;
+      color: #c9d1d9;
+      background: #21262d;
+      font-weight: 500;
+    }
+    .badge.warning {
+      border-color: rgba(248, 81, 73, 0.4);
+      color: #ff7b72;
+      background: rgba(248, 81, 73, 0.1);
+    }
+    @media (max-width: 700px) {
+      main { width: min(calc(100% - 1rem), 1180px); margin-top: 0.5rem; }
+      .panel { border-radius: 6px; }
+      .top-nav a {
+        min-height: 44px;
+        flex: 0 0 auto;
+        justify-content: flex-start;
+      }
+      button, .refresh { min-height: 44px; }
     }
   </style>
 </head>

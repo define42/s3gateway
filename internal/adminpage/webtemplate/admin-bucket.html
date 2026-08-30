@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23161b22'/%3E%3Cpath d='M6 5 3 8l3 3M10 5l3 3-3 3' fill='none' stroke='%23f0f6fc' stroke-width='1.5'/%3E%3C/svg%3E">
   <title>S3 Bucket Viewer</title>
   <style>
     :root {
@@ -275,10 +276,246 @@
       0%, 100% { transform: translateY(0px) translateX(0px); }
       50% { transform: translateY(-10px) translateX(4px); }
     }
+
+    /* GitHub Dark / Primer-inspired theme */
+    :root {
+      color-scheme: dark;
+      --bg-0: #0d1117;
+      --bg-1: #0d1117;
+      --bg-2: #0d1117;
+      --panel: #0d1117;
+      --panel-border: #30363d;
+      --text: #f0f6fc;
+      --muted: #8b949e;
+      --accent: #2f81f7;
+      --accent-2: #238636;
+      --accent-soft: rgba(31, 111, 235, 0.3);
+      --error: #ff7b72;
+      --table-header: #161b22;
+      --row-alt: rgba(110, 118, 129, 0.08);
+      --link: #58a6ff;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      background: var(--bg-0);
+    }
+    body::before, body::after { display: none; }
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    .skip-link {
+      position: absolute;
+      left: 1rem;
+      top: -5rem;
+      z-index: 10;
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      color: #fff;
+      background: #1f6feb;
+    }
+    .skip-link:focus { top: 1rem; }
+    main {
+      width: min(calc(100% - 2rem), 1400px);
+      margin: 1.5rem auto;
+      padding: 0 0 2rem;
+    }
+    .panel {
+      min-width: 0;
+      border-radius: 6px;
+      padding: 1rem;
+      background: var(--panel);
+      box-shadow: none;
+      backdrop-filter: none;
+      animation: none;
+    }
+    h1 {
+      margin: 1.25rem 0 0.25rem;
+      font-size: 1.5rem;
+      font-weight: 600;
+      line-height: 1.25;
+    }
+    .error, .notice {
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      font-weight: 500;
+    }
+    .error {
+      border: 1px solid rgba(248, 81, 73, 0.4);
+      color: var(--error);
+      background: rgba(248, 81, 73, 0.1);
+    }
+    .notice {
+      border: 1px solid rgba(46, 160, 67, 0.4);
+      color: #7ee787;
+      background: rgba(46, 160, 67, 0.1);
+    }
+    .upload-box {
+      border-color: #30363d;
+      border-radius: 6px;
+      background: #161b22;
+    }
+    .upload-form input[type="text"],
+    .upload-form input[type="file"] {
+      min-height: 34px;
+      border-color: #30363d;
+      border-radius: 6px;
+      color: var(--text);
+      background: #0d1117;
+      box-shadow: inset 0 1px 0 rgba(1, 4, 9, 0.2);
+    }
+    .upload-form input:focus {
+      outline: none;
+      border-color: #1f6feb;
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .upload-form input[type="file"] { padding: 0.25rem; }
+    .upload-form input[type="file"]::file-selector-button {
+      min-height: 30px;
+      margin-right: 0.65rem;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 0.35rem 0.65rem;
+      color: #c9d1d9;
+      background: #21262d;
+      cursor: pointer;
+    }
+    .upload-form input[type="file"]::file-selector-button:hover { background: #30363d; }
+    a:focus-visible, button:focus-visible, input:focus-visible {
+      outline: 2px solid #2f81f7;
+      outline-offset: 2px;
+    }
+    .top-nav {
+      gap: 0;
+      flex-wrap: nowrap;
+      width: auto;
+      border-bottom: 1px solid #21262d;
+      overflow-x: auto;
+    }
+    .top-nav a {
+      min-height: 40px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      padding: 0.5rem 1rem;
+      color: #8b949e;
+      background: transparent;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .top-nav a:hover {
+      border-color: transparent;
+      color: #f0f6fc;
+      background: rgba(177, 186, 196, 0.08);
+    }
+    .top-nav a[aria-current="page"] {
+      border-bottom-color: #f78166;
+      color: #f0f6fc;
+      background: transparent;
+      font-weight: 600;
+    }
+    .btn {
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid rgba(240, 246, 252, 0.1);
+      border-radius: 6px;
+      padding: 0.45rem 0.85rem;
+      color: #fff;
+      background: #238636;
+      box-shadow: 0 1px 0 rgba(1, 4, 9, 0.4);
+      transform: none;
+    }
+    .btn:hover {
+      color: #fff;
+      background: #2ea043;
+      box-shadow: 0 1px 0 rgba(1, 4, 9, 0.4);
+      filter: none;
+      transform: none;
+    }
+    .topline > .inline .btn {
+      color: #c9d1d9;
+      background: #21262d;
+      border-color: #30363d;
+    }
+    .topline > .inline .btn:hover { background: #30363d; }
+    .btn.warn {
+      color: #ff7b72;
+      background: transparent;
+      border-color: rgba(248, 81, 73, 0.4);
+      box-shadow: none;
+    }
+    .btn.warn:hover { color: #fff; background: #da3633; }
+    .btn.disabled {
+      color: #8b949e;
+      background: #21262d;
+      border-color: #30363d;
+      opacity: 0.55;
+    }
+    .table-wrap {
+      border-color: #30363d;
+      border-radius: 6px;
+      background: #0d1117;
+    }
+    th, td {
+      border-color: #30363d;
+      padding: 0.625rem 0.75rem;
+    }
+    th {
+      color: #c9d1d9;
+      background: #161b22;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+    tbody tr:nth-child(even) { background: var(--row-alt); }
+    tbody tr:hover { background: rgba(177, 186, 196, 0.08); }
+    code {
+      border: 0;
+      border-radius: 6px;
+      padding: 0.12rem 0.35rem;
+      color: #c9d1d9;
+      background: rgba(110, 118, 129, 0.4);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    @media (max-width: 700px) {
+      main { width: min(calc(100% - 1rem), 1400px); margin-top: 0.5rem; }
+      .panel { border-radius: 6px; }
+      .topline { align-items: flex-start; }
+      .top-nav { width: 100%; }
+      .top-nav a {
+        min-height: 44px;
+        flex: 0 0 auto;
+        justify-content: flex-start;
+      }
+      .btn { min-height: 44px; }
+      .upload-form label {
+        min-width: 0;
+        flex: 1 1 100%;
+      }
+      .upload-form input[type="text"],
+      .upload-form input[type="file"] {
+        width: 100%;
+        max-width: none;
+        min-height: 44px;
+      }
+      .upload-form > .btn {
+        width: 100%;
+        justify-content: center;
+      }
+    }
   </style>
 </head>
 <body>
-  <main>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  <main id="main-content">
     <section class="panel">
       <div class="topline">
         <nav class="top-nav" aria-label="Admin navigation">
@@ -331,14 +568,15 @@
       {{if .Objects}}
       <div class="table-wrap">
         <table>
+          <caption class="visually-hidden">Objects in bucket {{.BucketName}}.</caption>
           <thead>
             <tr>
-              <th>Object Key</th>
-              <th>Size (bytes)</th>
-              <th>Last-Modified (UTC)</th>
-              <th>Expires (UTC)</th>
-              <th>Metadata</th>
-              <th>Actions</th>
+              <th scope="col">Object Key</th>
+              <th scope="col">Size (bytes)</th>
+              <th scope="col">Last-Modified (UTC)</th>
+              <th scope="col">Expires (UTC)</th>
+              <th scope="col">Metadata</th>
+              <th scope="col">Actions</th>
             </tr>
           </thead>
           <tbody>

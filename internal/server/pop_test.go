@@ -98,52 +98,59 @@ func TestHandlePopAPIBucketStreamsAndAcknowledgesObject(t *testing.T) {
 	})
 	defer cleanup()
 
-	consumer := &fakePopConsumer{record: popRecord(t, "team2-images", uploadnotify.Event{
-		EventID:   "019c0000-0000-7000-8000-000000000001",
-		EventName: uploadnotify.EventObjectCreatedPut,
-		Bucket:    "team2-images",
-		Key:       "path/object.jpg",
-		VersionID: "version-1",
-	})}
-	configurePopGateway(gateway, consumer)
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			consumer := &fakePopConsumer{record: popRecord(t, "team2-images", uploadnotify.Event{
+				EventID:   "019c0000-0000-7000-8000-000000000001",
+				EventName: uploadnotify.EventObjectCreatedPut,
+				Bucket:    "team2-images",
+				Key:       "path/object.jpg",
+				VersionID: "version-1",
+			})}
+			configurePopGateway(gateway, consumer)
 
-	request := reqWithRulesAndUploader(
-		httptest.NewRequest(http.MethodPost, "/api/pop/team2-images/scanner", nil),
-		fullTeam2Rule(),
-		"alice",
-	)
-	response := httptest.NewRecorder()
-	gateway.ServeHTTP(response, request)
+			request := reqWithRulesAndUploader(
+				httptest.NewRequest(method, "/api/pop/team2-images/scanner", nil),
+				fullTeam2Rule(),
+				"alice",
+			)
+			response := httptest.NewRecorder()
+			gateway.ServeHTTP(response, request)
 
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%q", response.Code, response.Body.String())
-	}
-	if response.Body.String() != body {
-		t.Fatalf("body = %q, want %q", response.Body.String(), body)
-	}
-	if !response.Flushed {
-		t.Fatal("response was not flushed before acknowledgement")
-	}
-	if response.Header().Get("Content-Type") != "image/jpeg" {
-		t.Fatalf("Content-Type = %q, want image/jpeg", response.Header().Get("Content-Type"))
-	}
-	if response.Header().Get("X-S3Gateway-Bucket") != "team2-images" {
-		t.Fatalf("pop bucket header = %q", response.Header().Get("X-S3Gateway-Bucket"))
-	}
-	if response.Header().Get("X-S3Gateway-Object-Key") != "path%2Fobject.jpg" {
-		t.Fatalf("pop key header = %q", response.Header().Get("X-S3Gateway-Object-Key"))
-	}
-	if response.Header().Get("X-S3Gateway-Event-ID") == "" {
-		t.Fatal("missing event id header")
-	}
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%q", response.Code, response.Body.String())
+			}
+			if response.Body.String() != body {
+				t.Fatalf("body = %q, want %q", response.Body.String(), body)
+			}
+			if !response.Flushed {
+				t.Fatal("response was not flushed before acknowledgement")
+			}
+			if response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("Cache-Control = %q, want no-store", response.Header().Get("Cache-Control"))
+			}
+			if response.Header().Get("Content-Type") != "image/jpeg" {
+				t.Fatalf("Content-Type = %q, want image/jpeg", response.Header().Get("Content-Type"))
+			}
+			if response.Header().Get("X-S3Gateway-Bucket") != "team2-images" {
+				t.Fatalf("pop bucket header = %q", response.Header().Get("X-S3Gateway-Bucket"))
+			}
+			if response.Header().Get("X-S3Gateway-Object-Key") != "path%2Fobject.jpg" {
+				t.Fatalf("pop key header = %q", response.Header().Get("X-S3Gateway-Object-Key"))
+			}
+			if response.Header().Get("X-S3Gateway-Event-ID") == "" {
+				t.Fatal("missing event id header")
+			}
 
-	consumer.mu.Lock()
-	defer consumer.mu.Unlock()
-	if consumer.topic != "team2-images" || consumer.group != "alice:scanner" {
-		t.Fatalf("consumer target = %q/%q, want team2-images/alice:scanner", consumer.topic, consumer.group)
-	}
-	if !consumer.acknowledged {
-		t.Fatal("record was not acknowledged after successful response")
+			consumer.mu.Lock()
+			defer consumer.mu.Unlock()
+			if consumer.topic != "team2-images" || consumer.group != "alice:scanner" {
+				t.Fatalf("consumer target = %q/%q, want team2-images/alice:scanner", consumer.topic, consumer.group)
+			}
+			if !consumer.acknowledged {
+				t.Fatal("record was not acknowledged after successful response")
+			}
+		})
 	}
 }
 
@@ -359,12 +366,12 @@ func TestHandlePopAPIValidation(t *testing.T) {
 		},
 		{
 			name:       "method not allowed",
-			method:     http.MethodGet,
+			method:     http.MethodPatch,
 			path:       "/api/pop/team2-images/scanner",
 			configure:  configurePopGateway,
 			rules:      fullTeam2Rule(),
 			wantStatus: http.StatusMethodNotAllowed,
-			wantAllow:  http.MethodPost,
+			wantAllow:  popAllowedMethods,
 		},
 		{
 			name:       "invalid group",
