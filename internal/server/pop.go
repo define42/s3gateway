@@ -58,13 +58,13 @@ func parsePopAPIPath(path string) (scope string, group string, ok bool) {
 	return parts[0], parts[1], true
 }
 
-func validKafkaGroupID(group string) bool {
-	if len(group) == 0 || len(group) > maxKafkaGroupIDBytes ||
-		group == "." || group == ".." {
+func validKafkaGroupIDComponent(value string) bool {
+	if len(value) == 0 || len(value) > maxKafkaGroupIDBytes ||
+		value == "." || value == ".." {
 		return false
 	}
-	for i := range len(group) {
-		c := group[i]
+	for i := range len(value) {
+		c := value[i]
 		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
 			(c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-' {
 			continue
@@ -74,8 +74,22 @@ func validKafkaGroupID(group string) bool {
 	return true
 }
 
+func popConsumerGroupID(username, requestedGroup string) (string, bool) {
+	username = strings.TrimSpace(username)
+	if !validKafkaGroupIDComponent(username) ||
+		!validKafkaGroupIDComponent(requestedGroup) {
+		return "", false
+	}
+
+	group := username + ":" + requestedGroup
+	if len(group) > maxKafkaGroupIDBytes {
+		return "", false
+	}
+	return group, true
+}
+
 func (s *Server) handlePopAPI(w http.ResponseWriter, r *http.Request) {
-	scope, group, ok := parsePopAPIPath(r.URL.Path)
+	scope, requestedGroup, ok := parsePopAPIPath(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -85,7 +99,13 @@ func (s *Server) handlePopAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if !validKafkaGroupID(group) {
+	username := UploaderFromRequest(r)
+	if username == "" {
+		writePopBasicAuthChallenge(w)
+		return
+	}
+	group, ok := popConsumerGroupID(username, requestedGroup)
+	if !ok {
 		http.Error(w, "invalid kafka consumer group", http.StatusBadRequest)
 		return
 	}

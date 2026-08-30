@@ -438,9 +438,13 @@ The bucket route consumes the bucket-named topic and therefore requires
 caller's LDAP username without the domain suffix and password; the gateway
 appends `@LDAP_DOMAIN` during authentication. Both routes require read access
 to the event's bucket. SigV4 authentication is not accepted for `/api/pop/*`;
-other S3 routes continue to require SigV4. Consumer group names may contain
-letters, digits, `.`, `_`, and `-`, must not be `.` or `..`, and may be at most
-249 bytes long.
+other S3 routes continue to require SigV4. The authenticated username and
+requested group may each contain letters, digits, `.`, `_`, and `-`, and must
+not be `.` or `..`. The gateway always prefixes the username, so requesting
+group `scanner` as user `alice` uses the Kafka consumer group `alice:scanner`.
+The fully namespaced ID may be at most 249 bytes long. This prevents another
+user from consuming through Alice's group; the same requested group name is
+independent for every user.
 
 Basic credentials must be sent only over HTTPS because HTTP Basic encoding does
 not encrypt them. For example:

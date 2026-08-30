@@ -24,6 +24,7 @@ type fakePopConsumer struct {
 	commitErr    error
 	topic        string
 	group        string
+	groups       []string
 	callCount    int
 	acknowledged bool
 	handleErr    error
@@ -38,6 +39,7 @@ func (c *fakePopConsumer) Consume(
 	c.mu.Lock()
 	c.topic = topic
 	c.group = group
+	c.groups = append(c.groups, group)
 	c.callCount++
 	record := c.record
 	consumeErr := c.consumeErr
@@ -105,9 +107,10 @@ func TestHandlePopAPIBucketStreamsAndAcknowledgesObject(t *testing.T) {
 	})}
 	configurePopGateway(gateway, consumer)
 
-	request := reqWithRules(
+	request := reqWithRulesAndUploader(
 		httptest.NewRequest(http.MethodPost, "/api/pop/team2-images/scanner", nil),
 		fullTeam2Rule(),
+		"alice",
 	)
 	response := httptest.NewRecorder()
 	gateway.ServeHTTP(response, request)
@@ -136,8 +139,8 @@ func TestHandlePopAPIBucketStreamsAndAcknowledgesObject(t *testing.T) {
 
 	consumer.mu.Lock()
 	defer consumer.mu.Unlock()
-	if consumer.topic != "team2-images" || consumer.group != "scanner" {
-		t.Fatalf("consumer target = %q/%q, want team2-images/scanner", consumer.topic, consumer.group)
+	if consumer.topic != "team2-images" || consumer.group != "alice:scanner" {
+		t.Fatalf("consumer target = %q/%q, want team2-images/alice:scanner", consumer.topic, consumer.group)
 	}
 	if !consumer.acknowledged {
 		t.Fatal("record was not acknowledged after successful response")
@@ -160,9 +163,10 @@ func TestHandlePopAPIGlobalUsesEventBucket(t *testing.T) {
 	})}
 	configurePopGateway(gateway, consumer)
 
-	request := reqWithRules(
+	request := reqWithRulesAndUploader(
 		httptest.NewRequest(http.MethodPost, "/api/pop/_all/archive", nil),
 		fullTeam2Rule(),
+		"alice",
 	)
 	response := httptest.NewRecorder()
 	gateway.ServeHTTP(response, request)
@@ -172,13 +176,52 @@ func TestHandlePopAPIGlobalUsesEventBucket(t *testing.T) {
 	}
 	consumer.mu.Lock()
 	defer consumer.mu.Unlock()
-	if consumer.topic != "_all" || consumer.group != "archive" || !consumer.acknowledged {
+	if consumer.topic != "_all" || consumer.group != "alice:archive" || !consumer.acknowledged {
 		t.Fatalf(
 			"consumer state = topic %q group %q acknowledged %t",
 			consumer.topic,
 			consumer.group,
 			consumer.acknowledged,
 		)
+	}
+}
+
+func TestHandlePopAPINamespacesConsumerGroupsByUsername(t *testing.T) {
+	gateway, cleanup := newGatewayWithStubUpstream(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("upstream must not be called without an event")
+	})
+	defer cleanup()
+	consumer := &fakePopConsumer{consumeErr: kafkapop.ErrNoEvent}
+	configurePopGateway(gateway, consumer)
+
+	for _, username := range []string{"alice", "bob"} {
+		request := reqWithRulesAndUploader(
+			httptest.NewRequest(http.MethodPost, "/api/pop/team2-images/scanner", nil),
+			fullTeam2Rule(),
+			username,
+		)
+		response := httptest.NewRecorder()
+		gateway.ServeHTTP(response, request)
+		if response.Code != http.StatusNoContent {
+			t.Fatalf(
+				"response for %q = %d %q, want empty 204",
+				username,
+				response.Code,
+				response.Body.String(),
+			)
+		}
+	}
+
+	consumer.mu.Lock()
+	defer consumer.mu.Unlock()
+	want := []string{"alice:scanner", "bob:scanner"}
+	if len(consumer.groups) != len(want) {
+		t.Fatalf("consumer groups = %v, want %v", consumer.groups, want)
+	}
+	for i := range want {
+		if consumer.groups[i] != want[i] {
+			t.Fatalf("consumer groups = %v, want %v", consumer.groups, want)
+		}
 	}
 }
 
@@ -201,9 +244,10 @@ func TestHandlePopAPIDoesNotAcknowledgeWriteFailure(t *testing.T) {
 		header:   make(http.Header),
 		writeErr: writeErr,
 	}
-	request := reqWithRules(
+	request := reqWithRulesAndUploader(
 		httptest.NewRequest(http.MethodPost, "/api/pop/team2-images/scanner", nil),
 		fullTeam2Rule(),
+		"alice",
 	)
 	gateway.ServeHTTP(response, request)
 
@@ -233,9 +277,10 @@ func TestHandlePopAPIDoesNotAcknowledgeShortObject(t *testing.T) {
 	})}
 	configurePopGateway(gateway, consumer)
 
-	request := reqWithRules(
+	request := reqWithRulesAndUploader(
 		httptest.NewRequest(http.MethodPost, "/api/pop/team2-images/scanner", nil),
 		fullTeam2Rule(),
+		"alice",
 	)
 	response := httptest.NewRecorder()
 	gateway.ServeHTTP(response, request)
@@ -279,9 +324,10 @@ func TestHandlePopAPINoEvent(t *testing.T) {
 	consumer := &fakePopConsumer{consumeErr: kafkapop.ErrNoEvent}
 	configurePopGateway(gateway, consumer)
 
-	request := reqWithRules(
+	request := reqWithRulesAndUploader(
 		httptest.NewRequest(http.MethodPost, "/api/pop/team2-images/scanner", nil),
 		fullTeam2Rule(),
+		"alice",
 	)
 	response := httptest.NewRecorder()
 	gateway.ServeHTTP(response, request)
@@ -301,6 +347,7 @@ func TestHandlePopAPIValidation(t *testing.T) {
 		wantStatus    int
 		wantAllow     string
 		wantCallCount int
+		omitUsername  bool
 	}{
 		{
 			name:       "incomplete route",
@@ -326,6 +373,15 @@ func TestHandlePopAPIValidation(t *testing.T) {
 			configure:  configurePopGateway,
 			rules:      fullTeam2Rule(),
 			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:         "missing authenticated username",
+			method:       http.MethodPost,
+			path:         "/api/pop/team2-images/scanner",
+			configure:    configurePopGateway,
+			rules:        fullTeam2Rule(),
+			wantStatus:   http.StatusUnauthorized,
+			omitUsername: true,
 		},
 		{
 			name:   "bucket topics disabled",
@@ -376,7 +432,12 @@ func TestHandlePopAPIValidation(t *testing.T) {
 			consumer := &fakePopConsumer{}
 			tt.configure(gateway, consumer)
 
-			request := reqWithRules(httptest.NewRequest(tt.method, tt.path, nil), tt.rules)
+			request := httptest.NewRequest(tt.method, tt.path, nil)
+			if tt.omitUsername {
+				request = reqWithRules(request, tt.rules)
+			} else {
+				request = reqWithRulesAndUploader(request, tt.rules, "alice")
+			}
 			response := httptest.NewRecorder()
 			gateway.ServeHTTP(response, request)
 
@@ -446,7 +507,11 @@ func TestHandlePopAPIRejectsUnusableEvents(t *testing.T) {
 			consumer := &fakePopConsumer{record: &kgo.Record{Topic: tt.topic, Value: tt.value}}
 			configurePopGateway(gateway, consumer)
 
-			request := reqWithRules(httptest.NewRequest(http.MethodPost, tt.path, nil), tt.rules)
+			request := reqWithRulesAndUploader(
+				httptest.NewRequest(http.MethodPost, tt.path, nil),
+				tt.rules,
+				"alice",
+			)
 			response := httptest.NewRecorder()
 			gateway.ServeHTTP(response, request)
 
@@ -477,9 +542,10 @@ func TestHandlePopAPICommitFailureOccursAfterBody(t *testing.T) {
 	}
 	configurePopGateway(gateway, consumer)
 
-	request := reqWithRules(
+	request := reqWithRulesAndUploader(
 		httptest.NewRequest(http.MethodPost, "/api/pop/team2-images/scanner", nil),
 		fullTeam2Rule(),
+		"alice",
 	)
 	response := httptest.NewRecorder()
 	gateway.ServeHTTP(response, request)
@@ -530,24 +596,53 @@ func TestParsePopAPIPath(t *testing.T) {
 	}
 }
 
-func TestValidKafkaGroupID(t *testing.T) {
+func TestPopConsumerGroupID(t *testing.T) {
 	tests := []struct {
-		name  string
-		group string
-		want  bool
+		name           string
+		username       string
+		requestedGroup string
+		want           string
+		wantOK         bool
 	}{
-		{name: "simple", group: "scanner", want: true},
-		{name: "common punctuation", group: "image_scanner-v2.prod", want: true},
-		{name: "empty", group: "", want: false},
-		{name: "path traversal", group: "..", want: false},
-		{name: "invalid punctuation", group: "scanner!", want: false},
-		{name: "too long", group: strings.Repeat("a", maxKafkaGroupIDBytes+1), want: false},
+		{
+			name:           "simple",
+			username:       "alice",
+			requestedGroup: "scanner",
+			want:           "alice:scanner",
+			wantOK:         true,
+		},
+		{
+			name:           "common punctuation",
+			username:       "alice.smith",
+			requestedGroup: "image_scanner-v2.prod",
+			want:           "alice.smith:image_scanner-v2.prod",
+			wantOK:         true,
+		},
+		{name: "missing username", requestedGroup: "scanner"},
+		{name: "empty group", username: "alice"},
+		{name: "path traversal", username: "alice", requestedGroup: ".."},
+		{name: "invalid group punctuation", username: "alice", requestedGroup: "scanner!"},
+		{name: "invalid username punctuation", username: "alice:admin", requestedGroup: "scanner"},
+		{
+			name:           "combined id too long",
+			username:       "alice",
+			requestedGroup: strings.Repeat("a", maxKafkaGroupIDBytes-len("alice:")+1),
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := validKafkaGroupID(tt.group); got != tt.want {
-				t.Fatalf("validKafkaGroupID(%q) = %t, want %t", tt.group, got, tt.want)
+			got, ok := popConsumerGroupID(tt.username, tt.requestedGroup)
+			if got != tt.want || ok != tt.wantOK {
+				t.Fatalf(
+					"popConsumerGroupID(%q, %q) = %q, %t; want %q, %t",
+					tt.username,
+					tt.requestedGroup,
+					got,
+					ok,
+					tt.want,
+					tt.wantOK,
+				)
 			}
 		})
 	}
