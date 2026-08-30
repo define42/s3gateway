@@ -148,6 +148,7 @@ func (l *Lister) List(ctx context.Context) ([]Topic, error) {
 			}
 			elements := end.Offset - start.Offset
 			if elements > math.MaxInt64-topic.Elements {
+				topic.Elements = math.MaxInt64
 				topic.HasUnavailableData = true
 				continue
 			}
