@@ -10,6 +10,80 @@ The gateway then derives and enforces bucket permissions from the user's
 LDAP/AD group memberships before forwarding authorized requests to the
 configured S3-compatible backend.
 
+## Authentication
+
+Both SigV4 credential fields are generated from the same LDAP username and
+password:
+
+```text
+access key ID =
+    "X1" + base64url(
+        ephemeral_public_key || salt || nonce ||
+        ChaCha20-Poly1305("username:password")
+    )
+
+secret access key =
+    base64url(SHA-256("username:password"))
+```
+
+The `X1` prefix identifies the credential format. Each access key ID uses the
+gateway's published X25519 public key together with a fresh client-side
+ephemeral X25519 key pair, salt, and nonce. The gateway uses its private key and
+the included ephemeral public key to derive the same encryption key and decrypt
+the LDAP credentials. The version, ephemeral public key, and salt are bound to
+the ciphertext as additional authenticated data.
+`S3GATEWAY_PRIVATE_X25519_KEY` is therefore required when the gateway starts;
+access key IDs using any other credential format are rejected. See the
+[Python](example_s3_client/python/s3demo_x25519.py) and
+[Go](example_s3_client/golang/) implementations.
+
+LDAP usernames must be supplied without the domain suffix: the gateway appends
+`@LDAP_DOMAIN` before binding and searching. Usernames cannot contain `:`
+because that character separates the username and password in the credential
+payload.
+
+For each S3 request, the gateway:
+
+1. Parses the SigV4 authorization data and validates the request timestamp.
+2. Decrypts the access key ID and derives the SigV4 secret access key.
+3. Verifies the SigV4 request signature, required signed headers, and any
+   declared hexadecimal payload digest as the body is consumed.
+4. Binds to LDAP as `<username>@<LDAP_DOMAIN>` and loads the user's groups.
+5. Applies the group-derived bucket policy and proxies an allowed request.
+
+Always use TLS in production.
+
+Body-bearing requests that use `UNSIGNED-PAYLOAD` or
+`STREAMING-UNSIGNED-PAYLOAD-TRAILER` are accepted only over TLS. Plaintext
+requests must cryptographically bind their body to the SigV4 signature.
+
+### Encrypted client setup
+
+Generate an X25519 key pair. The gateway receives the private key; clients
+receive only the public key:
+
+```bash
+eval "$(python3 example_s3_client/python/generate_x25519_keys.py)"
+```
+
+Start the local stack from the same shell so Compose passes the private key to
+the gateway, then run either encrypted demo with the public key:
+
+```bash
+docker compose up --build -d
+
+# Python
+python3 example_s3_client/python/s3demo_x25519.py
+
+# Go
+export S3GATEWAY_DEMO_PASSWORD=dogood
+export S3GATEWAY_DEMO_READONLY_PASSWORD=dogood
+go run ./example_s3_client/golang
+```
+
+Store production private keys in a secret manager. Do not put them in files
+committed to source control or bake them into container images.
+
 ## Demo
 
 The included Python and Go clients create a bucket, upload and download an
@@ -124,80 +198,6 @@ or `SIGTERM`.
 - Structured S3 audit events with pseudonymized identifiers.
 - Optional Kafka upload events and Splunk HEC log forwarding.
 - Optional ACME-managed HTTPS and unauthenticated health endpoints.
-
-### Authentication
-
-Both SigV4 credential fields are generated from the same LDAP username and
-password:
-
-```text
-access key ID =
-    "X1" + base64url(
-        ephemeral_public_key || salt || nonce ||
-        ChaCha20-Poly1305("username:password")
-    )
-
-secret access key =
-    base64url(SHA-256("username:password"))
-```
-
-The `X1` prefix identifies the credential format. Each access key ID uses the
-gateway's published X25519 public key together with a fresh client-side
-ephemeral X25519 key pair, salt, and nonce. The gateway uses its private key and
-the included ephemeral public key to derive the same encryption key and decrypt
-the LDAP credentials. The version, ephemeral public key, and salt are bound to
-the ciphertext as additional authenticated data.
-`S3GATEWAY_PRIVATE_X25519_KEY` is therefore required when the gateway starts;
-access key IDs using any other credential format are rejected. See the
-[Python](example_s3_client/python/s3demo_x25519.py) and
-[Go](example_s3_client/golang/) implementations.
-
-LDAP usernames must be supplied without the domain suffix: the gateway appends
-`@LDAP_DOMAIN` before binding and searching. Usernames cannot contain `:`
-because that character separates the username and password in the credential
-payload.
-
-For each S3 request, the gateway:
-
-1. Parses the SigV4 authorization data and validates the request timestamp.
-2. Decrypts the access key ID and derives the SigV4 secret access key.
-3. Verifies the SigV4 request signature, required signed headers, and any
-   declared hexadecimal payload digest as the body is consumed.
-4. Binds to LDAP as `<username>@<LDAP_DOMAIN>` and loads the user's groups.
-5. Applies the group-derived bucket policy and proxies an allowed request.
-
-Always use TLS in production.
-
-Body-bearing requests that use `UNSIGNED-PAYLOAD` or
-`STREAMING-UNSIGNED-PAYLOAD-TRAILER` are accepted only over TLS. Plaintext
-requests must cryptographically bind their body to the SigV4 signature.
-
-#### Encrypted client setup
-
-Generate an X25519 key pair. The gateway receives the private key; clients
-receive only the public key:
-
-```bash
-eval "$(python3 example_s3_client/python/generate_x25519_keys.py)"
-```
-
-Start the local stack from the same shell so Compose passes the private key to
-the gateway, then run either encrypted demo with the public key:
-
-```bash
-docker compose up --build -d
-
-# Python
-python3 example_s3_client/python/s3demo_x25519.py
-
-# Go
-export S3GATEWAY_DEMO_PASSWORD=dogood
-export S3GATEWAY_DEMO_READONLY_PASSWORD=dogood
-go run ./example_s3_client/golang
-```
-
-Store production private keys in a secret manager. Do not put them in files
-committed to source control or bake them into container images.
 
 ### Authorization
 
