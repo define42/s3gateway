@@ -762,7 +762,12 @@ type awsChunkedReadCloser struct {
 
 func (r *awsChunkedReadCloser) Read(p []byte) (int, error) { return r.guard.Read(p) }
 
-func (r *awsChunkedReadCloser) Close() error { return r.c.Close() }
+func (r *awsChunkedReadCloser) Close() error {
+	if r.reader != nil {
+		r.reader.releaseChunkBuffer()
+	}
+	return r.c.Close()
+}
 
 func (r *awsChunkedReadCloser) validationError() error {
 	if r.reader == nil {
@@ -981,7 +986,8 @@ type awsChunkedReader struct {
 	decodedBytes         int64
 
 	// Signed chunks are buffered so their signature is verified before any
-	// byte is handed out.
+	// byte is handed out. The backing array is retained across chunks within
+	// this request and released on a terminal read or Close.
 	buf    []byte
 	offset int
 	// Unsigned chunks are streamed through without buffering (SDKs may send
@@ -1010,7 +1016,15 @@ func (r *awsChunkedReader) Read(p []byte) (int, error) {
 	if err != nil && r.err == nil && !errors.Is(err, io.EOF) {
 		r.err = err
 	}
+	if err != nil {
+		r.releaseChunkBuffer()
+	}
 	return n, err
+}
+
+func (r *awsChunkedReader) releaseChunkBuffer() {
+	r.buf = nil
+	r.offset = 0
 }
 
 func (r *awsChunkedReader) read(p []byte) (int, error) {
@@ -1023,7 +1037,8 @@ func (r *awsChunkedReader) read(p []byte) (int, error) {
 			n := copy(p, r.buf[r.offset:])
 			r.offset += n
 			if r.offset == len(r.buf) {
-				r.buf = nil
+				// Keep the backing array for the next signed chunk in this request.
+				r.buf = r.buf[:0]
 				r.offset = 0
 			}
 			return n, nil
@@ -1117,7 +1132,13 @@ func (r *awsChunkedReader) beginChunk() error {
 	if err != nil {
 		return err
 	}
-	chunk := make([]byte, int(n))
+	chunkLen := int(n)
+	if cap(r.buf) < chunkLen {
+		// Signed chunks can be multi-megabyte. Retain the high-water capacity
+		// only for this request instead of putting large buffers in a global pool.
+		r.buf = make([]byte, 0, chunkLen)
+	}
+	chunk := r.buf[:chunkLen]
 	if _, err := io.ReadFull(r.br, chunk); err != nil {
 		return err
 	}
