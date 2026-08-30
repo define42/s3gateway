@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/define42/s3gateway/internal/authn"
 	"github.com/define42/s3gateway/internal/config"
 	ldap "github.com/go-ldap/ldap/v3"
 )
@@ -49,7 +50,7 @@ func FetchGroupsUPN(cfg config.Config, upn, password string) (map[string]struct{
 	upnWithDomain := upn + "@" + ldap.EscapeFilter(cfg.LDAPDomain)
 
 	if err := conn.Bind(upnWithDomain, password); err != nil {
-		return nil, fmt.Errorf("ldap bind failed: %w", err)
+		return nil, wrapBindError(err)
 	}
 
 	filter := fmt.Sprintf("(userPrincipalName=%s)", ldap.EscapeFilter(upnWithDomain))
@@ -77,6 +78,13 @@ func FetchGroupsUPN(cfg config.Config, upn, password string) (map[string]struct{
 		}
 	}
 	return groups, nil
+}
+
+func wrapBindError(err error) error {
+	if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
+		return fmt.Errorf("ldap bind failed: %w: %w", authn.ErrRejectedCredentials, err)
+	}
+	return fmt.Errorf("ldap bind failed: %w", err)
 }
 
 func cnFromDN(dn string) string {

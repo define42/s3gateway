@@ -7,9 +7,14 @@ import (
 	"time"
 )
 
-// ErrLimited reports that an authentication attempt was rejected before
-// reaching the identity backend because its resource budget was exhausted.
-var ErrLimited = errors.New("authentication temporarily limited")
+var (
+	// ErrLimited reports that an authentication attempt was rejected before
+	// reaching the identity backend because its resource budget was exhausted.
+	ErrLimited = errors.New("authentication temporarily limited")
+	// ErrRejectedCredentials reports a definitive identity-backend rejection
+	// that may be safely cached for the exact credential pair.
+	ErrRejectedCredentials = errors.New("authentication credentials rejected")
+)
 
 // Limiter combines a non-blocking concurrency semaphore with a token bucket.
 // It is safe for concurrent use.

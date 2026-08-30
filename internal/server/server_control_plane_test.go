@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -107,6 +108,53 @@ func TestGroupsForCredentialsLimitsConcurrentLDAPCalls(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for first LDAP call to finish")
+	}
+}
+
+func TestGroupsForCredentialsCachesRejectedCredentials(t *testing.T) {
+	gw := New(config.Config{
+		GroupTTL:             2 * time.Minute,
+		GroupCacheMaxEntries: 64,
+		AuthMaxConcurrent:    4,
+		AuthRatePerSecond:    100,
+		AuthRateBurst:        100,
+	}, nil)
+	var calls atomic.Int32
+	gw.fetchGroups = func(_ config.Config, _ string, pass string) (map[string]struct{}, error) {
+		calls.Add(1)
+		switch pass {
+		case "expired-password":
+			return nil, fmt.Errorf("ldap rejected credentials: %w", authn.ErrRejectedCredentials)
+		case "transient-failure":
+			return nil, errors.New("ldap unavailable")
+		default:
+			return map[string]struct{}{"team-r": {}}, nil
+		}
+	}
+
+	for range 2 {
+		if _, err := gw.GroupsForCredentials("service", "expired-password"); !errors.Is(err, authn.ErrRejectedCredentials) {
+			t.Fatalf("expired credential error = %v, want ErrRejectedCredentials", err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("rejected credentials reached LDAP %d times, want 1", got)
+	}
+
+	if _, err := gw.GroupsForCredentials("service", "rotated-password"); err != nil {
+		t.Fatalf("rotated credentials remained rejected: %v", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("rotated credentials reached LDAP %d times total, want 2", got)
+	}
+
+	for range 2 {
+		if _, err := gw.GroupsForCredentials("transient-service", "transient-failure"); err == nil {
+			t.Fatal("transient LDAP failure unexpectedly succeeded")
+		}
+	}
+	if got := calls.Load(); got != 4 {
+		t.Fatalf("transient failures reached LDAP %d times total, want 4", got)
 	}
 }
 

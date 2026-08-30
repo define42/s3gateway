@@ -156,6 +156,9 @@ func (s *Server) GroupsForCredentials(upn, pass string) (map[string]struct{}, er
 	if ok {
 		return grps, nil
 	}
+	if s.gcache.Rejected(upn, pass) {
+		return nil, authn.ErrRejectedCredentials
+	}
 
 	sfKey := groupcache.SingleflightCredentialKey(upn, pass)
 	fetchGroups := s.fetchGroups
@@ -166,6 +169,9 @@ func (s *Server) GroupsForCredentials(upn, pass string) (map[string]struct{}, er
 		if cached, ok := s.gcache.Get(upn, pass); ok {
 			return cached, nil
 		}
+		if s.gcache.Rejected(upn, pass) {
+			return nil, authn.ErrRejectedCredentials
+		}
 		release, err := s.authLimiter.TryAcquire()
 		if err != nil {
 			return nil, err
@@ -173,6 +179,9 @@ func (s *Server) GroupsForCredentials(upn, pass string) (map[string]struct{}, er
 		defer release()
 		fetched, err := fetchGroups(s.cfg, upn, pass)
 		if err != nil {
+			if errors.Is(err, authn.ErrRejectedCredentials) {
+				s.gcache.Reject(upn, pass)
+			}
 			return nil, err
 		}
 		s.gcache.Set(upn, pass, fetched)

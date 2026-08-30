@@ -1,13 +1,43 @@
 package ldap
 
 import (
+	"errors"
 	"net"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/define42/s3gateway/internal/authn"
 	"github.com/define42/s3gateway/internal/config"
+	ldap "github.com/go-ldap/ldap/v3"
 )
+
+func TestWrapBindErrorClassifiesCredentialRejection(t *testing.T) {
+	tests := []struct {
+		name         string
+		err          error
+		wantRejected bool
+	}{
+		{
+			name:         "invalid credentials",
+			err:          ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials")),
+			wantRejected: true,
+		},
+		{
+			name: "network failure",
+			err:  ldap.NewError(ldap.ErrorNetwork, errors.New("connection reset")),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := wrapBindError(tt.err)
+			if got := errors.Is(err, authn.ErrRejectedCredentials); got != tt.wantRejected {
+				t.Fatalf("rejection classification = %t, want %t: %v", got, tt.wantRejected, err)
+			}
+		})
+	}
+}
 
 func TestFetchGroupsUPNLDAPBindFailed(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

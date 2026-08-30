@@ -317,7 +317,7 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 | `S3_SECRET_KEY` | Yes | — | Upstream S3 secret key |
 | `LISTEN_ADDR` | No | `:8080` | Plain HTTP listen address when ACME is disabled |
 | `LDAP_DOMAIN` | No | `example.com` | Domain appended to the client-supplied LDAP username |
-| `LDAP_GROUP_TTL` | No | `2m` | Successful LDAP group-cache lifetime |
+| `LDAP_GROUP_TTL` | No | `2m` | Successful LDAP group and rejected-credential cache lifetime |
 | `LDAP_GROUP_CACHE_MAX_ENTRIES` | No | `10000` | Maximum group-cache entries; also bounds in-memory admin sessions |
 | `LDAP_OPERATION_TIMEOUT` | No | `10s` | Maximum duration of each LDAP dial, bind, or search operation |
 | `AUTH_MAX_CONCURRENT` | No | `32` | Maximum concurrent LDAP authentication operations |

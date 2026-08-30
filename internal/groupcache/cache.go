@@ -1,5 +1,5 @@
-// Package groupcache caches LDAP group membership by user credentials without
-// retaining plaintext passwords.
+// Package groupcache caches LDAP group membership and definitive credential
+// rejections without retaining plaintext passwords.
 package groupcache
 
 import (
@@ -20,14 +20,16 @@ type groupCacheEntry struct {
 	lastSeen       time.Time
 }
 
-// Cache is a concurrency-safe, TTL-bound cache of LDAP group memberships.
-// Entries are keyed by UPN and accept hits only when the supplied password's
-// hash matches the stored credential hash.
+// Cache is a concurrency-safe, TTL-bound cache of LDAP group memberships and
+// exact rejected credentials. Successful entries are keyed by UPN and accept
+// hits only when the supplied password's hash matches the stored hash.
 type Cache struct {
-	mu         sync.Mutex
-	data       map[string]groupCacheEntry
-	ttl        time.Duration
-	maxEntries int
+	mu                  sync.Mutex
+	data                map[string]groupCacheEntry
+	rejectedCredentials map[[sha256.Size]byte]time.Time
+	ttl                 time.Duration
+	maxEntries          int
+	now                 func() time.Time
 }
 
 // New constructs a cache with the supplied TTL and capacity. A non-positive
@@ -38,19 +40,22 @@ func New(ttl time.Duration, maxEntries int) *Cache {
 		maxEntries = config.DefaultGroupCacheMaxEntries
 	}
 	return &Cache{
-		data:       map[string]groupCacheEntry{},
-		ttl:        ttl,
-		maxEntries: maxEntries,
+		data:                map[string]groupCacheEntry{},
+		rejectedCredentials: map[[sha256.Size]byte]time.Time{},
+		ttl:                 ttl,
+		maxEntries:          maxEntries,
+		now:                 time.Now,
 	}
 }
 
-// MaxEntries returns the configured entry limit.
+// MaxEntries returns the separate capacity used for successful and rejected
+// credential entries.
 func (c *Cache) MaxEntries() int {
 	return c.maxEntries
 }
 
-// Len returns the number of stored entries, including entries that have
-// expired but have not yet been accessed or evicted.
+// Len returns the number of successful group entries, including entries that
+// have expired but have not yet been accessed or evicted.
 func (c *Cache) Len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -87,7 +92,7 @@ func (c *Cache) Get(upn, password string) (map[string]struct{}, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	now := time.Now()
+	now := c.now()
 	e, ok := c.data[upn]
 	if !ok {
 		return nil, false
@@ -103,6 +108,68 @@ func (c *Cache) Get(upn, password string) (map[string]struct{}, bool) {
 	e.lastSeen = now
 	c.data[upn] = e
 	return CloneGroups(e.groups), true
+}
+
+// Rejected reports whether the identity backend recently rejected this exact
+// username and password. Expired entries are removed on access.
+func (c *Cache) Rejected(upn, password string) bool {
+	credentialHash := cacheCredentialHash(upn, password)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	expires, ok := c.rejectedCredentials[credentialHash]
+	if !ok {
+		return false
+	}
+	if c.now().After(expires) {
+		delete(c.rejectedCredentials, credentialHash)
+		return false
+	}
+	return true
+}
+
+func (c *Cache) evictExpiredRejectedLocked(now time.Time) {
+	for credentialHash, expires := range c.rejectedCredentials {
+		if now.After(expires) {
+			delete(c.rejectedCredentials, credentialHash)
+		}
+	}
+}
+
+func (c *Cache) evictOldestRejectedLocked() {
+	var victim [sha256.Size]byte
+	var victimExpiry time.Time
+	found := false
+	for credentialHash, expires := range c.rejectedCredentials {
+		if !found || expires.Before(victimExpiry) {
+			victim = credentialHash
+			victimExpiry = expires
+			found = true
+		}
+	}
+	if found {
+		delete(c.rejectedCredentials, victim)
+	}
+}
+
+// Reject caches a definitive identity-backend rejection for this exact
+// username and password. Rejections use the successful cache TTL and have a
+// separate, equally sized bound so untrusted misses cannot evict valid users.
+func (c *Cache) Reject(upn, password string) {
+	credentialHash := cacheCredentialHash(upn, password)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := c.now()
+	c.evictExpiredRejectedLocked(now)
+	if _, exists := c.rejectedCredentials[credentialHash]; !exists {
+		for len(c.rejectedCredentials) >= c.maxEntries {
+			c.evictOldestRejectedLocked()
+		}
+	}
+	c.rejectedCredentials[credentialHash] = now.Add(c.ttl)
 }
 
 func (c *Cache) evictExpiredLocked(now time.Time) {
@@ -143,7 +210,7 @@ func (c *Cache) Set(upn, password string, groups map[string]struct{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	now := time.Now()
+	now := c.now()
 	c.evictExpiredLocked(now)
 
 	if _, exists := c.data[upn]; !exists {
@@ -152,10 +219,12 @@ func (c *Cache) Set(upn, password string, groups map[string]struct{}) {
 		}
 	}
 
+	credentialHash := cacheCredentialHash(upn, password)
 	c.data[upn] = groupCacheEntry{
 		groups:         CloneGroups(groups),
-		credentialHash: cacheCredentialHash(upn, password),
+		credentialHash: credentialHash,
 		expires:        now.Add(c.ttl),
 		lastSeen:       now,
 	}
+	delete(c.rejectedCredentials, credentialHash)
 }
