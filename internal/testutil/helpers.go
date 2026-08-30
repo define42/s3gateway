@@ -16,8 +16,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/redpanda"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+const redpandaTestImage = "docker.redpanda.com/redpandadata/redpanda:v25.2.4"
 
 // ModuleRoot returns the absolute path of the module root directory,
 // derived from the compile-time location of this source file
@@ -194,6 +197,34 @@ func StartMinio(ctx context.Context, tb testing.TB, accessKey string, secretKey 
 
 	return endpoint, func() {
 		_ = container.Terminate(context.Background())
+	}
+}
+
+// StartRedpanda starts a single-node Redpanda container with automatic topic
+// creation enabled and returns its host-accessible Kafka seed broker.
+func StartRedpanda(ctx context.Context, tb testing.TB) (string, func()) {
+	tb.Helper()
+
+	container, err := redpanda.Run(
+		ctx,
+		redpandaTestImage,
+		redpanda.WithAutoCreateTopics(),
+	)
+	if err != nil {
+		if container != nil {
+			_ = testcontainers.TerminateContainer(container)
+		}
+		tb.Fatalf("failed to start redpanda container: %v", err)
+	}
+
+	broker, err := container.KafkaSeedBroker(ctx)
+	if err != nil {
+		_ = testcontainers.TerminateContainer(container)
+		tb.Fatalf("get redpanda kafka seed broker: %v", err)
+	}
+
+	return broker, func() {
+		_ = testcontainers.TerminateContainer(container)
 	}
 }
 
