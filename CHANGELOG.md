@@ -7,6 +7,10 @@ Release versions and dates below come from this repository's Git tags.
 
 ## [Unreleased]
 
+### Added
+
+- Added a Go AWS SDK v2 client example using X25519-protected gateway credentials.
+
 ### Changed
 
 - S3 authentication now accepts only X25519-encrypted `X1...` access key IDs, and `S3GATEWAY_PRIVATE_X25519_KEY` is required at startup.

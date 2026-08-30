@@ -5,8 +5,8 @@
 This is a Go application with its entry point in `cmd/s3gateway/`. Application composition and gateway code live under `internal/` (for example `internal/app`, `internal/server`, `internal/config`, `internal/s3credentials`, and `internal/certreader`).
 HTML admin templates live in `internal/adminpage/webtemplate/`.
 Test fixtures for local LDAP live in `testldap/`.
-The encrypted example client and X25519 key generator are in
-`example_s3_client/python/`.
+Encrypted example clients are in `example_s3_client/python/` and
+`example_s3_client/golang/`. The X25519 key generator is in the Python folder.
 Tests are colocated with their packages under `internal/`. Docker-backed integration tests live in `internal/app/`, and gateway benchmarks live in `internal/server/`.
 
 ## Build, Test, and Development Commands

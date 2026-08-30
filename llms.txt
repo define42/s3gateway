@@ -150,7 +150,7 @@ See the configuration table in `README.md` and validation in `internal/config/co
 - `internal/upstream/`: AWS SDK S3 client construction
 - `internal/uploadnotify/`, `internal/kafkapop/`: Kafka publishing and pop consumption
 - `internal/splunkhec/`: optional log forwarding
-- `example_s3_client/`: Python and Java clients
+- `example_s3_client/`: Python and Go X25519 clients
 - `testldap/`: local GLAUTH fixture
 - `.github/workflows/`: lint/test/release/container, benchmark, and CodeQL automation
 

@@ -9,8 +9,8 @@ S3-compatible backend such as MinIO, Ceph Object Gateway, or Amazon S3.
 
 ## Demo
 
-The included Python client creates a bucket, uploads and downloads an object,
-lists the result, and confirms that a read-only LDAP user cannot upload:
+The included Python and Go clients create a bucket, upload and download an
+object, list the result, and confirm that a read-only LDAP user cannot upload:
 
 ```console
 $ python3 example_s3_client/python/s3demo_x25519.py
@@ -48,10 +48,16 @@ The services are available at:
 `readonly` has read-only access to `team2`.
 
 Run the encrypted credential demo from the same shell so the client receives
-the matching public key:
+the matching public key. Choose either client:
 
 ```bash
+# Python
 python3 example_s3_client/python/s3demo_x25519.py
+
+# Go
+export S3GATEWAY_DEMO_PASSWORD=dogood
+export S3GATEWAY_DEMO_READONLY_PASSWORD=dogood
+go run ./example_s3_client/golang
 ```
 
 Stop the stack when finished:
@@ -127,7 +133,7 @@ secret access key = base64url(SHA-256("username:password"))
 
 | Mode | SigV4 access key ID | Credential protection | Example |
 | --- | --- | --- | --- |
-| X25519 | `X1` + unpadded `base64url(concat(ephemeral_public_key, salt, nonce, ciphertext))` | X25519, HKDF-SHA256, and ChaCha20-Poly1305 | [`s3demo_x25519.py`](example_s3_client/python/s3demo_x25519.py) |
+| X25519 | `X1` + unpadded `base64url(concat(ephemeral_public_key, salt, nonce, ciphertext))` | X25519, HKDF-SHA256, and ChaCha20-Poly1305 | [Python](example_s3_client/python/s3demo_x25519.py) · [Go](example_s3_client/golang/) |
 
 For X25519 credentials, the version, ephemeral public key, and salt are bound
 to the ciphertext as additional authenticated data.
@@ -164,11 +170,18 @@ eval "$(python3 example_s3_client/python/generate_x25519_keys.py)"
 ```
 
 Start the local stack from the same shell so Compose passes the private key to
-the gateway, then run the encrypted demo with the public key:
+the gateway, then run either encrypted demo with the public key:
 
 ```bash
 docker compose up --build -d
+
+# Python
 python3 example_s3_client/python/s3demo_x25519.py
+
+# Go
+export S3GATEWAY_DEMO_PASSWORD=dogood
+export S3GATEWAY_DEMO_READONLY_PASSWORD=dogood
+go run ./example_s3_client/golang
 ```
 
 Store production private keys in a secret manager. Do not put them in files
