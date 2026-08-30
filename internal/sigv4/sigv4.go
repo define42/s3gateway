@@ -844,50 +844,110 @@ type trailerGuardReader struct {
 
 func (g *trailerGuardReader) Read(p []byte) (int, error) {
 	if g.err != nil {
-		return 0, g.err
+		if !errors.Is(g.err, io.EOF) || !g.haveCarry {
+			return 0, g.err
+		}
+		if len(p) == 0 {
+			return 0, nil
+		}
+		// The underlying reader returned data and EOF together. Validation
+		// therefore passed, so the remaining held byte is safe to release.
+		p[0] = g.carry
+		g.haveCarry = false
+		return 1, nil
 	}
 	if len(p) == 0 {
 		return 0, nil
 	}
 	for {
-		n, err := g.r.Read(p)
-		if n > 0 {
-			if g.haveCarry {
-				if n == len(p) {
-					// No room to grow: emit the carry in front and retain the
-					// new final byte instead.
-					newCarry := p[n-1]
-					copy(p[1:], p[:n-1])
-					p[0] = g.carry
-					g.carry = newCarry
-					return n, nil
-				}
-				copy(p[1:n+1], p[:n])
-				p[0] = g.carry
-				g.haveCarry = false
-				n++
-			}
-			n--
-			g.carry = p[n]
-			g.haveCarry = true
+		hadCarry := g.haveCarry
+		if hadCarry && len(p) == 1 {
+			// Read the next byte into p, then restore the existing carry. Once
+			// another byte exists, the carry is known not to be final and is safe
+			// to emit. This avoids both a heap-backed scratch byte and a memmove.
+			carry := g.carry
+			n, err := g.r.Read(p)
 			if n > 0 {
-				return n, nil
+				next := p[0]
+				p[0] = carry
+				if err != nil {
+					g.err = err
+					if errors.Is(err, io.EOF) {
+						g.carry = next
+						return 1, nil
+					}
+					g.haveCarry = false
+					return 1, nil
+				}
+				g.carry = next
+				return 1, nil
 			}
+
+			p[0] = carry
 			if err == nil {
 				continue
 			}
+			g.err = err
+			g.haveCarry = false
+			if errors.Is(err, io.EOF) {
+				return 1, nil
+			}
+			return 0, err
+		}
+
+		dst := p
+		if hadCarry {
+			p[0] = g.carry
+			// Read directly behind the carry. In the steady state this
+			// replaces the old overlapping full-buffer copy.
+			dst = p[1:]
+		}
+
+		n, err := g.r.Read(dst)
+		if n > 0 {
+			if err != nil {
+				g.err = err
+				if errors.Is(err, io.EOF) {
+					// EOF validates every byte returned by this read.
+					g.haveCarry = false
+					if hadCarry {
+						return n + 1, nil
+					}
+					return n, nil
+				}
+
+				// Validation failed. Exclude the final new byte, but return
+				// any preceding bytes before surfacing the error next time.
+				g.haveCarry = false
+				safe := n - 1
+				if hadCarry {
+					safe++
+				}
+				if safe > 0 {
+					return safe, nil
+				}
+				return 0, err
+			}
+
+			g.carry = dst[n-1]
+			g.haveCarry = true
+			safe := n - 1
+			if hadCarry {
+				safe++
+			}
+			if safe > 0 {
+				return safe, nil
+			}
+			continue
 		}
 		if err == nil {
 			continue
 		}
-		if errors.Is(err, io.EOF) && g.haveCarry {
-			// End-of-stream validation passed; release the held byte.
-			p[0] = g.carry
-			g.haveCarry = false
-			g.err = io.EOF
+		g.err = err
+		g.haveCarry = false
+		if errors.Is(err, io.EOF) && hadCarry {
 			return 1, nil
 		}
-		g.err = err
 		return 0, err
 	}
 }
