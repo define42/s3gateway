@@ -127,21 +127,30 @@ or `SIGTERM`.
 
 ### Authentication
 
-The client's SigV4 access key ID carries the X25519-encrypted LDAP username and
-password. The SigV4 secret access key is derived from the same credentials:
+Both SigV4 credential fields are generated from the same LDAP username and
+password:
 
 ```text
-secret access key = base64url(SHA-256("username:password"))
+access key ID =
+    "X1" + base64url(
+        ephemeral_public_key || salt || nonce ||
+        ChaCha20-Poly1305("username:password")
+    )
+
+secret access key =
+    base64url(SHA-256("username:password"))
 ```
 
-| Mode | SigV4 access key ID | Credential protection | Example |
-| --- | --- | --- | --- |
-| X25519 | `X1` + unpadded `base64url(concat(ephemeral_public_key, salt, nonce, ciphertext))` | X25519, HKDF-SHA256, and ChaCha20-Poly1305 | [Python](example_s3_client/python/s3demo_x25519.py) · [Go](example_s3_client/golang/) |
-
-For X25519 credentials, the version, ephemeral public key, and salt are bound
-to the ciphertext as additional authenticated data.
-`S3GATEWAY_PRIVATE_X25519_KEY` is required when the gateway starts; access key
-IDs using any other credential format are rejected.
+The `X1` prefix identifies the credential format. Each access key ID uses the
+gateway's published X25519 public key together with a fresh client-side
+ephemeral X25519 key pair, salt, and nonce. The gateway uses its private key and
+the included ephemeral public key to derive the same encryption key and decrypt
+the LDAP credentials. The version, ephemeral public key, and salt are bound to
+the ciphertext as additional authenticated data.
+`S3GATEWAY_PRIVATE_X25519_KEY` is therefore required when the gateway starts;
+access key IDs using any other credential format are rejected. See the
+[Python](example_s3_client/python/s3demo_x25519.py) and
+[Go](example_s3_client/golang/) implementations.
 
 LDAP usernames must be supplied without the domain suffix: the gateway appends
 `@LDAP_DOMAIN` before binding and searching. Usernames cannot contain `:`
