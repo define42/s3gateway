@@ -84,6 +84,87 @@ go run ./example_s3_client/golang
 Store production private keys in a secret manager. Do not put them in files
 committed to source control or bake them into container images.
 
+## Authorization
+
+LDAP group names use `<namespace>-<permissions>`. The namespace is the part of
+a bucket name before its first `-`; permissions are one or more letters:
+
+| Letter | Permission |
+| --- | --- |
+| `r` | Read buckets and objects |
+| `w` | Write objects and mutable bucket settings |
+| `c` | Create buckets and put lifecycle or encryption configuration |
+| `d` | Delete objects |
+| `b` | Delete buckets and lifecycle or encryption configuration |
+
+For example, `team2-r` can read `team2-logs` and `team2-data`, while
+`team2-rwcdb` grants every permission implemented by the gateway for the
+`team2` namespace. Permissions from multiple groups for the same namespace are
+combined. `ListBuckets` returns matching buckets when the user has any
+permission for their namespace.
+
+Copy operations require `r` on the source bucket and `w` on the destination
+bucket.
+
+## S3 compatibility
+
+Only path-style requests (`/<bucket>/<key>`) are supported. Virtual-hosted-style
+requests are not.
+
+| Scope | Route / request | Operation or behavior | Required permission |
+| --- | --- | --- | --- |
+| Bucket | `GET /` | ListBuckets; only matching buckets are returned | Any permission on the bucket namespace |
+| Bucket | `PUT /<bucket>` | CreateBucket | `c` |
+| Bucket | `HEAD /<bucket>` | HeadBucket | `r` |
+| Bucket | `DELETE /<bucket>` | DeleteBucket | `b` |
+| Bucket | `GET /<bucket>?location` | GetBucketLocation | Any permission |
+| Bucket | `GET /<bucket>` | ListObjects v1 | `r` |
+| Bucket | `GET /<bucket>?list-type=2` | ListObjectsV2 | `r` |
+| Bucket | `GET /<bucket>?versions` | ListObjectVersions | `r` |
+| Bucket | `POST /<bucket>?delete` | DeleteObjects | `d` |
+| Bucket | `PUT /<bucket>?versioning` | PutBucketVersioning | `w` |
+| Bucket | `GET /<bucket>?versioning` | GetBucketVersioning | `r` |
+| Bucket | `PUT /<bucket>?lifecycle` | PutBucketLifecycleConfiguration | `c` |
+| Bucket | `GET /<bucket>?lifecycle` | GetBucketLifecycleConfiguration | `r` |
+| Bucket | `DELETE /<bucket>?lifecycle` | DeleteBucketLifecycleConfiguration | `b` |
+| Bucket | `PUT /<bucket>?tagging` | PutBucketTagging | `w` |
+| Bucket | `GET /<bucket>?tagging` | GetBucketTagging | `r` |
+| Bucket | `DELETE /<bucket>?tagging` | DeleteBucketTagging | `w` |
+| Bucket | `GET /<bucket>?uploads` | ListMultipartUploads | `r` |
+| Bucket | `GET /<bucket>?acl` | Return a canned owner `FULL_CONTROL` ACL | `r` |
+| Bucket | `PUT /<bucket>?acl` | Accept the `private` canned ACL as a no-op | `w` |
+| Bucket | `PUT /<bucket>?encryption` | PutBucketEncryption | `c` |
+| Bucket | `GET /<bucket>?encryption` | GetBucketEncryption | `r` |
+| Bucket | `DELETE /<bucket>?encryption` | DeleteBucketEncryption | `b` |
+| Bucket | `GET /<bucket>?policy`, `?policyStatus` | Return `NoSuchBucketPolicy`; the gateway has no bucket policies | `r` |
+| Bucket | `GET /<bucket>?cors`, `?website`, `?replication` | Return the matching not-configured error | `r` |
+| Bucket | `GET /<bucket>?logging`, `?notification`, `?accelerate` | Return an empty or disabled configuration | `r` |
+| Bucket | `GET /<bucket>?requestPayment` | Return `BucketOwner` | `r` |
+| Bucket | `GET /<bucket>?publicAccessBlock` | Return all public-access blocks enabled | `r` |
+| Object | `GET /<bucket>/<key>?acl` | Return a canned owner `FULL_CONTROL` ACL | `r` |
+| Object | `PUT /<bucket>/<key>?acl` | Accept `private`, `bucket-owner-read`, or `bucket-owner-full-control` as a no-op | `w` |
+| Object | `GET /<bucket>/<key>` | GetObject | `r` |
+| Object | `HEAD /<bucket>/<key>` | HeadObject | `r` |
+| Object | `PUT /<bucket>/<key>` | PutObject | `w` |
+| Object | `PUT /<bucket>/<key>` with `x-amz-copy-source` | CopyObject | Destination `w`; source `r` |
+| Object | `GET /<bucket>/<key>?attributes` | GetObjectAttributes | `r` |
+| Object | `DELETE /<bucket>/<key>` | DeleteObject | `d` |
+| Object | `PUT /<bucket>/<key>?tagging` | PutObjectTagging | `w` |
+| Object | `GET /<bucket>/<key>?tagging` | GetObjectTagging | `r` |
+| Object | `DELETE /<bucket>/<key>?tagging` | DeleteObjectTagging | `w` |
+| Multipart | `POST /<bucket>/<key>?uploads` | CreateMultipartUpload | `w` |
+| Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` | UploadPart | `w` |
+| Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` with `x-amz-copy-source` | UploadPartCopy | Destination `w`; source `r` |
+| Multipart | `GET /<bucket>/<key>?uploadId=...` | ListParts | `r` |
+| Multipart | `POST /<bucket>/<key>?uploadId=...` | CompleteMultipartUpload | `w` |
+| Multipart | `DELETE /<bucket>/<key>?uploadId=...` | AbortMultipartUpload | `w` |
+| Streaming | `STREAMING-AWS4-HMAC-SHA256-PAYLOAD` | Verify the `aws-chunked` per-chunk signature chain | Permission required by the underlying write route |
+| Streaming | `STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER` | Verify the chunk chain, signed trailer, and trailing checksum | Permission required by the underlying write route |
+| Streaming | `STREAMING-UNSIGNED-PAYLOAD-TRAILER` | Over TLS, validate the trailing CRC32, CRC32C, CRC64NVME, SHA-1, or SHA-256 checksum | Permission required by the underlying write route |
+
+Streaming writes require `x-amz-decoded-content-length`. Signed-trailer mode
+also requires `x-amz-trailer-signature`.
+
 ## Demo
 
 The included Python and Go clients create a bucket, upload and download an
@@ -199,28 +280,6 @@ or `SIGTERM`.
 - Optional Kafka upload events and Splunk HEC log forwarding.
 - Optional ACME-managed HTTPS and unauthenticated health endpoints.
 
-### Authorization
-
-LDAP group names use `<namespace>-<permissions>`. The namespace is the part of
-a bucket name before its first `-`; permissions are one or more letters:
-
-| Letter | Permission |
-| --- | --- |
-| `r` | Read buckets and objects |
-| `w` | Write objects and mutable bucket settings |
-| `c` | Create buckets and put lifecycle or encryption configuration |
-| `d` | Delete objects |
-| `b` | Delete buckets and lifecycle or encryption configuration |
-
-For example, `team2-r` can read `team2-logs` and `team2-data`, while
-`team2-rwcdb` grants every permission implemented by the gateway for the
-`team2` namespace. Permissions from multiple groups for the same namespace are
-combined. `ListBuckets` returns matching buckets when the user has any
-permission for their namespace.
-
-Copy operations require `r` on the source bucket and `w` on the destination
-bucket.
-
 ### Admin console
 
 Open `/login` in a browser and sign in with an LDAP username without the domain
@@ -232,65 +291,6 @@ Admin sessions expire 30 minutes after login and are stored in process memory.
 They are invalidated on restart and are not shared between gateway replicas.
 Set `COOKIE_SECRET` to the same strong value on persistent deployments so the
 cookie encryption keys do not change on every restart.
-
-### S3 compatibility
-
-Only path-style requests (`/<bucket>/<key>`) are supported. Virtual-hosted-style
-requests are not.
-
-| Scope | Route / request | Operation or behavior | Required permission |
-| --- | --- | --- | --- |
-| Bucket | `GET /` | ListBuckets; only matching buckets are returned | Any permission on the bucket namespace |
-| Bucket | `PUT /<bucket>` | CreateBucket | `c` |
-| Bucket | `HEAD /<bucket>` | HeadBucket | `r` |
-| Bucket | `DELETE /<bucket>` | DeleteBucket | `b` |
-| Bucket | `GET /<bucket>?location` | GetBucketLocation | Any permission |
-| Bucket | `GET /<bucket>` | ListObjects v1 | `r` |
-| Bucket | `GET /<bucket>?list-type=2` | ListObjectsV2 | `r` |
-| Bucket | `GET /<bucket>?versions` | ListObjectVersions | `r` |
-| Bucket | `POST /<bucket>?delete` | DeleteObjects | `d` |
-| Bucket | `PUT /<bucket>?versioning` | PutBucketVersioning | `w` |
-| Bucket | `GET /<bucket>?versioning` | GetBucketVersioning | `r` |
-| Bucket | `PUT /<bucket>?lifecycle` | PutBucketLifecycleConfiguration | `c` |
-| Bucket | `GET /<bucket>?lifecycle` | GetBucketLifecycleConfiguration | `r` |
-| Bucket | `DELETE /<bucket>?lifecycle` | DeleteBucketLifecycleConfiguration | `b` |
-| Bucket | `PUT /<bucket>?tagging` | PutBucketTagging | `w` |
-| Bucket | `GET /<bucket>?tagging` | GetBucketTagging | `r` |
-| Bucket | `DELETE /<bucket>?tagging` | DeleteBucketTagging | `w` |
-| Bucket | `GET /<bucket>?uploads` | ListMultipartUploads | `r` |
-| Bucket | `GET /<bucket>?acl` | Return a canned owner `FULL_CONTROL` ACL | `r` |
-| Bucket | `PUT /<bucket>?acl` | Accept the `private` canned ACL as a no-op | `w` |
-| Bucket | `PUT /<bucket>?encryption` | PutBucketEncryption | `c` |
-| Bucket | `GET /<bucket>?encryption` | GetBucketEncryption | `r` |
-| Bucket | `DELETE /<bucket>?encryption` | DeleteBucketEncryption | `b` |
-| Bucket | `GET /<bucket>?policy`, `?policyStatus` | Return `NoSuchBucketPolicy`; the gateway has no bucket policies | `r` |
-| Bucket | `GET /<bucket>?cors`, `?website`, `?replication` | Return the matching not-configured error | `r` |
-| Bucket | `GET /<bucket>?logging`, `?notification`, `?accelerate` | Return an empty or disabled configuration | `r` |
-| Bucket | `GET /<bucket>?requestPayment` | Return `BucketOwner` | `r` |
-| Bucket | `GET /<bucket>?publicAccessBlock` | Return all public-access blocks enabled | `r` |
-| Object | `GET /<bucket>/<key>?acl` | Return a canned owner `FULL_CONTROL` ACL | `r` |
-| Object | `PUT /<bucket>/<key>?acl` | Accept `private`, `bucket-owner-read`, or `bucket-owner-full-control` as a no-op | `w` |
-| Object | `GET /<bucket>/<key>` | GetObject | `r` |
-| Object | `HEAD /<bucket>/<key>` | HeadObject | `r` |
-| Object | `PUT /<bucket>/<key>` | PutObject | `w` |
-| Object | `PUT /<bucket>/<key>` with `x-amz-copy-source` | CopyObject | Destination `w`; source `r` |
-| Object | `GET /<bucket>/<key>?attributes` | GetObjectAttributes | `r` |
-| Object | `DELETE /<bucket>/<key>` | DeleteObject | `d` |
-| Object | `PUT /<bucket>/<key>?tagging` | PutObjectTagging | `w` |
-| Object | `GET /<bucket>/<key>?tagging` | GetObjectTagging | `r` |
-| Object | `DELETE /<bucket>/<key>?tagging` | DeleteObjectTagging | `w` |
-| Multipart | `POST /<bucket>/<key>?uploads` | CreateMultipartUpload | `w` |
-| Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` | UploadPart | `w` |
-| Multipart | `PUT /<bucket>/<key>?partNumber=N&uploadId=...` with `x-amz-copy-source` | UploadPartCopy | Destination `w`; source `r` |
-| Multipart | `GET /<bucket>/<key>?uploadId=...` | ListParts | `r` |
-| Multipart | `POST /<bucket>/<key>?uploadId=...` | CompleteMultipartUpload | `w` |
-| Multipart | `DELETE /<bucket>/<key>?uploadId=...` | AbortMultipartUpload | `w` |
-| Streaming | `STREAMING-AWS4-HMAC-SHA256-PAYLOAD` | Verify the `aws-chunked` per-chunk signature chain | Permission required by the underlying write route |
-| Streaming | `STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER` | Verify the chunk chain, signed trailer, and trailing checksum | Permission required by the underlying write route |
-| Streaming | `STREAMING-UNSIGNED-PAYLOAD-TRAILER` | Over TLS, validate the trailing CRC32, CRC32C, CRC64NVME, SHA-1, or SHA-256 checksum | Permission required by the underlying write route |
-
-Streaming writes require `x-amz-decoded-content-length`. Signed-trailer mode
-also requires `x-amz-trailer-signature`.
 
 ### Upload metadata
 
