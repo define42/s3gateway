@@ -16,11 +16,12 @@
 The local stack starts MinIO, GLAUTH, and s3gateway:
 
 ```bash
-docker compose up --build -d
 python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install boto3 cryptography
-python3 example_s3_client/python/s3demo.py
+eval "$(python3 example_s3_client/python/generate_x25519_keys.py)"
+docker compose up --build -d
+python3 example_s3_client/python/s3demo_x25519.py
 docker compose down
 ```
 
@@ -32,6 +33,7 @@ export LDAP_BASE_DN='dc=example,dc=com'
 export S3_ENDPOINT='https://s3.example.com'
 export S3_ACCESS_KEY='upstream-access-key'
 export S3_SECRET_KEY='upstream-secret-key'
+export S3GATEWAY_PRIVATE_X25519_KEY='64-character-hex-private-key'
 go run ./cmd/s3gateway
 ```
 
@@ -56,7 +58,7 @@ go test -run '^$' \
 ## Request flow and architecture
 
 1. `cmd/s3gateway` calls `internal/app.Run`, which loads configuration, composes dependencies, starts HTTP or ACME-managed HTTPS, and handles graceful shutdown.
-2. `internal/s3credentials` decodes legacy `AD...` access key IDs or decrypts `X1...` X25519 credentials; `internal/sigv4` validates the request time and SigV4 signature.
+2. `internal/s3credentials` decrypts `X1...` X25519 credentials; `internal/sigv4` validates the request time and SigV4 signature.
 3. `internal/ldap` authenticates the user and loads groups; `internal/groupcache` caches successful group lookups.
 4. `internal/authz` turns group names into namespace permissions; `internal/server` dispatches allowed S3 operations and proxies them through `internal/upstream` using the gateway's configured upstream credentials.
 5. `internal/adminpage` serves the browser console with the same LDAP-derived authorization rules. HTML templates are embedded from `internal/adminpage/webtemplate`.
@@ -67,7 +69,7 @@ Supporting protocol packages include `internal/s3http` for S3 request/error tran
 ## Authentication and authorization
 
 - Only header-based SigV4 is supported. Presigned URLs and virtual-hosted-style S3 requests are not supported.
-- Client access key IDs contain LDAP credentials. `X1...` uses X25519, HKDF-SHA256, and ChaCha20-Poly1305; legacy `AD...` is only base64 and is reversible.
+- Client access key IDs contain LDAP credentials protected with X25519, HKDF-SHA256, and ChaCha20-Poly1305. Only the `X1...` format is accepted.
 - The SigV4 secret access key is `base64url(SHA-256("username:password"))`.
 - The gateway appends `@LDAP_DOMAIN` to client usernames before LDAP bind/search. Usernames cannot contain `:`.
 - LDAP groups use `<namespace>-<permissions>`. Permissions are `r` read, `w` write, `c` create/configure, `d` delete objects, and `b` delete buckets/configuration.
@@ -82,12 +84,12 @@ Required variables:
 
 - `LDAP_URL`, `LDAP_BASE_DN`
 - `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`
+- `S3GATEWAY_PRIVATE_X25519_KEY`
 
 Core optional variables and defaults:
 
 - `LISTEN_ADDR=:8080`, `LDAP_DOMAIN=example.com`, `LDAP_GROUP_TTL=2m`, `LDAP_GROUP_CACHE_MAX_ENTRIES=10000`
 - `S3_REGION=us-east-1`, `S3_FORCE_PATH_STYLE=true`, `SIGV4_MAX_SKEW=15m`
-- `S3GATEWAY_PRIVATE_X25519_KEY` for `X1...` client credentials
 - `REQUIRED_UPLOAD_METADATA_KEYS` for required `x-amz-meta-*` fields
 - `COOKIE_SECRET`; when set it must be at least 32 characters
 
@@ -127,7 +129,7 @@ See the configuration table in `README.md` and validation in `internal/config/co
 
 ## Security boundaries and operational constraints
 
-- Use TLS for every production client connection. Legacy `AD...` access key IDs expose recoverable LDAP credentials, and `/api/pop/*` uses HTTP Basic credentials.
+- Use TLS for every production client connection; `/api/pop/*` uses HTTP Basic credentials.
 - Store `S3_SECRET_KEY`, LDAP credentials, `S3GATEWAY_PRIVATE_X25519_KEY`, `COOKIE_SECRET`, `S3_AUDIT_HASH_KEY`, and `SPLUNK_HEC_TOKEN` outside source control and container images.
 - The gateway authenticates clients with LDAP but accesses the backend through one configured upstream S3 identity. Its LDAP authorization checks are therefore the application boundary protecting upstream access.
 - Admin sessions are stored in process memory, expire about 30 minutes after login, disappear on restart, and are not shared between replicas. An empty `COOKIE_SECRET` also generates ephemeral cookie keys.

@@ -96,7 +96,7 @@ def list_s3_buckets(s3):
 def create_bucket_and_upload_file(s3):
     bucket_name = "team2-data"
     object_key = f"team2-data-upload-{uuid.uuid4().hex}.txt"
-    content = f"Sample data uploaded by s3demo.py [{object_key}]\n"
+    content = f"Sample data uploaded by s3demo_x25519.py [{object_key}]\n"
 
     try:
         create_bucket_args = {"Bucket": bucket_name}

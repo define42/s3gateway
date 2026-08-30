@@ -16,7 +16,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/define42/s3gateway/internal/config"
-	"github.com/define42/s3gateway/internal/s3credentials"
 	"github.com/define42/s3gateway/internal/testutil"
 	"github.com/define42/s3gateway/internal/upstream"
 )
@@ -85,10 +84,7 @@ func TestS3ClientUpload100MBThroughGateway(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	accessKey, secretKey, err := s3credentials.GenerateKeysBase64Encoded("testuser", "dogood")
-	if err != nil {
-		t.Fatalf("generate keys: %v", err)
-	}
+	accessKey, secretKey := mustGatewayCredentials(t, gw, "testuser", "dogood")
 	client := testutil.NewS3Client(t, t.Context(), gwSrv.URL, "us-east-1", accessKey, secretKey)
 
 	tmpFile, err := os.CreateTemp(t.TempDir(), "gateway-upload-100mb-*")

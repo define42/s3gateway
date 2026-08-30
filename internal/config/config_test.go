@@ -1,28 +1,54 @@
 package config
 
 import (
+	"crypto/ecdh"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/define42/s3gateway/internal/s3credentials"
 )
+
+func mustTestX25519PrivateKey(t *testing.T) *ecdh.PrivateKey {
+	t.Helper()
+	privateKeyHex, _, err := s3credentials.GenerateX25519TestKeys()
+	if err != nil {
+		t.Fatalf("generate X25519 test key: %v", err)
+	}
+	privateKey, err := s3credentials.X25519PrivateKeyFromHex(privateKeyHex)
+	if err != nil {
+		t.Fatalf("parse X25519 test private key: %v", err)
+	}
+	return privateKey
+}
+
+func setRequiredX25519PrivateKeyEnv(t *testing.T) {
+	t.Helper()
+	privateKeyHex, _, err := s3credentials.GenerateX25519TestKeys()
+	if err != nil {
+		t.Fatalf("generate X25519 test key: %v", err)
+	}
+	t.Setenv("S3GATEWAY_PRIVATE_X25519_KEY", privateKeyHex)
+}
 
 func TestConfigValidateMatrix(t *testing.T) {
 	base := Config{
-		GroupCacheMaxEntries:   1,
-		LDAPOperationTimeout:   time.Second,
-		AuthMaxConcurrent:      1,
-		AuthRatePerSecond:      1,
-		AuthRateBurst:          1,
-		SigV4MaxSkew:           time.Second,
-		ReadHeaderTimeout:      time.Second,
-		IdleTimeout:            time.Second,
-		ShutdownTimeout:        time.Second,
-		MaxHeaderBytes:         1,
-		AdminLoginReadTimeout:  time.Second,
-		ReadinessCheckTimeout:  time.Second,
-		ReadinessCacheTTL:      time.Second,
-		ReadinessAllowedCIDRs:  []string{"127.0.0.1/32"},
-		SplunkHECFlushInterval: time.Second,
+		S3GatewayPrivateX25519Key: mustTestX25519PrivateKey(t),
+		GroupCacheMaxEntries:      1,
+		LDAPOperationTimeout:      time.Second,
+		AuthMaxConcurrent:         1,
+		AuthRatePerSecond:         1,
+		AuthRateBurst:             1,
+		SigV4MaxSkew:              time.Second,
+		ReadHeaderTimeout:         time.Second,
+		IdleTimeout:               time.Second,
+		ShutdownTimeout:           time.Second,
+		MaxHeaderBytes:            1,
+		AdminLoginReadTimeout:     time.Second,
+		ReadinessCheckTimeout:     time.Second,
+		ReadinessCacheTTL:         time.Second,
+		ReadinessAllowedCIDRs:     []string{"127.0.0.1/32"},
+		SplunkHECFlushInterval:    time.Second,
 	}
 
 	if err := base.Validate(); err != nil {
@@ -34,6 +60,13 @@ func TestConfigValidateMatrix(t *testing.T) {
 		mutate  func(*Config)
 		wantMsg string
 	}{
+		{
+			name: "X25519 private key",
+			mutate: func(c *Config) {
+				c.S3GatewayPrivateX25519Key = nil
+			},
+			wantMsg: "S3GATEWAY_PRIVATE_X25519_KEY",
+		},
 		{
 			name: "group cache max entries",
 			mutate: func(c *Config) {
@@ -415,6 +448,7 @@ func TestApplyDefaultsDoesNotInjectPrivateX25519Key(t *testing.T) {
 }
 
 func TestLoadConfigControlPlaneLimits(t *testing.T) {
+	setRequiredX25519PrivateKeyEnv(t)
 	t.Setenv("LDAP_URL", "ldap://ldap.example:389")
 	t.Setenv("LDAP_BASE_DN", "dc=example,dc=com")
 	t.Setenv("S3_ENDPOINT", "https://s3.example")
@@ -458,6 +492,7 @@ func TestLoadConfigControlPlaneLimits(t *testing.T) {
 }
 
 func TestLoadConfigSplunkHEC(t *testing.T) {
+	setRequiredX25519PrivateKeyEnv(t)
 	t.Setenv("LDAP_URL", "ldap://ldap.example:389")
 	t.Setenv("LDAP_BASE_DN", "dc=example,dc=com")
 	t.Setenv("S3_ENDPOINT", "https://s3.example")
@@ -488,6 +523,7 @@ func TestLoadConfigSplunkHEC(t *testing.T) {
 }
 
 func TestLoadConfigKafkaGlobalTopic(t *testing.T) {
+	setRequiredX25519PrivateKeyEnv(t)
 	t.Setenv("LDAP_URL", "ldap://ldap.example:389")
 	t.Setenv("LDAP_BASE_DN", "dc=example,dc=com")
 	t.Setenv("S3_ENDPOINT", "https://s3.example")
@@ -524,6 +560,7 @@ func TestLoadConfigKafkaGlobalTopic(t *testing.T) {
 func TestCookieSecretValidation(t *testing.T) {
 	base := Config{}
 	base.ApplyDefaults()
+	base.S3GatewayPrivateX25519Key = mustTestX25519PrivateKey(t)
 
 	// empty string is allowed (ephemeral random keys)
 	cfg := base

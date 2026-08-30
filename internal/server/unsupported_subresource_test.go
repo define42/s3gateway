@@ -18,7 +18,6 @@ import (
 	awscredentials "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	authz "github.com/define42/s3gateway/internal/authz"
-	"github.com/define42/s3gateway/internal/s3credentials"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 )
 
@@ -61,10 +60,7 @@ func TestAWSSDKClientDefaultTrailerUpload(t *testing.T) {
 	gwSrv := httptest.NewTLSServer(recording)
 	defer gwSrv.Close()
 
-	accessKey, secretKey, err := s3credentials.GenerateKeysBase64Encoded("testuser", "dogood")
-	if err != nil {
-		t.Fatalf("generate keys: %v", err)
-	}
+	accessKey, secretKey := mustGatewayCredentials(t, gw, "testuser", "dogood")
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(t.Context(),
 		awsconfig.WithRegion("us-east-1"),

@@ -13,7 +13,7 @@ The included Python client creates a bucket, uploads and downloads an object,
 lists the result, and confirms that a read-only LDAP user cannot upload:
 
 ```console
-$ python3 example_s3_client/python/s3demo.py
+$ python3 example_s3_client/python/s3demo_x25519.py
 Created bucket: team2-data
 Uploaded object to s3://team2-data/...
 Validation passed: uploaded and downloaded file contents are identical
@@ -24,10 +24,15 @@ Readonly check passed: upload denied with AccessDenied
 
 ### Local Docker Compose stack
 
-The local stack requires Docker with the Compose plugin. It starts MinIO, a
-test LDAP server, and s3gateway:
+The local stack requires Docker with the Compose plugin and Python 3. It starts
+MinIO, a test LDAP server, and s3gateway. Create a virtual environment and
+generate the X25519 gateway key pair first:
 
 ```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install boto3 cryptography
+eval "$(python3 example_s3_client/python/generate_x25519_keys.py)"
 docker compose up --build -d
 ```
 
@@ -42,13 +47,11 @@ The services are available at:
 `testuser` has full access to the `team2` and `team8` bucket namespaces.
 `readonly` has read-only access to `team2`.
 
-Run the legacy credential demo:
+Run the encrypted credential demo from the same shell so the client receives
+the matching public key:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install boto3 cryptography
-python3 example_s3_client/python/s3demo.py
+python3 example_s3_client/python/s3demo_x25519.py
 ```
 
 Stop the stack when finished:
@@ -60,7 +63,7 @@ docker compose down
 ### Published container
 
 Images are published to GitHub Container Registry. Create an environment file
-containing at least the five required settings listed under
+containing at least the six required settings listed under
 [Configuration](#configuration), then run:
 
 ```bash
@@ -85,6 +88,7 @@ export LDAP_DOMAIN="example.com"
 export S3_ENDPOINT="https://s3.example.com"
 export S3_ACCESS_KEY="upstream-access-key"
 export S3_SECRET_KEY="upstream-secret-key"
+export S3GATEWAY_PRIVATE_X25519_KEY="64-character-hex-private-key"
 
 go run ./cmd/s3gateway
 ```
@@ -102,7 +106,7 @@ or `SIGTERM`.
 ## Features and reference
 
 - AWS SigV4 authentication backed by LDAP credentials.
-- Encrypted X25519 and legacy base64 client credential formats.
+- X25519-encrypted client credentials.
 - LDAP-group authorization for bucket namespaces and individual operation types.
 - Path-style bucket, object, multipart, versioning, lifecycle, tagging,
   encryption, and compatibility operations.
@@ -114,8 +118,8 @@ or `SIGTERM`.
 
 ### Authentication
 
-The client's SigV4 access key ID carries the LDAP username and password in one
-of two formats. The SigV4 secret access key is derived from the same credentials:
+The client's SigV4 access key ID carries the X25519-encrypted LDAP username and
+password. The SigV4 secret access key is derived from the same credentials:
 
 ```text
 secret access key = base64url(SHA-256("username:password"))
@@ -123,16 +127,12 @@ secret access key = base64url(SHA-256("username:password"))
 
 | Mode | SigV4 access key ID | Credential protection | Example |
 | --- | --- | --- | --- |
-| X25519 (recommended) | `X1` + unpadded `base64url(concat(ephemeral_public_key, salt, nonce, ciphertext))` | X25519, HKDF-SHA256, and ChaCha20-Poly1305 | [`s3demo_x25519.py`](example_s3_client/python/s3demo_x25519.py) |
-| Legacy | `AD` + `base64("username:password")` | None; base64 is reversible | [`s3demo.py`](example_s3_client/python/s3demo.py) |
-
-A legacy Java client is also available in
-[`S3Demo.java`](example_s3_client/java/src/main/java/S3Demo.java).
+| X25519 | `X1` + unpadded `base64url(concat(ephemeral_public_key, salt, nonce, ciphertext))` | X25519, HKDF-SHA256, and ChaCha20-Poly1305 | [`s3demo_x25519.py`](example_s3_client/python/s3demo_x25519.py) |
 
 For X25519 credentials, the version, ephemeral public key, and salt are bound
-to the ciphertext as additional authenticated data. Configure
-`S3GATEWAY_PRIVATE_X25519_KEY` on the gateway before using an `X1...` access key
-ID. Configuring that key does not disable the legacy `AD...` format.
+to the ciphertext as additional authenticated data.
+`S3GATEWAY_PRIVATE_X25519_KEY` is required when the gateway starts; access key
+IDs using any other credential format are rejected.
 
 LDAP usernames must be supplied without the domain suffix: the gateway appends
 `@LDAP_DOMAIN` before binding and searching. Usernames cannot contain `:`
@@ -142,14 +142,13 @@ payload.
 For each S3 request, the gateway:
 
 1. Parses the SigV4 authorization data and validates the request timestamp.
-2. Decodes or decrypts the access key ID and derives the SigV4 secret access key.
+2. Decrypts the access key ID and derives the SigV4 secret access key.
 3. Verifies the SigV4 request signature, required signed headers, and any
    declared hexadecimal payload digest as the body is consumed.
 4. Binds to LDAP as `<username>@<LDAP_DOMAIN>` and loads the user's groups.
 5. Applies the group-derived bucket policy and proxies an allowed request.
 
-Always use TLS in production. In legacy mode, anyone who obtains the access key
-ID can recover the LDAP username and password.
+Always use TLS in production.
 
 Body-bearing requests that use `UNSIGNED-PAYLOAD` or
 `STREAMING-UNSIGNED-PAYLOAD-TRAILER` are accepted only over TLS. Plaintext
@@ -161,30 +160,7 @@ Generate an X25519 key pair. The gateway receives the private key; clients
 receive only the public key:
 
 ```bash
-eval "$(
-python3 - <<'PY'
-from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
-from cryptography.hazmat.primitives.serialization import (
-    Encoding,
-    NoEncryption,
-    PrivateFormat,
-    PublicFormat,
-)
-
-private_key = X25519PrivateKey.generate()
-private_hex = private_key.private_bytes(
-    Encoding.Raw,
-    PrivateFormat.Raw,
-    NoEncryption(),
-).hex()
-public_hex = private_key.public_key().public_bytes(
-    Encoding.Raw,
-    PublicFormat.Raw,
-).hex()
-print(f"export S3GATEWAY_PRIVATE_X25519_KEY={private_hex}")
-print(f"export S3GATEWAY_PUBLIC_X25519_KEY={public_hex}")
-PY
-)"
+eval "$(python3 example_s3_client/python/generate_x25519_keys.py)"
 ```
 
 Start the local stack from the same shell so Compose passes the private key to
@@ -325,7 +301,7 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 | `S3_REGION` | No | `us-east-1` | Upstream S3 signing region |
 | `S3_FORCE_PATH_STYLE` | No | `true` | Use path-style requests to the upstream S3 service |
 | `SIGV4_MAX_SKEW` | No | `15m` | Maximum allowed absolute age or clock skew of a client request |
-| `S3GATEWAY_PRIVATE_X25519_KEY` | No | Empty | 64-character hex X25519 private key used to decrypt `X1...` access key IDs |
+| `S3GATEWAY_PRIVATE_X25519_KEY` | Yes | — | 64-character hex X25519 private key used to decrypt `X1...` access key IDs |
 | `REQUIRED_UPLOAD_METADATA_KEYS` | No | Empty | Comma-separated metadata keys, with or without the `x-amz-meta-` prefix |
 | `COOKIE_SECRET` | No | Ephemeral | Admin-cookie key seed; when set, it must contain at least 32 characters |
 | `KAFKA_BROKERS` | No | Empty | Comma-separated Kafka bootstrap brokers; empty disables notifications |

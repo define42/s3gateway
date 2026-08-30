@@ -103,7 +103,7 @@ Every request with fresh credentials — S3 API (`server.go:136`) or admin login
 
 ## 4. Low severity / hardening
 
-- **F-9 — Legacy `AD` credentials cannot be disabled.** `internal/s3credentials/s3credentials.go:10-16`: even with `S3GATEWAY_PRIVATE_X25519_KEY` configured, plain-base64 credentials always remain accepted, so the encrypted mode adds no enforceable guarantee. Add e.g. `DISABLE_LEGACY_CREDENTIALS=true`.
+- **F-9 — FIXED: S3 credentials now require X25519.** The reversible `AD...` decoder and generator were removed, `Decode` accepts only `X1...` credentials, and `S3GATEWAY_PRIVATE_X25519_KEY` is required at startup.
 - **F-10 — Auth errors use HTTP 401 + code `AccessDenied`** (`server.go:117-139`). Real S3 uses 403 with `AccessDenied` / `SignatureDoesNotMatch` / `InvalidAccessKeyId`; some SDK retry/error mapping branches on these. Prefer S3-conformant status/code pairs.
 - **F-11 — Container runs as root.** `Dockerfile` (scratch stage) has no `USER` directive; add a non-root uid. `GOARCH=amd64` is also hardcoded — no arm64 image.
 - **F-12 — No CSP on the admin pages.** `adminpage.go:1754-1757` sets nosniff/frame headers; the templates use inline CSS, so a nonce/`style-src` CSP would be the next step. Also `msg`/`err` query params render attacker-influenced (escaped) text on the dashboard — a minor phishing aid.
@@ -120,7 +120,7 @@ Every request with fresh credentials — S3 API (`server.go:136`) or admin login
 - **F-18 — Metadata key double-strip.** `extractAmzMeta` (`handlers_object.go:1752-1768`) trims `x-amz-meta-`, then `NormalizeRequiredMetadataKey` trims the prefix *again*, so `x-amz-meta-x-amz-meta-foo` is stored as `foo`. Also only the first value of a repeated metadata header survives. Use a normalization that strips the prefix exactly once at this call site.
 - **F-19 — CreateBucket ignores the request body** (`handlers_bucket.go:42-54`): `CreateBucketConfiguration`/`LocationConstraint`, `x-amz-acl`, and object-lock headers are dropped; response lacks the `Location` header. `CompleteMultipartUpload` likewise omits `Location` and silently discards malformed `<Part>` entries instead of returning 400 (`handlers_multipart.go:348-365`). `ListBuckets` output has no `CreationDate`/`Owner` and ignores `max-buckets`/`continuation-token`/`prefix`.
 - **F-20 — `handleListMultipartUploads` casts `encoding-type` unvalidated** (`handlers_multipart.go:41-43`, `types.EncodingType(v)`) while every other handler goes through `ParseEncodingType`.
-- **F-21 — Legacy credential decoding trims the token.** `S3CredentialsBase64Encoded` (`s3credentials_base64encoded.go:24`) runs `strings.TrimSpace` over `username:password` before deriving the secret, so passwords with leading/trailing whitespace can never authenticate (client derives the secret over the untrimmed token). Trim only the username.
+- **F-21 — FIXED by removal.** The reversible Base64 credential format and its decoder no longer exist; X25519 token parsing preserves the password bytes.
 - **F-22 — LDAP domain escaping is applied in the wrong context.** `ldap.go:36` filter-escapes the domain when building the *bind* UPN (bind names are not filters), and the same pre-escaped string is then escaped a second time inside the search filter (`ldap.go:42`). Works only because real domains contain no filter metacharacters; escape raw values exactly once, at the filter site. (User input is correctly escaped — good.)
 - **F-23 — README ListBuckets rule contradiction.** README line 59 says listing needs "`r` or `w`"; the capability table (line 72) and the code (`handlers_bucket.go:32`, any permission bit) disagree. Align docs with code.
 
@@ -162,7 +162,7 @@ Every request with fresh credentials — S3 API (`server.go:136`) or admin login
 | --- | --- | --- |
 | 1 | F-1, F-2 | Authenticated DoS: cap chunk sizes/lines, `MaxBytesReader` on XML bodies |
 | 2 | F-6, F-3, F-4, F-5 | Policy bypasses + admin-session hardening |
-| 3 | F-7, F-8, F-9, F-10 | SigV4 strictness, auth throttling, legacy-mode switch |
+| 3 | F-7, F-8, F-9, F-10 | SigV4 strictness, auth throttling, credential hardening |
 | 4 | F-16, F-17 | Client-visible correctness (dropped attributes, trailer streaming modes) |
 | 5 | F-24 … F-27 | Documentation fixes (README X25519 snippet first — it actively misleads) |
 | 6 | F-28 … F-38 | Formatting gate, cleanups, test/CI hygiene |

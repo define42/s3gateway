@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -97,10 +97,10 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	gatewayAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	gatewayClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, mustGatewaySecretForAccessKey(t, gatewayAccessKey))
-	readonlyAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	readonlyClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", readonlyAccessKey, mustGatewaySecretForAccessKey(t, readonlyAccessKey))
+	gatewayAccessKey, gatewaySecretKey := mustGatewayCredentials(t, gw, "testuser", "dogood")
+	gatewayClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", gatewayAccessKey, gatewaySecretKey)
+	readonlyAccessKey, readonlySecretKey := mustGatewayCredentials(t, gw, "readonly", "dogood")
+	readonlyClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", readonlyAccessKey, readonlySecretKey)
 	upstreamClient := testutil.NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-integration-%d", time.Now().UnixNano())
@@ -259,12 +259,12 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 	gwSrv := httptest.NewTLSServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	gatewayAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
+	gatewayAccessKey, gatewaySecretKey := mustGatewayCredentials(t, gw, "testuser", "dogood")
 	gatewayMinioClient := newMinioGatewayClient(
 		t,
 		gwSrv.URL,
 		gatewayAccessKey,
-		mustGatewaySecretForAccessKey(t, gatewayAccessKey),
+		gatewaySecretKey,
 		gwSrv.Client().Transport,
 	)
 	upstreamClient := testutil.NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
@@ -352,10 +352,10 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
-	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(t, roAccessKey))
+	rwAccessKey, rwSecretKey := mustGatewayCredentials(t, gw, "testuser", "dogood")
+	rwClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, rwSecretKey)
+	roAccessKey, roSecretKey := mustGatewayCredentials(t, gw, "readonly", "dogood")
+	roClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, roSecretKey)
 	upstreamClient := testutil.NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	suffix := time.Now().UnixNano()
@@ -443,10 +443,10 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
-	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(t, roAccessKey))
+	rwAccessKey, rwSecretKey := mustGatewayCredentials(t, gw, "testuser", "dogood")
+	rwClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, rwSecretKey)
+	roAccessKey, roSecretKey := mustGatewayCredentials(t, gw, "readonly", "dogood")
+	roClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, roSecretKey)
 
 	bucket := fmt.Sprintf("team2-listobj-%d", time.Now().UnixNano())
 	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
@@ -535,10 +535,10 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
-	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(t, roAccessKey))
+	rwAccessKey, rwSecretKey := mustGatewayCredentials(t, gw, "testuser", "dogood")
+	rwClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, rwSecretKey)
+	roAccessKey, roSecretKey := mustGatewayCredentials(t, gw, "readonly", "dogood")
+	roClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, roSecretKey)
 	upstreamClient := testutil.NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-listmpu-%d", time.Now().UnixNano())
@@ -727,10 +727,10 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
-	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(t, roAccessKey))
+	rwAccessKey, rwSecretKey := mustGatewayCredentials(t, gw, "testuser", "dogood")
+	rwClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, rwSecretKey)
+	roAccessKey, roSecretKey := mustGatewayCredentials(t, gw, "readonly", "dogood")
+	roClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, roSecretKey)
 
 	bucket := fmt.Sprintf("team2-getattrs-%d", time.Now().UnixNano())
 	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
@@ -919,8 +919,8 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	gatewayClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
+	rwAccessKey, rwSecretKey := mustGatewayCredentials(t, gw, "testuser", "dogood")
+	gatewayClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, rwSecretKey)
 	upstreamClient := testutil.NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-multipart-%d", time.Now().UnixNano())
@@ -1149,10 +1149,10 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
-	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(t, roAccessKey))
+	rwAccessKey, rwSecretKey := mustGatewayCredentials(t, gw, "testuser", "dogood")
+	rwClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, rwSecretKey)
+	roAccessKey, roSecretKey := mustGatewayCredentials(t, gw, "readonly", "dogood")
+	roClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, roSecretKey)
 	upstreamClient := testutil.NewS3Client(t, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	bucket := fmt.Sprintf("team2-lifecycle-%d", time.Now().UnixNano())
@@ -1552,7 +1552,7 @@ func TestWithAuthRejectsTamperedSignedBodies(t *testing.T) {
 		defer cleanup()
 		gw.gcache.Set("testuser", "dogood", map[string]struct{}{"team2-rw": {}})
 
-		req := signedGatewayRequest(t, http.MethodPut, "https://example.com/team2-bucket/object.txt", tampered, original, nil)
+		req := signedGatewayRequest(t, gw, http.MethodPut, "https://example.com/team2-bucket/object.txt", tampered, original, nil)
 		rr := httptest.NewRecorder()
 		gw.WithAuth(gw, adminWebpageHandler(gw)).ServeHTTP(rr, req)
 		if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "XAmzContentSHA256Mismatch") {
@@ -1586,7 +1586,7 @@ func TestWithAuthRejectsTamperedSignedBodies(t *testing.T) {
 		gw.gcache.Set("testuser", "dogood", map[string]struct{}{"team2-rw": {}})
 
 		headers := http.Header{"Content-Type": {"application/xml"}}
-		req := signedGatewayRequest(t, http.MethodPut, "https://example.com/team2-bucket?tagging", tampered, original, headers)
+		req := signedGatewayRequest(t, gw, http.MethodPut, "https://example.com/team2-bucket?tagging", tampered, original, headers)
 		rr := httptest.NewRecorder()
 		gw.WithAuth(gw, adminWebpageHandler(gw)).ServeHTTP(rr, req)
 		if rr.Code != http.StatusBadRequest {
@@ -1602,6 +1602,7 @@ func TestWithAuthRejectsTamperedSignedBodies(t *testing.T) {
 
 func signedGatewayRequest(
 	t *testing.T,
+	gw *Server,
 	method string,
 	target string,
 	actualBody string,
@@ -1610,10 +1611,7 @@ func signedGatewayRequest(
 ) *http.Request {
 	t.Helper()
 
-	accessKey, secretKey, err := s3credentials.GenerateKeysBase64Encoded("testuser", "dogood")
-	if err != nil {
-		t.Fatalf("generate gateway credentials: %v", err)
-	}
+	accessKey, secretKey := mustGatewayCredentials(t, gw, "testuser", "dogood")
 	req := httptest.NewRequest(method, target, strings.NewReader(actualBody))
 	for name, values := range headers {
 		for _, value := range values {
@@ -1900,10 +1898,10 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 	defer gwSrv.Close()
 
-	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(t, rwAccessKey))
-	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(t, roAccessKey))
+	rwAccessKey, rwSecretKey := mustGatewayCredentials(t, gw, "testuser", "dogood")
+	rwClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", rwAccessKey, rwSecretKey)
+	roAccessKey, roSecretKey := mustGatewayCredentials(t, gw, "readonly", "dogood")
+	roClient := testutil.NewS3Client(t, ctx, gwSrv.URL, "us-east-1", roAccessKey, roSecretKey)
 
 	bucket := fmt.Sprintf("team2-ldap-cache-%d", time.Now().UnixNano())
 	if _, err := rwClient.CreateBucket(ctx, &s3.CreateBucketInput{
@@ -1980,10 +1978,10 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 	gw := New(cfg, up)
 	gwSrv := httptest.NewServer(gw.WithAuth(gw, adminWebpageHandler(gw)))
 
-	rwAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("testuser:dogood"))
-	rwClient := testutil.NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", rwAccessKey, mustGatewaySecretForAccessKey(tb, rwAccessKey))
-	roAccessKey := "AD" + base64.StdEncoding.EncodeToString([]byte("readonly:dogood"))
-	roClient := testutil.NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", roAccessKey, mustGatewaySecretForAccessKey(tb, roAccessKey))
+	rwAccessKey, rwSecretKey := mustGatewayCredentials(tb, gw, "testuser", "dogood")
+	rwClient := testutil.NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", rwAccessKey, rwSecretKey)
+	roAccessKey, roSecretKey := mustGatewayCredentials(tb, gw, "readonly", "dogood")
+	roClient := testutil.NewS3Client(tb, ctx, gwSrv.URL, "us-east-1", roAccessKey, roSecretKey)
 	upstreamClient := testutil.NewS3Client(tb, ctx, minioURL, "us-east-1", cfg.UpstreamAccessKey, cfg.UpstreamSecretKey)
 
 	env := &integrationEnv{
@@ -2789,13 +2787,34 @@ func mapBoolKeys(in map[string]bool) []string {
 	return out
 }
 
-func mustGatewaySecretForAccessKey(tb testing.TB, accessKey string) string {
+func mustGatewayCredentials(tb testing.TB, gw *Server, username, password string) (string, string) {
 	tb.Helper()
-	_, _, secretKey, err := s3credentials.Decode(accessKey, nil)
-	if err != nil {
-		tb.Fatalf("derive secret key for access key %q: %v", accessKey, err)
+	if gw == nil {
+		tb.Fatal("gateway is required to generate test credentials")
 	}
-	return secretKey
+
+	privateKey := gw.cfg.S3GatewayPrivateX25519Key
+	publicKeyHex := ""
+	if privateKey == nil {
+		privateKeyHex, generatedPublicKeyHex, err := s3credentials.GenerateX25519TestKeys()
+		if err != nil {
+			tb.Fatalf("generate X25519 test key pair: %v", err)
+		}
+		privateKey, err = s3credentials.X25519PrivateKeyFromHex(privateKeyHex)
+		if err != nil {
+			tb.Fatalf("parse X25519 test private key: %v", err)
+		}
+		gw.cfg.S3GatewayPrivateX25519Key = privateKey
+		publicKeyHex = generatedPublicKeyHex
+	} else {
+		publicKeyHex = hex.EncodeToString(privateKey.PublicKey().Bytes())
+	}
+
+	accessKey, secretKey, err := s3credentials.GenerateKeysX25519(username, password, publicKeyHex)
+	if err != nil {
+		tb.Fatalf("generate X25519 gateway credentials: %v", err)
+	}
+	return accessKey, secretKey
 }
 
 func signedAWSChunkedPayloadForTest(t *testing.T, secret string, auth *sigv4.Auth, chunks [][]byte) string {

@@ -7,6 +7,14 @@ Release versions and dates below come from this repository's Git tags.
 
 ## [Unreleased]
 
+### Changed
+
+- S3 authentication now accepts only X25519-encrypted `X1...` access key IDs, and `S3GATEWAY_PRIVATE_X25519_KEY` is required at startup.
+
+### Removed
+
+- Removed the reversible `AD...` Base64 credential format and its legacy Python and Java examples.
+
 ## [1.0.64] - 2026-08-28
 
 ### Added

@@ -198,6 +198,11 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	t.Setenv("S3_ACCESS_KEY", upstreamAccessKey)
 	t.Setenv("S3_SECRET_KEY", upstreamSecretKey)
 	t.Setenv("S3_FORCE_PATH_STYLE", "true")
+	s3gatewayPrivateKey, s3gatewayPublicKey, err := s3credentials.GenerateX25519TestKeys()
+	if err != nil {
+		t.Fatalf("generate X25519 test keys: %v", err)
+	}
+	t.Setenv("S3GATEWAY_PRIVATE_X25519_KEY", s3gatewayPrivateKey)
 
 	httpSrv, _, err := gatewayapp.Boot()
 	if err != nil {
@@ -231,9 +236,9 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	gatewayURL := "http://" + ln.Addr().String()
 	waitForGatewayReady(t, gatewayURL)
 
-	rwAccessKey, rwSecretKey, err := s3credentials.GenerateKeysBase64Encoded("testuser", "dogood")
+	rwAccessKey, rwSecretKey, err := s3credentials.GenerateKeysX25519("testuser", "dogood", s3gatewayPublicKey)
 	if err != nil {
-		t.Fatalf("generate gateway rw credentials: %v", err)
+		t.Fatalf("generate X25519 gateway credentials: %v", err)
 	}
 	gatewayClient := testutil.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, rwSecretKey)
 

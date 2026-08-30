@@ -176,6 +176,9 @@ func defaultReadinessAllowedCIDRs() []string {
 // Validate checks numeric bounds and cross-field requirements. It expects
 // defaults to have been applied when zero values should be accepted.
 func (cfg Config) Validate() error {
+	if cfg.S3GatewayPrivateX25519Key == nil {
+		return errors.New("S3GATEWAY_PRIVATE_X25519_KEY is required")
+	}
 	if cfg.GroupCacheMaxEntries <= 0 {
 		return errors.New("LDAP_GROUP_CACHE_MAX_ENTRIES must be > 0")
 	}
@@ -299,17 +302,14 @@ func envRequired(key string) string {
 	return v
 }
 
-func envEcdhPrivateKey(key string) *ecdh.PrivateKey {
-	v := strings.TrimSpace(os.Getenv(key))
-	if v == "" {
-		return nil
-	}
-	privatek, err := s3credentials.X25519PrivateKeyFromHex(v)
+func envRequiredX25519PrivateKey(key string) *ecdh.PrivateKey {
+	v := envRequired(key)
+	privateKey, err := s3credentials.X25519PrivateKeyFromHex(v)
 	if err != nil {
-		slog.Error("invalid ECDH private key", "key", key, "error", err)
+		slog.Error("invalid X25519 private key", "key", key, "error", err)
 		os.Exit(1)
 	}
-	return privatek
+	return privateKey
 }
 
 func envDuration(key string, def time.Duration) time.Duration {
@@ -461,7 +461,7 @@ func LoadConfig() Config {
 		ReadinessCheckTimeout:     envDuration("READINESS_CHECK_TIMEOUT", defaultReadinessCheckTimeout),
 		ReadinessCacheTTL:         envDuration("READINESS_CACHE_TTL", defaultReadinessCacheTTL),
 		ReadinessAllowedCIDRs:     envCSV("READINESS_ALLOWED_CIDRS"),
-		S3GatewayPrivateX25519Key: envEcdhPrivateKey("S3GATEWAY_PRIVATE_X25519_KEY"),
+		S3GatewayPrivateX25519Key: envRequiredX25519PrivateKey("S3GATEWAY_PRIVATE_X25519_KEY"),
 		AcmeCaDir:                 env("ACME_CA_DIR", ""),
 		AcmeDomains:               env("ACME_DOMAINS", ""),
 		AcmeServer:                env("ACME_SERVER", certmagic.LetsEncryptProductionCA),

@@ -143,8 +143,14 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 		}
 	}
 
-	rwAccessKey, rwSecretKey, _ := s3credentials.GenerateKeysBase64Encoded("testuser", "dogood")
-	roAccessKey, roSecretKey, _ := s3credentials.GenerateKeysX25519("readonly", "dogood", s3gatewayPublicKey)
+	rwAccessKey, rwSecretKey, err := s3credentials.GenerateKeysX25519("testuser", "dogood", s3gatewayPublicKey)
+	if err != nil {
+		t.Fatalf("generate X25519 gateway credentials: %v", err)
+	}
+	roAccessKey, roSecretKey, err := s3credentials.GenerateKeysX25519("readonly", "dogood", s3gatewayPublicKey)
+	if err != nil {
+		t.Fatalf("generate readonly X25519 gateway credentials: %v", err)
+	}
 
 	rwClient := testutil.NewS3Client(t, ctx, gatewayURL, "us-east-1", rwAccessKey, rwSecretKey)
 	roClient := testutil.NewS3Client(t, ctx, gatewayURL, "us-east-1", roAccessKey, roSecretKey)
