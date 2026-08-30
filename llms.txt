@@ -1,6 +1,6 @@
 # s3gateway
 
-> A Go authentication and authorization proxy for path-style S3 clients that validates AWS Signature Version 4 requests using LDAP credentials, derives bucket permissions from LDAP groups, and forwards permitted operations to an S3-compatible backend.
+> s3gateway is an authentication and authorization proxy that adds LDAP and Active Directory (AD) support to S3, which does not provide this integration natively. It carries a user's X25519-protected LDAP/AD username and password in S3 credentials, allowing standard S3 clients to authenticate against LDAP/AD. The gateway derives and enforces bucket permissions from the user's LDAP/AD group memberships before forwarding authorized requests to the configured S3-compatible backend.
 
 ## Project status
 
