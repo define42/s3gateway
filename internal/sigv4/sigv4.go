@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"hash"
 	"hash/crc32"
 	"hash/crc64"
@@ -971,7 +972,9 @@ func (r *awsChunkedReader) read(p []byte) (int, error) {
 		if r.remaining > 0 {
 			limit := len(p)
 			if int64(limit) > r.remaining {
-				limit = int(r.remaining)
+				if r.remaining <= math.MaxInt {
+					limit = int(r.remaining)
+				}
 			}
 			n, err := r.br.Read(p[:limit])
 			if n > 0 {
