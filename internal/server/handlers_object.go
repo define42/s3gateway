@@ -1731,6 +1731,18 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
 	}
 
+	etag := ""
+	if out.CopyObjectResult != nil {
+		etag = strings.Trim(aws.ToString(out.CopyObjectResult.ETag), `"`)
+	}
+	s.notifyUpload(r, uploadnotify.Event{
+		EventName: uploadnotify.EventObjectCreatedCopy,
+		Bucket:    bucket,
+		Key:       key,
+		ETag:      etag,
+		VersionID: aws.ToString(out.VersionId),
+	})
+
 	xw := s3xml.BeginResponse(w, http.StatusOK)
 	defer s3xml.FlushResponse(xw)
 

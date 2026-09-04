@@ -76,3 +76,57 @@ func TestMultipartUploadNotifiedOnlyAfterCompletion(t *testing.T) {
 		t.Fatalf("notification mismatch: %+v", event)
 	}
 }
+
+func TestMultipartCopyNotifiedOnlyAfterCompletion(t *testing.T) {
+	notifier := &recordingUploadNotifier{}
+	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		switch {
+		case r.Method == http.MethodPut && query.Get("uploadId") == "copy-upload-1":
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<CopyPartResult><ETag>"etag-copy-part-1"</ETag></CopyPartResult>`))
+		case r.Method == http.MethodPost && query.Get("uploadId") == "copy-upload-1":
+			w.Header().Set("Content-Type", "application/xml")
+			w.Header().Set("x-amz-version-id", "version-copy-complete")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`<CompleteMultipartUploadResult><Bucket>team2-destination</Bucket><Key>copied/large.bin</Key><ETag>"etag-copy-complete"</ETag></CompleteMultipartUploadResult>`))
+		default:
+			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+	})
+	defer cleanup()
+	gw.uploadNotifier = notifier
+
+	withRequestContext := func(req *http.Request) *http.Request {
+		req = reqWithRules(req, fullTeam2Rule())
+		return req.WithContext(context.WithValue(req.Context(), ctxUploaderKey, "alice@example.com"))
+	}
+
+	partReq := withRequestContext(httptest.NewRequest(http.MethodPut, "/team2-destination/copied/large.bin?partNumber=1&uploadId=copy-upload-1", nil))
+	partReq.Header.Set("x-amz-copy-source", "/team2-source/source.bin")
+	partRR := httptest.NewRecorder()
+	gw.handleUploadPartCopy(partRR, partReq, "team2-destination", "copied/large.bin", "copy-upload-1", 1)
+	if partRR.Code != http.StatusOK {
+		t.Fatalf("upload part copy status = %d, want %d; body=%s", partRR.Code, http.StatusOK, partRR.Body.String())
+	}
+	if len(notifier.events) != 0 {
+		t.Fatalf("notification count after part copy = %d, want 0", len(notifier.events))
+	}
+
+	completeBody := `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>"etag-copy-part-1"</ETag></Part></CompleteMultipartUpload>`
+	completeReq := withRequestContext(httptest.NewRequest(http.MethodPost, "/team2-destination/copied/large.bin?uploadId=copy-upload-1", strings.NewReader(completeBody)))
+	completeRR := httptest.NewRecorder()
+	gw.handleCompleteMultipart(completeRR, completeReq, "team2-destination", "copied/large.bin", "copy-upload-1")
+	if completeRR.Code != http.StatusOK {
+		t.Fatalf("complete status = %d, want %d; body=%s", completeRR.Code, http.StatusOK, completeRR.Body.String())
+	}
+	if len(notifier.events) != 1 {
+		t.Fatalf("notification count after completion = %d, want 1", len(notifier.events))
+	}
+
+	event := notifier.events[0]
+	if event.SchemaVersion != uploadnotify.SchemaVersion || event.EventName != uploadnotify.EventObjectCreatedCompleteMultipartUpload || event.Bucket != "team2-destination" || event.Key != "copied/large.bin" || event.ETag != "etag-copy-complete" || event.VersionID != "version-copy-complete" || event.UploadID != "copy-upload-1" || event.Uploader != "alice@example.com" || event.OccurredAt.IsZero() {
+		t.Fatalf("notification mismatch: %+v", event)
+	}
+}

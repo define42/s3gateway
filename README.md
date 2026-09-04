@@ -393,9 +393,10 @@ gateway replicas, because application limiter state is not shared.
 ### Kafka upload notifications
 
 When `KAFKA_BROKERS` is configured, the S3 API publishes a JSON event after the
-upstream confirms `PutObject` or `CompleteMultipartUpload`. Multipart initiation
-and individual part uploads do not produce events. Admin-console uploads publish
-the same events as S3 uploads. Copy operations do not currently produce events.
+upstream confirms `PutObject`, `CopyObject`, or `CompleteMultipartUpload`.
+`CopyObject` publishes an `ObjectCreated:Copy` event. Multipart initiation and
+individual `UploadPart` and `UploadPartCopy` operations do not produce events.
+Admin-console uploads publish the same events as S3 uploads.
 
 Enable bucket topics to publish each event to the topic whose name matches its
 bucket:

@@ -9,6 +9,7 @@ Release versions and dates below come from this repository's Git tags.
 
 ### Added
 
+- Added `ObjectCreated:Copy` Kafka notifications after successful S3 `CopyObject` operations.
 - Added a Go AWS SDK v2 client example using X25519-protected gateway credentials.
 
 ### Changed

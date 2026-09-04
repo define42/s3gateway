@@ -1,4 +1,4 @@
-// Package uploadnotify publishes successful S3 upload events.
+// Package uploadnotify publishes successful S3 object-creation events.
 package uploadnotify
 
 import "time"
@@ -12,6 +12,8 @@ type EventName string
 const (
 	// EventObjectCreatedPut identifies a successful single-request object upload.
 	EventObjectCreatedPut EventName = "ObjectCreated:Put"
+	// EventObjectCreatedCopy identifies a successful server-side object copy.
+	EventObjectCreatedCopy EventName = "ObjectCreated:Copy"
 	// EventObjectCreatedCompleteMultipartUpload identifies a successfully
 	// completed multipart upload.
 	EventObjectCreatedCompleteMultipartUpload EventName = "ObjectCreated:CompleteMultipartUpload"

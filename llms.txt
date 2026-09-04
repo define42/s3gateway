@@ -121,7 +121,7 @@ See the configuration table in `README.md` and validation in `internal/config/co
 
 ## Events and observability
 
-- Successful S3 `PutObject` and `CompleteMultipartUpload` operations can publish versioned JSON events to bucket-named topics, one global topic, or both.
+- Successful S3 `PutObject`, `CopyObject`, and `CompleteMultipartUpload` operations can publish versioned JSON events to bucket-named topics, one global topic, or both. `CopyObject` publishes `ObjectCreated:Copy`; multipart initiation and individual `UploadPart` and `UploadPartCopy` operations remain silent.
 - Kafka notification delivery is best effort and not transactional. Failures do not change an already-successful S3 response; consumers must tolerate duplicates and can deduplicate with `event_id`.
 - Pop consumption commits an offset only after the corresponding object body is fully written and flushed. Commit uncertainty still permits duplicate delivery.
 - Standard output receives structured JSON logs. Optional Splunk HEC forwarding batches copies and may retry them.

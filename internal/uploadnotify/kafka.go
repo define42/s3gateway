@@ -17,7 +17,7 @@ type recordProducer interface {
 	Close()
 }
 
-// KafkaPublisher sends upload events to an enabled bucket-named topic, a
+// KafkaPublisher sends object-creation events to an enabled bucket-named topic, a
 // configured global topic, or both.
 type KafkaPublisher struct {
 	producer           recordProducer
