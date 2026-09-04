@@ -107,6 +107,12 @@ func ParseGroup(g string) (prefix string, perm Perm, ok bool) {
 	if p == "" || letters == "" {
 		return "", PermNone, false
 	}
+	// Only the exact reserved group above may produce the internal wildcard
+	// prefix. Accepting it through the generic namespace grammar would turn any
+	// valid read suffix into global read access.
+	if p == AllBucketsPrefix {
+		return "", PermNone, false
+	}
 
 	var out Perm
 	for _, ch := range letters {

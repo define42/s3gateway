@@ -175,6 +175,38 @@ func TestAllBucketsReadGroup(t *testing.T) {
 	}
 }
 
+func TestParseGroupRejectsWildcardNamespace(t *testing.T) {
+	tests := []struct {
+		name  string
+		group string
+	}{
+		{name: "read", group: "*-r"},
+		{name: "read and write", group: "*-rw"},
+		{name: "all permissions", group: "*-rwcdb"},
+		{name: "mutation only", group: "*-w"},
+		{name: "case insensitive and trimmed", group: "  *-R  "},
+		{name: "spaces around separator", group: " * - r "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefix, perm, ok := ParseGroup(tt.group)
+			if ok {
+				t.Fatalf(
+					"ParseGroup(%q) = %q, %v, true; want rejection",
+					tt.group,
+					prefix,
+					perm,
+				)
+			}
+		})
+	}
+
+	if CanReadAll(RulesFromGroups(map[string]struct{}{"*-r": {}})) {
+		t.Fatal("wildcard namespace group granted global read access")
+	}
+}
+
 func TestAllBucketsPrefixCannotGrantMutatingPermissions(t *testing.T) {
 	rules := []Rule{{
 		BucketPrefix: AllBucketsPrefix,
