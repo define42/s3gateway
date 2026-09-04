@@ -103,6 +103,11 @@ For example, `team2-r` can read `team2-logs` and `team2-data`, while
 combined. `ListBuckets` returns matching buckets when the user has any
 permission for their namespace.
 
+The reserved LDAP group `s3gateway-all-r` grants read access to every bucket
+namespace. It does not grant upload, create, or delete permissions, but those
+permissions can still be granted for individual namespaces through additional
+groups.
+
 Copy operations require `r` on the source bucket and `w` on the destination
 bucket.
 
@@ -289,7 +294,11 @@ group permissions as the S3 API.
 
 When Kafka is configured, the **Kafka topics** page shows retained element
 counts and each topic's consumer groups with their committed offsets by
-partition. A committed offset is the next record that group will consume.
+partition. Users see bucket-named topics only when their LDAP groups grant read
+permission for the corresponding bucket namespace. Members of
+`s3gateway-all-r` see every topic, including internal topics and the configured
+global topic such as `_all`. A committed offset is the next record that group
+will consume.
 
 Admin sessions expire 30 minutes after login and are stored in process memory.
 They are invalidated on restart and are not shared between gateway replicas.
@@ -466,16 +475,18 @@ POST /api/pop/{bucket}/{group}
 POST /api/pop/_all/{group}
 ```
 
-The bucket route consumes the bucket-named topic and therefore requires
-`ENABLE_KAFKA_BUCKET_TOPIC=true`. The `_all` route consumes the configured
-`KAFKA_GLOBAL_TOPIC`. Both routes use HTTP Basic authentication with the
-caller's LDAP username without the domain suffix and password; the gateway
-appends `@LDAP_DOMAIN` during authentication. Both routes require read access
-to the event's bucket. SigV4 authentication is not accepted for `/api/pop/*`;
-other S3 routes continue to require SigV4. The authenticated username and
-requested group may each contain letters, digits, `.`, `_`, and `-`, and must
-not be `.` or `..`. The gateway always prefixes the username, so requesting
-group `scanner` as user `alice` uses the Kafka consumer group `alice:scanner`.
+The bucket route consumes the bucket-named topic, requires read access to that
+bucket, and therefore requires `ENABLE_KAFKA_BUCKET_TOPIC=true`. The `_all`
+route consumes the configured `KAFKA_GLOBAL_TOPIC` and requires membership in
+the `s3gateway-all-r` LDAP group before polling. Both routes use HTTP Basic
+authentication with the caller's LDAP username without the domain suffix and
+password; the gateway appends `@LDAP_DOMAIN` during authentication. The event's
+bucket is checked again before its object is read. SigV4 authentication is not
+accepted for `/api/pop/*`; other S3 routes continue to require SigV4. The
+authenticated username and requested group may each contain letters, digits,
+`.`, `_`, and `-`, and must not be `.` or `..`. The gateway always prefixes the
+username, so requesting group `scanner` as user `alice` uses the Kafka consumer
+group `alice:scanner`.
 The fully namespaced ID may be at most 249 bytes long. This prevents another
 user from consuming through Alice's group; the same requested group name is
 independent for every user.

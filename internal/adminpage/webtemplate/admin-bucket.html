@@ -61,9 +61,10 @@
       animation: float-orb 10s ease-in-out infinite reverse;
     }
     main {
-      width: min(96vw, 1560px);
-      margin: 2rem auto;
-      padding: 0 1rem 2rem;
+      width: 100%;
+      min-height: 100vh;
+      margin: 0;
+      padding: 1rem;
       display: grid;
       gap: 1rem;
     }
@@ -239,7 +240,7 @@
     }
     @media (max-width: 700px) {
       main {
-        margin-top: 1rem;
+        padding: 0.5rem;
       }
       .panel {
         border-radius: 14px;
@@ -324,9 +325,10 @@
     }
     .skip-link:focus { top: 1rem; }
     main {
-      width: min(calc(100% - 2rem), 1400px);
-      margin: 1.5rem auto;
-      padding: 0 0 2rem;
+      width: 100%;
+      min-height: 100vh;
+      margin: 0;
+      padding: 1rem;
     }
     .panel {
       min-width: 0;
@@ -486,7 +488,7 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
     @media (max-width: 700px) {
-      main { width: min(calc(100% - 1rem), 1400px); margin-top: 0.5rem; }
+      main { width: 100%; margin: 0; padding: 0.5rem; }
       .panel { border-radius: 6px; }
       .topline { align-items: flex-start; }
       .top-nav { width: 100%; }

@@ -28,7 +28,7 @@ func TestBootRedpandaGlobalPopIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
 	defer cancel()
 
-	ldapConfig := testutil.WriteGatewayGlauthConfig(t)
+	ldapConfig := testutil.WriteGatewayGlauthConfigWithAllBucketsRead(t)
 	ldapURL, stopLDAP := testutil.StartGlauthWithConfig(ctx, t, ldapConfig, "ldap")
 	t.Cleanup(stopLDAP)
 

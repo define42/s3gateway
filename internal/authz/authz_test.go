@@ -119,3 +119,76 @@ func TestBucketPerm_CaseInsensitive(t *testing.T) {
 		t.Errorf("BucketPerm(TEAM2-data) = %v, want PermReadWrite", got)
 	}
 }
+
+func TestAllBucketsReadGroup(t *testing.T) {
+	tests := []struct {
+		name  string
+		group string
+	}{
+		{name: "exact", group: AllBucketsReadGroup},
+		{name: "case insensitive and trimmed", group: "  S3GATEWAY-ALL-R  "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefix, perm, ok := ParseGroup(tt.group)
+			if !ok || prefix != AllBucketsPrefix || perm != PermRead {
+				t.Fatalf(
+					"ParseGroup(%q) = %q, %v, %t; want %q, %v, true",
+					tt.group,
+					prefix,
+					perm,
+					ok,
+					AllBucketsPrefix,
+					PermRead,
+				)
+			}
+		})
+	}
+
+	rules := RulesFromGroups(map[string]struct{}{
+		AllBucketsReadGroup: {},
+		"team2-w":           {},
+	})
+	if !CanReadAll(rules) {
+		t.Fatal("all-buckets read group did not grant global read access")
+	}
+	if CanReadAll(RulesFromGroups(map[string]struct{}{"team2-r": {}})) {
+		t.Fatal("namespace read group unexpectedly granted global read access")
+	}
+	if _, _, ok := ParseGroup("s3gateway-all-rw"); ok {
+		t.Fatal("non-reserved all-buckets group was accepted")
+	}
+	for _, bucket := range []string{"team2-data", "other-documents", "standalone"} {
+		if !CanRead(rules, bucket) {
+			t.Errorf("all-buckets read group did not grant read access to %q", bucket)
+		}
+	}
+	if !CanWrite(rules, "team2-data") {
+		t.Fatal("namespace write permission was not combined with global read")
+	}
+	if CanWrite(rules, "other-documents") ||
+		CanCreateBucket(rules, "other-documents") ||
+		CanDeleteObject(rules, "other-documents") ||
+		CanDeleteBucket(rules, "other-documents") {
+		t.Fatal("all-buckets read group granted a mutating permission")
+	}
+}
+
+func TestAllBucketsPrefixCannotGrantMutatingPermissions(t *testing.T) {
+	rules := []Rule{{
+		BucketPrefix: AllBucketsPrefix,
+		Perm: PermRead | PermWrite | PermCreateBucket |
+			PermDeleteObject | PermDeleteBucket,
+	}}
+
+	if !CanReadAll(rules) || !CanRead(rules, "any-bucket") {
+		t.Fatal("all-buckets prefix did not grant read access")
+	}
+	if CanWrite(rules, "any-bucket") ||
+		CanCreateBucket(rules, "any-bucket") ||
+		CanDeleteObject(rules, "any-bucket") ||
+		CanDeleteBucket(rules, "any-bucket") {
+		t.Fatal("all-buckets prefix granted a mutating permission")
+	}
+}

@@ -661,8 +661,9 @@ func buildAdminGroupAccess(groups map[string]struct{}, buckets []string, preview
 			Permissions:       permViews(perm),
 			Buckets:           make([]adminBucketView, 0),
 		}
+		isGlobalRead := bucketNS == authz.AllBucketsPrefix
 		for _, bucket := range allBuckets {
-			if authz.BucketNamespace(bucket) == bucketNS {
+			if isGlobalRead || authz.BucketNamespace(bucket) == bucketNS {
 				bucketView, ok := previews[bucket]
 				if !ok {
 					bucketView = adminBucketView{Name: bucket}
@@ -1887,10 +1888,12 @@ func WithUploadNotifier(notifier UploadNotifier) Option {
 	}
 }
 
-// WithKafkaTopicLister enables the Kafka topics admin page.
-func WithKafkaTopicLister(lister KafkaTopicLister) Option {
+// WithKafkaTopicLister enables the Kafka topics admin page. globalTopic is
+// hidden from users who do not have all-buckets read permission.
+func WithKafkaTopicLister(lister KafkaTopicLister, globalTopic string) Option {
 	return func(h *handler) {
 		h.kafkaTopicLister = lister
+		h.kafkaGlobalTopic = strings.TrimSpace(globalTopic)
 	}
 }
 
@@ -1902,6 +1905,7 @@ type handler struct {
 	requiredUploadMetadataKeys []string // normalized (lowercase, no x-amz-meta- prefix) keys required on uploads
 	uploadNotifier             UploadNotifier
 	kafkaTopicLister           KafkaTopicLister
+	kafkaGlobalTopic           string
 }
 
 func (h *handler) notifyUpload(r *http.Request, event uploadnotify.Event) {

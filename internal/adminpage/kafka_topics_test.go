@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/define42/s3gateway/internal/authz"
 	"github.com/define42/s3gateway/internal/kafkatopic"
 )
 
@@ -28,8 +29,11 @@ func TestAdminKafkaTopics(t *testing.T) {
 		lister          *kafkaTopicListerStub
 		method          string
 		isAuthenticated bool
+		groups          map[string]struct{}
+		globalTopic     string
 		wantStatus      int
 		wantBody        []string
+		wantBodyAbsent  []string
 		wantBodyCount   map[string]int
 		wantCalls       int
 	}{
@@ -54,6 +58,7 @@ func TestAdminKafkaTopics(t *testing.T) {
 			}},
 			method:          http.MethodGet,
 			isAuthenticated: true,
+			groups:          map[string]struct{}{authz.AllBucketsReadGroup: {}},
 			wantStatus:      http.StatusOK,
 			wantBody: []string{
 				"Kafka Topics",
@@ -84,6 +89,7 @@ func TestAdminKafkaTopics(t *testing.T) {
 			},
 			method:          http.MethodGet,
 			isAuthenticated: true,
+			groups:          map[string]struct{}{authz.AllBucketsReadGroup: {}},
 			wantStatus:      http.StatusBadGateway,
 			wantBody: []string{
 				"Some Kafka topic or consumer-group offsets could not be loaded.",
@@ -113,6 +119,7 @@ func TestAdminKafkaTopics(t *testing.T) {
 			}},
 			method:          http.MethodGet,
 			isAuthenticated: true,
+			groups:          map[string]struct{}{authz.AllBucketsReadGroup: {}},
 			wantStatus:      http.StatusOK,
 			wantBody: []string{
 				"Some offsets unavailable",
@@ -131,10 +138,69 @@ func TestAdminKafkaTopics(t *testing.T) {
 			wantCalls:  0,
 		},
 		{
+			name: "filters topics to readable bucket namespaces",
+			lister: &kafkaTopicListerStub{topics: []kafkatopic.Topic{
+				{Name: "__consumer_offsets", Partitions: 1, Elements: 7, IsInternal: true},
+				{Name: "_all", Partitions: 1, Elements: 42},
+				{Name: "company-events", Partitions: 1, Elements: 50},
+				{
+					Name:       "team2-logs",
+					Partitions: 1,
+					Elements:   10,
+					ConsumerGroups: []kafkatopic.ConsumerGroup{{
+						Name: "team2-scanner",
+					}},
+				},
+				{
+					Name:       "team3-secret",
+					Partitions: 1,
+					Elements:   99,
+					ConsumerGroups: []kafkatopic.ConsumerGroup{{
+						Name: "team3-scanner",
+					}},
+				},
+			}},
+			method:          http.MethodGet,
+			isAuthenticated: true,
+			groups:          map[string]struct{}{"team2-r": {}},
+			globalTopic:     "company-events",
+			wantStatus:      http.StatusOK,
+			wantBody: []string{
+				"team2-logs",
+				"team2-scanner",
+				"<strong>Topics:</strong> 1",
+				"<strong>Known elements:</strong> 10",
+			},
+			wantBodyAbsent: []string{
+				"__consumer_offsets",
+				"_all",
+				"company-events",
+				"team3-secret",
+				"team3-scanner",
+			},
+			wantCalls: 1,
+		},
+		{
+			name: "hides namespace topic without read permission",
+			lister: &kafkaTopicListerStub{topics: []kafkatopic.Topic{{
+				Name:       "team2-logs",
+				Partitions: 1,
+				Elements:   10,
+			}}},
+			method:          http.MethodGet,
+			isAuthenticated: true,
+			groups:          map[string]struct{}{"team2-w": {}},
+			wantStatus:      http.StatusOK,
+			wantBody:        []string{"No Kafka topics found."},
+			wantBodyAbsent:  []string{"team2-logs"},
+			wantCalls:       1,
+		},
+		{
 			name:            "rejects unsupported method",
 			lister:          &kafkaTopicListerStub{},
 			method:          http.MethodPost,
 			isAuthenticated: true,
+			groups:          map[string]struct{}{authz.AllBucketsReadGroup: {}},
 			wantStatus:      http.StatusMethodNotAllowed,
 			wantCalls:       0,
 		},
@@ -142,8 +208,9 @@ func TestAdminKafkaTopics(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newHandlerWithNilS3(map[string]struct{}{"team2-r": {}})
+			h := newHandlerWithNilS3(tt.groups)
 			h.kafkaTopicLister = tt.lister
+			h.kafkaGlobalTopic = tt.globalTopic
 			req := httptest.NewRequest(tt.method, "/admin/kafka-topics", nil)
 			if tt.isAuthenticated {
 				req.AddCookie(adminLoginSessionCookie(t, h, "alice", "secret"))
@@ -159,6 +226,11 @@ func TestAdminKafkaTopics(t *testing.T) {
 					t.Fatalf("body missing %q: %q", want, rr.Body.String())
 				}
 			}
+			for _, unwanted := range tt.wantBodyAbsent {
+				if strings.Contains(rr.Body.String(), unwanted) {
+					t.Fatalf("body contains unauthorized value %q: %q", unwanted, rr.Body.String())
+				}
+			}
 			for text, want := range tt.wantBodyCount {
 				if got := strings.Count(rr.Body.String(), text); got != want {
 					t.Fatalf("body count for %q = %d, want %d: %q", text, got, want, rr.Body.String())
@@ -172,7 +244,7 @@ func TestAdminKafkaTopics(t *testing.T) {
 }
 
 func TestAdminKafkaTopicsNotConfigured(t *testing.T) {
-	h := newHandlerWithNilS3(map[string]struct{}{"team2-r": {}})
+	h := newHandlerWithNilS3(map[string]struct{}{authz.AllBucketsReadGroup: {}})
 	req := httptest.NewRequest(http.MethodGet, "/admin/kafka-topics", nil)
 	req.AddCookie(adminLoginSessionCookie(t, h, "alice", "secret"))
 	rr := httptest.NewRecorder()
@@ -187,7 +259,7 @@ func TestAdminKafkaTopicsNotConfigured(t *testing.T) {
 }
 
 func TestAdminKafkaTopicsHead(t *testing.T) {
-	h := newHandlerWithNilS3(map[string]struct{}{"team2-r": {}})
+	h := newHandlerWithNilS3(map[string]struct{}{authz.AllBucketsReadGroup: {}})
 	lister := &kafkaTopicListerStub{}
 	h.kafkaTopicLister = lister
 	req := httptest.NewRequest(http.MethodHead, "/admin/kafka-topics", nil)
@@ -205,12 +277,22 @@ func TestAdminKafkaTopicsHead(t *testing.T) {
 
 func TestWithKafkaTopicLister(t *testing.T) {
 	lister := &kafkaTopicListerStub{}
-	got := NewHandlerWithContext(nil, "secret", 1, nil, nil, WithKafkaTopicLister(lister))
+	got := NewHandlerWithContext(
+		nil,
+		"secret",
+		1,
+		nil,
+		nil,
+		WithKafkaTopicLister(lister, " _all "),
+	)
 	h, ok := got.(*handler)
 	if !ok {
 		t.Fatalf("handler type = %T, want *handler", got)
 	}
 	if h.kafkaTopicLister != lister {
 		t.Fatal("Kafka topic lister option was not applied")
+	}
+	if h.kafkaGlobalTopic != "_all" {
+		t.Fatalf("Kafka global topic = %q, want %q", h.kafkaGlobalTopic, "_all")
 	}
 }

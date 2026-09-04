@@ -120,8 +120,13 @@ func (s *Server) handlePopAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rules := authz.RulesFromRequest(r)
 	topic := scope
 	if scope == popGlobalScope {
+		if !authz.CanReadAll(rules) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
 		topic = strings.TrimSpace(s.cfg.KafkaGlobalTopic)
 		if topic == "" {
 			http.Error(w, "global pop topic is disabled", http.StatusServiceUnavailable)
@@ -132,7 +137,7 @@ func (s *Server) handlePopAPI(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bucket pop topics are disabled", http.StatusServiceUnavailable)
 			return
 		}
-		if !authz.CanRead(authz.RulesFromRequest(r), scope) {
+		if !authz.CanRead(rules, scope) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
@@ -184,7 +189,7 @@ func (s *Server) handlePopAPI(w http.ResponseWriter, r *http.Request) {
 					scope,
 				)
 			}
-			if !authz.CanRead(authz.RulesFromRequest(r), event.Bucket) {
+			if !authz.CanRead(rules, event.Bucket) {
 				responseStarted = true
 				http.Error(w, "Forbidden", http.StatusForbidden)
 				return fmt.Errorf(

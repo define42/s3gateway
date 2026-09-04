@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/define42/s3gateway/internal/authn"
+	"github.com/define42/s3gateway/internal/authz"
 )
 
 func adminLoginSessionCookie(t *testing.T, handler http.Handler, username, password string) *http.Cookie {
@@ -91,6 +92,45 @@ func TestBuildAdminGroupAccess(t *testing.T) {
 	}
 	if got := strings.Join([]string{rows[1].Buckets[0].Name}, ","); got != "team3-archive" {
 		t.Fatalf("team3 buckets mismatch: got=%q want=%q", got, "team3-archive")
+	}
+}
+
+func TestBuildAdminGroupAccessAllBucketsRead(t *testing.T) {
+	groups := map[string]struct{}{
+		authz.AllBucketsReadGroup: {},
+		"misc-group":              {},
+	}
+	buckets := []string{"team2-logs", "other-data", "standalone"}
+	previews := map[string]adminBucketView{
+		"other-data": {Name: "other-data", CanRead: true},
+		"standalone": {Name: "standalone", CanRead: true},
+		"team2-logs": {Name: "team2-logs", CanRead: true},
+	}
+
+	rows, ignored := buildAdminGroupAccess(groups, buckets, previews)
+	if len(rows) != 1 {
+		t.Fatalf("row count mismatch: got=%d want=1", len(rows))
+	}
+	if len(ignored) != 1 || ignored[0] != "misc-group" {
+		t.Fatalf("ignored groups mismatch: got=%v", ignored)
+	}
+
+	row := rows[0]
+	if row.GroupName != authz.AllBucketsReadGroup ||
+		row.BucketPrefix != authz.AllBucketsPrefix ||
+		row.PermissionLetters != "r" {
+		t.Fatalf("all-buckets row mismatch: %+v", row)
+	}
+	if len(row.Buckets) != len(buckets) {
+		t.Fatalf("all-buckets row bucket count: got=%d want=%d", len(row.Buckets), len(buckets))
+	}
+	gotBuckets := []string{
+		row.Buckets[0].Name,
+		row.Buckets[1].Name,
+		row.Buckets[2].Name,
+	}
+	if got := strings.Join(gotBuckets, ","); got != "other-data,standalone,team2-logs" {
+		t.Fatalf("all-buckets row buckets mismatch: got=%q", got)
 	}
 }
 

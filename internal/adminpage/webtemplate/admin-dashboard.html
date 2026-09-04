@@ -61,9 +61,10 @@
       animation: float-orb 10s ease-in-out infinite reverse;
     }
     main {
-      width: min(95vw, 1480px);
-      margin: 2rem auto;
-      padding: 0 1rem 2rem;
+      width: 100%;
+      min-height: 100vh;
+      margin: 0;
+      padding: 1rem;
       display: grid;
       gap: 1rem;
     }
@@ -247,7 +248,7 @@
     }
     @media (max-width: 700px) {
       main {
-        margin-top: 1rem;
+        padding: 0.5rem;
       }
       .panel {
         border-radius: 14px;
@@ -329,9 +330,10 @@
     }
     .skip-link:focus { top: 1rem; }
     main {
-      width: min(calc(100% - 2rem), 1280px);
-      margin: 1.5rem auto;
-      padding: 0 0 2rem;
+      width: 100%;
+      min-height: 100vh;
+      margin: 0;
+      padding: 1rem;
       gap: 1rem;
     }
     .panel {
@@ -479,7 +481,7 @@
     .summary { color: #8b949e; }
     .summary strong { color: #c9d1d9; }
     @media (max-width: 700px) {
-      main { width: min(calc(100% - 1rem), 1280px); margin-top: 0.5rem; }
+      main { width: 100%; margin: 0; padding: 0.5rem; }
       .panel { border-radius: 6px; }
       .top-nav a {
         min-height: 44px;

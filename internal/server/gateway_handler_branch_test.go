@@ -1600,6 +1600,40 @@ func TestHandleListBucketsAllowsAnyPermission(t *testing.T) {
 	}
 }
 
+func TestHandleListBucketsAllowsAllBucketsReadGroup(t *testing.T) {
+	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/" {
+			t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Buckets>
+    <Bucket><Name>team2-data</Name></Bucket>
+    <Bucket><Name>other-documents</Name></Bucket>
+  </Buckets>
+</ListAllMyBucketsResult>`))
+	})
+	defer cleanup()
+
+	rules := authz.RulesFromGroups(map[string]struct{}{
+		authz.AllBucketsReadGroup: {},
+	})
+	req := reqWithRules(httptest.NewRequest(http.MethodGet, "/", nil), rules)
+	rr := httptest.NewRecorder()
+
+	gw.handleListBuckets(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+	}
+	for _, bucket := range []string{"team2-data", "other-documents"} {
+		if !strings.Contains(rr.Body.String(), "<Name>"+bucket+"</Name>") {
+			t.Errorf("all-buckets read response is missing %q: %s", bucket, rr.Body.String())
+		}
+	}
+}
+
 func TestHandleListObjectVersionsBranchMatrix(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

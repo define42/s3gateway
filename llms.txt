@@ -73,6 +73,7 @@ Supporting protocol packages include `internal/s3http` for S3 request/error tran
 - The SigV4 secret access key is `base64url(SHA-256("username:password"))`.
 - The gateway appends `@LDAP_DOMAIN` to client usernames before LDAP bind/search. Usernames cannot contain `:`.
 - LDAP groups use `<namespace>-<permissions>`. Permissions are `r` read, `w` write, `c` create/configure, `d` delete objects, and `b` delete buckets/configuration.
+- The reserved LDAP group `s3gateway-all-r` grants read-only access to every bucket namespace and is required for the global Kafka pop route.
 - A bucket matches the namespace before its first hyphen. Copy operations require `r` on the source and `w` on the destination.
 - The full implemented S3 operation matrix and required permissions are in `README.md` under "S3 compatibility."
 
@@ -117,7 +118,7 @@ See the configuration table in `README.md` and validation in `internal/config/co
 - S3 API: path-style routes rooted at `/`; SigV4 plus LDAP authentication
 - Admin console: `/login`, `/admin`, and related browser routes; LDAP login and in-memory cookie-backed sessions
 - Health: unauthenticated `GET /healthz` and `GET /readyz`
-- Kafka object pop: `POST /api/pop/{bucket}/{group}` or `POST /api/pop/_all/{group}`; LDAP-backed HTTP Basic authentication, not SigV4
+- Kafka object pop: `POST /api/pop/{bucket}/{group}` or `POST /api/pop/_all/{group}`; LDAP-backed HTTP Basic authentication, not SigV4. The `_all` route requires `s3gateway-all-r` before polling.
 
 ## Events and observability
 

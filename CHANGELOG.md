@@ -11,10 +11,13 @@ Release versions and dates below come from this repository's Git tags.
 
 - Added `ObjectCreated:Copy` Kafka notifications after successful S3 `CopyObject` operations.
 - Added a Go AWS SDK v2 client example using X25519-protected gateway credentials.
+- Added the `s3gateway-all-r` LDAP group for read-only access to every bucket namespace.
 
 ### Changed
 
 - S3 authentication now accepts only X25519-encrypted `X1...` access key IDs, and `S3GATEWAY_PRIVATE_X25519_KEY` is required at startup.
+- The global Kafka pop route now requires `s3gateway-all-r` before creating or polling a consumer.
+- The admin Kafka topic inventory now follows LDAP read permissions; `s3gateway-all-r` can view every topic.
 
 ### Removed
 

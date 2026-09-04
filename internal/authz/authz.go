@@ -11,6 +11,14 @@ type ctxKey string
 
 const ctxRulesKey ctxKey = "rules"
 
+const (
+	// AllBucketsReadGroup is the reserved LDAP group that grants read access to
+	// every bucket namespace.
+	AllBucketsReadGroup = "s3gateway-all-r"
+	// AllBucketsPrefix is the internal rule prefix used for all-bucket access.
+	AllBucketsPrefix = "*"
+)
+
 // WithRules stores rules in the context.
 func WithRules(ctx context.Context, rules []Rule) context.Context {
 	return context.WithValue(ctx, ctxRulesKey, rules)
@@ -56,7 +64,8 @@ const (
 )
 
 // Rule grants a permission mask to buckets in one namespace. A bucket's
-// namespace is the lowercase portion before its first hyphen.
+// namespace is the lowercase portion before its first hyphen. AllBucketsPrefix
+// is reserved for global read access.
 type Rule struct {
 	BucketPrefix string // e.g. "test"
 	Perm         Perm
@@ -81,11 +90,14 @@ func RulesFromGroups(groups map[string]struct{}) []Rule {
 	return out
 }
 
-// ParseGroup parses a case-insensitive "namespace-letters" group name. The
-// supported permission letters are r, w, c, d, and b; any other letter makes
-// the entire group invalid.
+// ParseGroup parses the reserved AllBucketsReadGroup or a case-insensitive
+// "namespace-letters" group name. The supported permission letters are r, w,
+// c, d, and b; any other letter makes the entire group invalid.
 func ParseGroup(g string) (prefix string, perm Perm, ok bool) {
 	g = strings.ToLower(strings.TrimSpace(g))
+	if g == AllBucketsReadGroup {
+		return AllBucketsPrefix, PermRead, true
+	}
 	i := strings.Index(g, "-")
 	if i <= 0 || i >= len(g)-1 {
 		return "", PermNone, false
@@ -129,20 +141,36 @@ func BucketNamespace(bucket string) string {
 	return b
 }
 
-// BucketPerm returns the first rule matching bucket's lowercase namespace, or
-// PermNone when no rule matches.
+// BucketPerm combines permissions for bucket's lowercase namespace with any
+// global read rule. AllBucketsPrefix can grant only read access.
 func BucketPerm(rules []Rule, bucket string) Perm {
 	ns := BucketNamespace(bucket)
+	var perm Perm
 	for _, r := range rules {
-		if ns == r.BucketPrefix {
-			return r.Perm
+		prefix := strings.ToLower(strings.TrimSpace(r.BucketPrefix))
+		if prefix == AllBucketsPrefix {
+			perm |= r.Perm & PermRead
+			continue
+		}
+		if ns == prefix {
+			perm |= r.Perm
 		}
 	}
-	return PermNone
+	return perm
 }
 
 // CanRead reports whether rules grant read permission on bucket.
 func CanRead(rules []Rule, bucket string) bool { return BucketPerm(rules, bucket)&PermRead != 0 }
+
+// CanReadAll reports whether rules grant read permission to every bucket.
+func CanReadAll(rules []Rule) bool {
+	for _, r := range rules {
+		if strings.TrimSpace(r.BucketPrefix) == AllBucketsPrefix && r.Perm&PermRead != 0 {
+			return true
+		}
+	}
+	return false
+}
 
 // CanWrite reports whether rules grant object-upload and object-tag permission
 // on bucket.

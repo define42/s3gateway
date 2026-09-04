@@ -61,7 +61,10 @@ func boot(cfg config.Config) (*http.Server, func(), error) {
 			return nil, cleanup, fmt.Errorf("init kafka topic lister: %w", err)
 		}
 		cleanupFunctions = append(cleanupFunctions, topicLister.Close)
-		adminOptions = append(adminOptions, adminpage.WithKafkaTopicLister(topicLister))
+		adminOptions = append(
+			adminOptions,
+			adminpage.WithKafkaTopicLister(topicLister, cfg.KafkaGlobalTopic),
+		)
 
 		popManager, err := kafkapop.New(kafkapop.Options{
 			Brokers:      cfg.KafkaBrokers,

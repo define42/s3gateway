@@ -3,8 +3,10 @@ package adminpage
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/define42/s3gateway/internal/authz"
 	"github.com/define42/s3gateway/internal/kafkatopic"
 )
 
@@ -16,6 +18,29 @@ type adminKafkaTopicsPageData struct {
 	TotalTopics       int
 	KnownElements     int64
 	UnavailableTopics int
+}
+
+func visibleAdminKafkaTopics(
+	topics []kafkatopic.Topic,
+	rules []authz.Rule,
+	globalTopic string,
+) []kafkatopic.Topic {
+	if authz.CanReadAll(rules) {
+		return topics
+	}
+
+	globalTopic = strings.TrimSpace(globalTopic)
+	visible := make([]kafkatopic.Topic, 0, len(topics))
+	for _, topic := range topics {
+		if topic.IsInternal || topic.Name == "_all" ||
+			(globalTopic != "" && topic.Name == globalTopic) {
+			continue
+		}
+		if authz.CanRead(rules, topic.Name) {
+			visible = append(visible, topic)
+		}
+	}
+	return visible
 }
 
 func writeAdminKafkaTopicsPage(w http.ResponseWriter, r *http.Request, status int, data adminKafkaTopicsPageData) {
@@ -44,6 +69,7 @@ func (h *handler) handleAdminKafkaTopics(w http.ResponseWriter, r *http.Request)
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
+	rules := authz.RulesFromGroups(session.Groups)
 
 	data := adminKafkaTopicsPageData{
 		Username:    session.Username,
@@ -56,6 +82,7 @@ func (h *handler) handleAdminKafkaTopics(w http.ResponseWriter, r *http.Request)
 	}
 
 	topics, err := h.kafkaTopicLister.List(r.Context())
+	topics = visibleAdminKafkaTopics(topics, rules, h.kafkaGlobalTopic)
 	data.Topics = topics
 	data.TotalTopics = len(topics)
 	for _, topic := range topics {

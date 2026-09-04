@@ -81,6 +81,12 @@ func configurePopGateway(gateway *Server, consumer *fakePopConsumer) {
 	gateway.popConsumer = consumer
 }
 
+func allBucketsReadRules() []authz.Rule {
+	return authz.RulesFromGroups(map[string]struct{}{
+		authz.AllBucketsReadGroup: {},
+	})
+}
+
 func TestHandlePopAPIBucketStreamsAndAcknowledgesObject(t *testing.T) {
 	const body = "image body"
 	gateway, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
@@ -172,7 +178,7 @@ func TestHandlePopAPIGlobalUsesEventBucket(t *testing.T) {
 
 	request := reqWithRulesAndUploader(
 		httptest.NewRequest(http.MethodPost, "/api/pop/_all/archive", nil),
-		fullTeam2Rule(),
+		allBucketsReadRules(),
 		"alice",
 	)
 	response := httptest.NewRecorder()
@@ -401,6 +407,15 @@ func TestHandlePopAPIValidation(t *testing.T) {
 			wantStatus: http.StatusServiceUnavailable,
 		},
 		{
+			name:          "global read forbidden before consume",
+			method:        http.MethodPost,
+			path:          "/api/pop/_all/archive",
+			configure:     configurePopGateway,
+			rules:         fullTeam2Rule(),
+			wantStatus:    http.StatusForbidden,
+			wantCallCount: 0,
+		},
+		{
 			name:   "global topic disabled",
 			method: http.MethodPost,
 			path:   "/api/pop/_all/archive",
@@ -408,7 +423,7 @@ func TestHandlePopAPIValidation(t *testing.T) {
 				gateway.cfg.EnableKafkaBucketTopic = true
 				gateway.popConsumer = consumer
 			},
-			rules:      fullTeam2Rule(),
+			rules:      allBucketsReadRules(),
 			wantStatus: http.StatusServiceUnavailable,
 		},
 		{
@@ -491,17 +506,6 @@ func TestHandlePopAPIRejectsUnusableEvents(t *testing.T) {
 			}).Value,
 			rules:      fullTeam2Rule(),
 			wantStatus: http.StatusBadGateway,
-		},
-		{
-			name:  "global event forbidden",
-			path:  "/api/pop/_all/archive",
-			topic: "_all",
-			value: popRecord(t, "_all", uploadnotify.Event{
-				Bucket: "other-documents",
-				Key:    "object",
-			}).Value,
-			rules:      fullTeam2Rule(),
-			wantStatus: http.StatusForbidden,
 		},
 	}
 

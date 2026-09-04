@@ -45,8 +45,31 @@ func PathRelative(tb testing.TB, elems ...string) string {
 // and returns its path.
 func WriteGatewayGlauthConfig(tb testing.TB) string {
 	tb.Helper()
+	return writeGatewayGlauthConfig(tb, false)
+}
 
-	const cfg = `
+// WriteGatewayGlauthConfigWithAllBucketsRead writes the standard integration
+// LDAP fixture with s3gateway-all-r assigned to testuser.
+func WriteGatewayGlauthConfigWithAllBucketsRead(tb testing.TB) string {
+	tb.Helper()
+	return writeGatewayGlauthConfig(tb, true)
+}
+
+func writeGatewayGlauthConfig(tb testing.TB, hasAllBucketsRead bool) string {
+	tb.Helper()
+
+	otherGroups := "5506"
+	allBucketsReadGroup := ""
+	if hasAllBucketsRead {
+		otherGroups += ", 5508"
+		allBucketsReadGroup = `
+[[groups]]
+  name = "s3gateway-all-r"
+  gidnumber = 5508
+`
+	}
+
+	const cfgTemplate = `
 debug = true
 
 [ldap]
@@ -70,7 +93,7 @@ debug = true
   name = "testuser"
   mail = "testuser@example.com"
   primarygroup = 5506
-  othergroups = [5506]
+  othergroups = [%s]
   passsha256 = "6478579e37aff45f013e14eeb30b3cc56c72ccdc310123bcdf53e0333e3f416a" # dogood
     [[users.capabilities]]
     action = "search"
@@ -93,7 +116,9 @@ debug = true
 [[groups]]
   name = "team2-r"
   gidnumber = 5507
+%s
 `
+	cfg := fmt.Sprintf(cfgTemplate, otherGroups, allBucketsReadGroup)
 
 	cfgPath := filepath.Join(tb.TempDir(), "glauth-integration.cfg")
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
