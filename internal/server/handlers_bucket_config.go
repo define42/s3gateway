@@ -129,7 +129,7 @@ func (s *Server) handleGetBucketACL(w http.ResponseWriter, r *http.Request, buck
 
 func (s *Server) handlePutBucketACL(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
-	if !authz.CanWrite(rules, bucket) {
+	if !authz.CanConfigure(rules, bucket) {
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
@@ -157,7 +157,7 @@ func (s *Server) handleGetObjectACL(w http.ResponseWriter, r *http.Request, buck
 
 func (s *Server) handlePutObjectACL(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	rules := authz.RulesFromRequest(r)
-	if !authz.CanWrite(rules, bucket) {
+	if !authz.CanConfigure(rules, bucket) {
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
@@ -259,7 +259,7 @@ type sseByDefaultXML struct {
 
 func (s *Server) handlePutBucketEncryption(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
-	if !authz.CanCreateBucket(rules, bucket) {
+	if !authz.CanConfigure(rules, bucket) {
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}

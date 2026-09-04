@@ -140,7 +140,7 @@ func (s *Server) handleDeleteBucket(w http.ResponseWriter, r *http.Request, buck
 
 func (s *Server) handlePutBucketVersioning(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
-	if !authz.CanWrite(rules, bucket) {
+	if !authz.CanConfigure(rules, bucket) {
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
@@ -200,7 +200,7 @@ func (s *Server) handleGetBucketVersioning(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) handlePutBucketTagging(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
-	if !authz.CanWrite(rules, bucket) {
+	if !authz.CanConfigure(rules, bucket) {
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
@@ -261,7 +261,7 @@ func (s *Server) handleGetBucketTagging(w http.ResponseWriter, r *http.Request, 
 
 func (s *Server) handleDeleteBucketTagging(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
-	if !authz.CanWrite(rules, bucket) {
+	if !authz.CanDeleteBucket(rules, bucket) {
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}

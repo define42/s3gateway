@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/define42/s3gateway/internal/authz"
 )
 
 // stubUpstreamHeadOK answers HEAD bucket/object probes with 200 and fails the
@@ -134,7 +136,40 @@ func TestACLWritesAcceptOnlyOwnerRetainingCannedACLs(t *testing.T) {
 		}
 	}
 
-	t.Run("forbidden without write permission", func(t *testing.T) {
+	t.Run("requires configuration permission", func(t *testing.T) {
+		for _, target := range []string{
+			"/team2-bucket?acl",
+			"/team2-bucket/key.txt?acl",
+		} {
+			t.Run(target, func(t *testing.T) {
+				writeOnlyReq := httptest.NewRequest(http.MethodPut, target, nil)
+				writeOnlyReq.Header.Set("x-amz-acl", "private")
+				writeOnlyReq = reqWithRules(writeOnlyReq, []authz.Rule{{
+					BucketPrefix: "team2",
+					Perm:         authz.PermWrite,
+				}})
+				writeOnlyRR := httptest.NewRecorder()
+				gw.ServeHTTP(writeOnlyRR, writeOnlyReq)
+				if writeOnlyRR.Code != http.StatusForbidden {
+					t.Fatalf("write-only status=%d want=403 body=%s", writeOnlyRR.Code, writeOnlyRR.Body.String())
+				}
+
+				configureReq := httptest.NewRequest(http.MethodPut, target, nil)
+				configureReq.Header.Set("x-amz-acl", "private")
+				configureReq = reqWithRules(configureReq, []authz.Rule{{
+					BucketPrefix: "team2",
+					Perm:         authz.PermCreateBucket,
+				}})
+				configureRR := httptest.NewRecorder()
+				gw.ServeHTTP(configureRR, configureReq)
+				if configureRR.Code != http.StatusOK {
+					t.Fatalf("configuration status=%d want=200 body=%s", configureRR.Code, configureRR.Body.String())
+				}
+			})
+		}
+	})
+
+	t.Run("forbidden without configuration permission", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/team2-bucket/key.txt?acl", nil)
 		req.Header.Set("x-amz-acl", "private")
 		req = reqWithRules(req, nil)

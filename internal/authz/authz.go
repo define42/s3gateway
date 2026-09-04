@@ -30,10 +30,10 @@ func RulesFromRequest(r *http.Request) []Rule {
 // suffixes use these permission letters:
 //
 //	r = read
-//	w = write
-//	c = create bucket
+//	w = upload objects and mutate object tags
+//	c = create buckets and put bucket configuration or ACLs
 //	d = delete object(s)
-//	b = delete bucket
+//	b = delete buckets and bucket configuration
 type Perm uint32
 
 const (
@@ -42,16 +42,16 @@ const (
 
 	// PermRead grants read operations.
 	PermRead Perm = 1 << iota
-	// PermWrite grants object write operations.
+	// PermWrite grants object uploads and object-tag mutations.
 	PermWrite
-	// PermCreateBucket grants bucket creation.
+	// PermCreateBucket grants bucket creation and configuration writes.
 	PermCreateBucket
 	// PermDeleteObject grants object deletion.
 	PermDeleteObject
-	// PermDeleteBucket grants bucket deletion.
+	// PermDeleteBucket grants bucket and bucket-configuration deletion.
 	PermDeleteBucket
 
-	// PermReadWrite combines read and object-write permissions.
+	// PermReadWrite combines read with object-upload and object-tag permissions.
 	PermReadWrite = PermRead | PermWrite
 )
 
@@ -144,13 +144,20 @@ func BucketPerm(rules []Rule, bucket string) Perm {
 // CanRead reports whether rules grant read permission on bucket.
 func CanRead(rules []Rule, bucket string) bool { return BucketPerm(rules, bucket)&PermRead != 0 }
 
-// CanWrite reports whether rules grant object-write permission on bucket.
+// CanWrite reports whether rules grant object-upload and object-tag permission
+// on bucket.
 func CanWrite(rules []Rule, bucket string) bool { return BucketPerm(rules, bucket)&PermWrite != 0 }
+
+// CanConfigure reports whether rules grant bucket configuration or ACL writes
+// in bucket's namespace.
+func CanConfigure(rules []Rule, bucket string) bool {
+	return BucketPerm(rules, bucket)&PermCreateBucket != 0
+}
 
 // CanCreateBucket reports whether rules grant bucket creation in bucket's
 // namespace.
 func CanCreateBucket(rules []Rule, bucket string) bool {
-	return BucketPerm(rules, bucket)&PermCreateBucket != 0
+	return CanConfigure(rules, bucket)
 }
 
 // CanDeleteObject reports whether rules grant object deletion on bucket.
@@ -158,7 +165,8 @@ func CanDeleteObject(rules []Rule, bucket string) bool {
 	return BucketPerm(rules, bucket)&PermDeleteObject != 0
 }
 
-// CanDeleteBucket reports whether rules grant deletion of bucket.
+// CanDeleteBucket reports whether rules grant deletion of a bucket or its
+// configuration.
 func CanDeleteBucket(rules []Rule, bucket string) bool {
 	return BucketPerm(rules, bucket)&PermDeleteBucket != 0
 }

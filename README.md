@@ -92,10 +92,10 @@ a bucket name before its first `-`; permissions are one or more letters:
 | Letter | Permission |
 | --- | --- |
 | `r` | Read buckets and objects |
-| `w` | Write objects and mutable bucket settings |
-| `c` | Create buckets and put lifecycle or encryption configuration |
+| `w` | Upload objects and set or delete object tags |
+| `c` | Create buckets and put bucket configuration or ACLs |
 | `d` | Delete objects |
-| `b` | Delete buckets and lifecycle or encryption configuration |
+| `b` | Delete buckets and bucket configuration |
 
 For example, `team2-r` can read `team2-logs` and `team2-data`, while
 `team2-rwcdb` grants every permission implemented by the gateway for the
@@ -122,17 +122,17 @@ requests are not.
 | Bucket | `GET /<bucket>?list-type=2` | ListObjectsV2 | `r` |
 | Bucket | `GET /<bucket>?versions` | ListObjectVersions | `r` |
 | Bucket | `POST /<bucket>?delete` | DeleteObjects | `d` |
-| Bucket | `PUT /<bucket>?versioning` | PutBucketVersioning | `w` |
+| Bucket | `PUT /<bucket>?versioning` | PutBucketVersioning | `c` |
 | Bucket | `GET /<bucket>?versioning` | GetBucketVersioning | `r` |
 | Bucket | `PUT /<bucket>?lifecycle` | PutBucketLifecycleConfiguration | `c` |
 | Bucket | `GET /<bucket>?lifecycle` | GetBucketLifecycleConfiguration | `r` |
 | Bucket | `DELETE /<bucket>?lifecycle` | DeleteBucketLifecycleConfiguration | `b` |
-| Bucket | `PUT /<bucket>?tagging` | PutBucketTagging | `w` |
+| Bucket | `PUT /<bucket>?tagging` | PutBucketTagging | `c` |
 | Bucket | `GET /<bucket>?tagging` | GetBucketTagging | `r` |
-| Bucket | `DELETE /<bucket>?tagging` | DeleteBucketTagging | `w` |
+| Bucket | `DELETE /<bucket>?tagging` | DeleteBucketTagging | `b` |
 | Bucket | `GET /<bucket>?uploads` | ListMultipartUploads | `r` |
 | Bucket | `GET /<bucket>?acl` | Return a canned owner `FULL_CONTROL` ACL | `r` |
-| Bucket | `PUT /<bucket>?acl` | Accept the `private` canned ACL as a no-op | `w` |
+| Bucket | `PUT /<bucket>?acl` | Accept the `private` canned ACL as a no-op | `c` |
 | Bucket | `PUT /<bucket>?encryption` | PutBucketEncryption | `c` |
 | Bucket | `GET /<bucket>?encryption` | GetBucketEncryption | `r` |
 | Bucket | `DELETE /<bucket>?encryption` | DeleteBucketEncryption | `b` |
@@ -142,7 +142,7 @@ requests are not.
 | Bucket | `GET /<bucket>?requestPayment` | Return `BucketOwner` | `r` |
 | Bucket | `GET /<bucket>?publicAccessBlock` | Return all public-access blocks enabled | `r` |
 | Object | `GET /<bucket>/<key>?acl` | Return a canned owner `FULL_CONTROL` ACL | `r` |
-| Object | `PUT /<bucket>/<key>?acl` | Accept `private`, `bucket-owner-read`, or `bucket-owner-full-control` as a no-op | `w` |
+| Object | `PUT /<bucket>/<key>?acl` | Accept `private`, `bucket-owner-read`, or `bucket-owner-full-control` as a no-op | `c` |
 | Object | `GET /<bucket>/<key>` | GetObject | `r` |
 | Object | `HEAD /<bucket>/<key>` | HeadObject | `r` |
 | Object | `PUT /<bucket>/<key>` | PutObject | `w` |

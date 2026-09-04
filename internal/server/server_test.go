@@ -1591,7 +1591,7 @@ func TestWithAuthRejectsTamperedSignedBodies(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		})
 		defer cleanup()
-		gw.gcache.Set("testuser", "dogood", map[string]struct{}{"team2-rw": {}})
+		gw.gcache.Set("testuser", "dogood", map[string]struct{}{"team2-rwc": {}})
 
 		headers := http.Header{"Content-Type": {"application/xml"}}
 		req := signedGatewayRequest(t, gw, http.MethodPut, "https://example.com/team2-bucket?tagging", tampered, original, headers)

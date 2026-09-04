@@ -2164,6 +2164,42 @@ func TestHandlePutBucketVersioningBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("forbidden with write-only permission", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?versioning", strings.NewReader(validVersioning))
+		req = reqWithRules(req, []authz.Rule{{
+			BucketPrefix: "team2",
+			Perm:         authz.PermWrite,
+		}})
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketVersioning(rr, req, "team2-bucket")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("success with create-only permission", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?versioning", strings.NewReader(validVersioning))
+		req = reqWithRules(req, []authz.Rule{{
+			BucketPrefix: "team2",
+			Perm:         authz.PermCreateBucket,
+		}})
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketVersioning(rr, req, "team2-bucket")
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
 	t.Run("malformed xml", func(t *testing.T) {
 		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 			t.Fatalf("upstream should not be called")
@@ -2241,6 +2277,42 @@ func TestBucketTaggingHandlersBranches(t *testing.T) {
 		rr := httptest.NewRecorder()
 		gw.handlePutBucketTagging(rr, req, "team2-bucket")
 		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put forbidden with write-only permission", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?tagging", strings.NewReader(validTagging))
+		req = reqWithRules(req, []authz.Rule{{
+			BucketPrefix: "team2",
+			Perm:         authz.PermWrite,
+		}})
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("put success with create-only permission", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?tagging", strings.NewReader(validTagging))
+		req = reqWithRules(req, []authz.Rule{{
+			BucketPrefix: "team2",
+			Perm:         authz.PermCreateBucket,
+		}})
+		rr := httptest.NewRecorder()
+		gw.handlePutBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusOK {
 			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
 		}
 	})
@@ -2402,6 +2474,42 @@ func TestBucketTaggingHandlersBranches(t *testing.T) {
 		rr := httptest.NewRecorder()
 		gw.handleDeleteBucketTagging(rr, req, "team2-bucket")
 		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("delete forbidden with write-only permission", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("upstream should not be called")
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?tagging", nil)
+		req = reqWithRules(req, []authz.Rule{{
+			BucketPrefix: "team2",
+			Perm:         authz.PermWrite,
+		}})
+		rr := httptest.NewRecorder()
+		gw.handleDeleteBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("delete success with delete-bucket-only permission", func(t *testing.T) {
+		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?tagging", nil)
+		req = reqWithRules(req, []authz.Rule{{
+			BucketPrefix: "team2",
+			Perm:         authz.PermDeleteBucket,
+		}})
+		rr := httptest.NewRecorder()
+		gw.handleDeleteBucketTagging(rr, req, "team2-bucket")
+		if rr.Code != http.StatusNoContent {
 			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
 		}
 	})

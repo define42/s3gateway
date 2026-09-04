@@ -728,7 +728,7 @@ func lifecycleRuleLegacyPrefix(r types.LifecycleRule) *string {
 
 func (s *Server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
-	if !authz.CanCreateBucket(rules, bucket) {
+	if !authz.CanConfigure(rules, bucket) {
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
