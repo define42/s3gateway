@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/define42/s3gateway/internal/s3http"
 	"github.com/define42/s3gateway/internal/s3xml"
@@ -48,12 +49,62 @@ func (s *Server) handleCreateBucket(w http.ResponseWriter, r *http.Request, buck
 	if !requireOwnerRetainingACLHeaders(w, r, true) {
 		return
 	}
-	_, err := s.up.CreateBucket(r.Context(), &s3.CreateBucketInput{Bucket: &bucket})
+	in := &s3.CreateBucketInput{Bucket: &bucket}
+	if !parseCreateBucketHeaders(w, r, in) {
+		return
+	}
+	cfg, ok := decodeXMLWithContentMD5(w, r, s3xml.DecodeCreateBucketConfig,
+		"Invalid or unsupported bucket configuration; only LocationConstraint is supported")
+	if !ok {
+		return
+	}
+	in.CreateBucketConfiguration = cfg
+	_, err := s.up.CreateBucket(r.Context(), in)
 	if err != nil {
 		s3http.WriteUpstreamError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func parseCreateBucketHeaders(w http.ResponseWriter, r *http.Request, in *s3.CreateBucketInput) bool {
+	// Reject unsupported settings by presence, including empty header values,
+	// before a bucket can be created with weaker protections than requested.
+	for name := range r.Header {
+		name = strings.ToLower(name)
+		if name == "x-amz-bucket-object-lock-enabled" {
+			continue
+		}
+		if strings.HasPrefix(name, "x-amz-bucket-object-lock-") ||
+			strings.HasPrefix(name, "x-amz-object-lock-") || name == "x-amz-bucket-namespace" {
+			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Unsupported bucket creation header: "+name)
+			return false
+		}
+	}
+	if values := r.Header.Values("x-amz-bucket-object-lock-enabled"); len(values) > 0 {
+		if len(values) != 1 || (values[0] != "true" && values[0] != "false") {
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "x-amz-bucket-object-lock-enabled must contain one true or false value")
+			return false
+		}
+		in.ObjectLockEnabledForBucket = aws.Bool(values[0] == "true")
+	}
+	if values := r.Header.Values("x-amz-object-ownership"); len(values) > 0 {
+		if len(values) != 1 {
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "x-amz-object-ownership must contain one value")
+			return false
+		}
+		switch types.ObjectOwnership(values[0]) {
+		case types.ObjectOwnershipBucketOwnerEnforced:
+			in.ObjectOwnership = types.ObjectOwnershipBucketOwnerEnforced
+		case types.ObjectOwnershipBucketOwnerPreferred, types.ObjectOwnershipObjectWriter:
+			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "ACL-enabled Object Ownership is unsupported; use BucketOwnerEnforced")
+			return false
+		default:
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "Invalid x-amz-object-ownership value")
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) handleHeadBucket(w http.ResponseWriter, r *http.Request, bucket string) {

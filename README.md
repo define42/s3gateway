@@ -356,6 +356,21 @@ They are invalidated on restart and are not shared between gateway replicas.
 Set `COOKIE_SECRET` to the same strong value on persistent deployments so the
 cookie encryption keys do not change on every restart.
 
+### Bucket creation
+
+`CreateBucket` forwards `LocationConstraint` and
+`x-amz-bucket-object-lock-enabled` to the upstream service. Object Lock support
+and permissions must be available upstream; creation errors are returned to the
+client. The gateway also forwards `x-amz-object-ownership: BucketOwnerEnforced`.
+ACL-enabled ownership modes and unsupported protection or bucket namespace
+headers return `501 NotImplemented` before creation.
+
+Creation XML is limited to 16 KiB and supports only `LocationConstraint`.
+Malformed XML and unsupported fields, including directory bucket settings and
+creation tags, return `400 MalformedXML`. Supplied `Content-MD5` and signed
+payload hashes are verified before creation. An empty body retains the upstream
+default region behavior.
+
 ### Multi-object delete checksums
 
 `DeleteObjects` validates supplied `Content-MD5` and CRC32, CRC32C, CRC64NVME,
