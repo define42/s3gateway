@@ -27,6 +27,9 @@ type Options struct {
 	Brokers      []string
 	Timeout      time.Duration
 	MaxConsumers int
+	// IdleTimeout bounds group membership after the last active or queued call.
+	// Zero uses 30 seconds.
+	IdleTimeout time.Duration
 }
 
 type consumerClient interface {
@@ -47,23 +50,30 @@ type consumerKey struct {
 }
 
 type groupConsumer struct {
-	gate     chan struct{} // A single permit serializes polling, handling, and closing.
-	client   consumerClient
-	lastUsed time.Time
-	users    int
+	key            consumerKey
+	gate           chan struct{} // A single permit serializes polling, handling, and closing.
+	client         consumerClient
+	lastUsed       time.Time
+	users          int
+	idleTimer      *time.Timer // Protected by Manager.mu, like users and lastUsed.
+	idleGeneration uint64
 }
 
 // Manager owns a bounded cache of Kafka group consumers. Calls for the same
 // topic and group are serialized so offsets are processed and committed in
-// order. Idle consumers are evicted on demand when the cache is full.
+// order. Idle consumers leave their Kafka group after the idle timeout, or
+// earlier when the cache is full, so other replicas can take their partitions.
 type Manager struct {
 	mu           sync.Mutex
 	consumers    map[consumerKey]*groupConsumer
 	newClient    clientFactory
 	timeout      time.Duration
+	idleTimeout  time.Duration
 	maxConsumers int
 	isClosed     bool
 	closed       chan struct{}
+	closeDone    chan struct{}
+	closers      sync.WaitGroup // Timers and detached clients; additions require mu.
 }
 
 // New constructs a Kafka pop manager. Kafka connections and group joins are
@@ -82,6 +92,12 @@ func New(options Options) (*Manager, error) {
 	}
 	if options.MaxConsumers <= 0 {
 		return nil, errors.New("kafkapop: max consumers must be positive")
+	}
+	if options.IdleTimeout < 0 {
+		return nil, errors.New("kafkapop: idle timeout must be positive")
+	}
+	if options.IdleTimeout == 0 {
+		options.IdleTimeout = 30 * time.Second
 	}
 
 	fetchMaxWait := min(options.Timeout, 5*time.Second)
@@ -105,16 +121,18 @@ func New(options Options) (*Manager, error) {
 		return client, nil
 	}
 
-	return newManager(options.Timeout, options.MaxConsumers, factory), nil
+	return newManager(options.Timeout, options.IdleTimeout, options.MaxConsumers, factory), nil
 }
 
-func newManager(timeout time.Duration, maxConsumers int, factory clientFactory) *Manager {
+func newManager(timeout, idleTimeout time.Duration, maxConsumers int, factory clientFactory) *Manager {
 	return &Manager{
 		consumers:    make(map[consumerKey]*groupConsumer),
 		newClient:    factory,
 		timeout:      timeout,
+		idleTimeout:  idleTimeout,
 		maxConsumers: maxConsumers,
 		closed:       make(chan struct{}),
+		closeDone:    make(chan struct{}),
 	}
 }
 
@@ -218,6 +236,7 @@ func (m *Manager) acquire(ctx context.Context, topic, group string) (*groupConsu
 		return nil, ErrClosed
 	}
 	if consumer := m.consumers[key]; consumer != nil {
+		m.stopIdleTimer(consumer)
 		consumer.users++
 		consumer.lastUsed = now
 		m.mu.Unlock()
@@ -248,12 +267,15 @@ func (m *Manager) acquire(ctx context.Context, topic, group string) (*groupConsu
 		return nil, fmt.Errorf("kafkapop: initialize consumer: %w", err)
 	}
 	consumer := &groupConsumer{
+		key:      key,
 		gate:     make(chan struct{}, 1),
 		client:   client,
 		lastUsed: now,
 		users:    1,
 	}
 	if evicted != nil {
+		m.stopIdleTimer(evicted)
+		m.closers.Add(1)
 		delete(m.consumers, evictionKey)
 	}
 	m.consumers[key] = consumer
@@ -261,6 +283,7 @@ func (m *Manager) acquire(ctx context.Context, topic, group string) (*groupConsu
 
 	if evicted != nil {
 		evicted.client.CloseAllowingRebalance()
+		m.closers.Done()
 	}
 	return m.waitForConsumer(ctx, consumer)
 }
@@ -300,21 +323,59 @@ func (m *Manager) release(consumer *groupConsumer) {
 		consumer.users--
 	}
 	consumer.lastUsed = time.Now()
+	if consumer.users == 0 && !m.isClosed {
+		m.closers.Add(1)
+		consumer.idleGeneration++
+		generation := consumer.idleGeneration
+		consumer.idleTimer = time.AfterFunc(m.idleTimeout, func() {
+			defer m.closers.Done()
+			m.expireConsumer(consumer, generation)
+		})
+	}
 	m.mu.Unlock()
 }
 
+// stopIdleTimer requires m.mu. A callback that has already started owns its
+// wait-group reference and checks that its idle generation is still current.
+func (m *Manager) stopIdleTimer(consumer *groupConsumer) {
+	if consumer.idleTimer != nil {
+		if consumer.idleTimer.Stop() {
+			m.closers.Done()
+		}
+		consumer.idleTimer = nil
+	}
+}
+
+func (m *Manager) expireConsumer(consumer *groupConsumer, generation uint64) {
+	m.mu.Lock()
+	if m.isClosed || consumer.users != 0 || consumer.idleTimer == nil ||
+		consumer.idleGeneration != generation || m.consumers[consumer.key] != consumer {
+		m.mu.Unlock()
+		return
+	}
+	delete(m.consumers, consumer.key)
+	consumer.idleTimer = nil
+	m.mu.Unlock()
+
+	// No users can acquire the detached client. Closing outside mu lets other
+	// groups and idle timers progress while Kafka processes the leave request.
+	consumer.client.CloseAllowingRebalance()
+}
+
 // Close rejects queued calls and closes every cached Kafka client. It waits
-// for an in-progress callback to finish before closing that callback's client.
+// for in-progress callbacks and any idle eviction already closing a client.
 func (m *Manager) Close() {
 	m.mu.Lock()
 	if m.isClosed {
 		m.mu.Unlock()
+		<-m.closeDone
 		return
 	}
 	m.isClosed = true
 	close(m.closed)
 	consumers := make([]*groupConsumer, 0, len(m.consumers))
 	for _, consumer := range m.consumers {
+		m.stopIdleTimer(consumer)
 		consumers = append(consumers, consumer)
 	}
 	m.consumers = nil
@@ -325,4 +386,6 @@ func (m *Manager) Close() {
 		consumer.client.CloseAllowingRebalance()
 		<-consumer.gate
 	}
+	m.closers.Wait()
+	close(m.closeDone)
 }

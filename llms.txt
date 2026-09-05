@@ -97,7 +97,7 @@ Core optional variables and defaults:
 Kafka variables:
 
 - `KAFKA_BROKERS`, `ENABLE_KAFKA_BUCKET_TOPIC=false`, `KAFKA_GLOBAL_TOPIC`
-- `KAFKA_NOTIFICATION_TIMEOUT=5s`, `KAFKA_POP_TIMEOUT=30s`, `KAFKA_POP_MAX_CONSUMERS=1000`
+- `KAFKA_NOTIFICATION_TIMEOUT=5s`, `KAFKA_POP_TIMEOUT=30s`, `KAFKA_POP_IDLE_TIMEOUT=30s`, `KAFKA_POP_MAX_CONSUMERS=1000`
 - `KAFKA_BROKERS` requires at least one enabled destination. `KAFKA_TOPIC` is obsolete as of `v1.0.63`.
 
 Logging variables:

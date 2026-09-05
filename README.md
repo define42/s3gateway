@@ -466,6 +466,7 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 | `KAFKA_GLOBAL_TOPIC` | No | Empty | Optional global upload-event topic |
 | `KAFKA_NOTIFICATION_TIMEOUT` | No | `5s` | Maximum total wait for all Kafka acknowledgements |
 | `KAFKA_POP_TIMEOUT` | No | `30s` | Maximum individual wait for pop polling and offset commits |
+| `KAFKA_POP_IDLE_TIMEOUT` | No | `30s` | Idle interval before a pop consumer leaves its Kafka group; must be positive |
 | `KAFKA_POP_MAX_CONSUMERS` | No | `1000` | Maximum cached `{topic, group}` pop consumers; idle consumers are evicted |
 | `SPLUNK_HEC_ENDPOINT` | No | Empty | Complete HEC JSON event URL; empty disables HEC forwarding |
 | `SPLUNK_HEC_TOKEN` | With HEC | Empty | HEC authentication token |
@@ -643,6 +644,15 @@ interface's origin. The object's original content type and disposition are not
 forwarded; object bytes are unchanged. Available object headers such as
 `Content-Length`, `ETag`, and `x-amz-version-id` are included. If no event is
 available within `KAFKA_POP_TIMEOUT`, the gateway returns `204 No Content`.
+
+When no Pop calls are active or queued for a `{topic, group}` consumer for
+`KAFKA_POP_IDLE_TIMEOUT` (default `30s`), the instance closes that consumer and
+leaves its Kafka group. This lets another replica receive its partitions after
+traffic moves between instances. Handoff takes the idle timeout plus the
+broker's rebalance time; clients may receive `204 No Content` during this period
+and should keep polling. Active object downloads and offset commits retain
+the consumer until they finish. A shorter idle timeout reduces handoff delay
+but causes more group rejoins for sporadic traffic.
 
 Automatic acknowledgement occurs only after the complete object body has been
 written and flushed successfully. The gateway then synchronously commits the

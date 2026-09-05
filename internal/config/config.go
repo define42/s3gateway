@@ -64,6 +64,7 @@ type Config struct {
 	KafkaGlobalTopic         string // optional global upload topic
 	KafkaNotificationTimeout time.Duration
 	KafkaPopTimeout          time.Duration
+	KafkaPopIdleTimeout      time.Duration
 	KafkaPopMaxConsumers     int
 
 	SplunkHECEndpoint      string
@@ -97,6 +98,7 @@ const (
 	defaultShutdownTimeout               = 20 * time.Second
 	defaultKafkaNotificationTimeout      = 5 * time.Second
 	defaultKafkaPopTimeout               = 30 * time.Second
+	defaultKafkaPopIdleTimeout           = 30 * time.Second
 	defaultKafkaPopMaxConsumers          = 1000
 	defaultSplunkHECFlushInterval        = 30 * time.Second
 	defaultLDAPOperationTimeout          = 10 * time.Second
@@ -200,6 +202,9 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.KafkaPopTimeout == 0 {
 		cfg.KafkaPopTimeout = defaultKafkaPopTimeout
+	}
+	if cfg.KafkaPopIdleTimeout == 0 {
+		cfg.KafkaPopIdleTimeout = defaultKafkaPopIdleTimeout
 	}
 	if cfg.KafkaPopMaxConsumers == 0 {
 		cfg.KafkaPopMaxConsumers = defaultKafkaPopMaxConsumers
@@ -407,6 +412,9 @@ func (cfg Config) Validate() error {
 		}
 		if cfg.KafkaPopMaxConsumers <= 0 {
 			return errors.New("KAFKA_POP_MAX_CONSUMERS must be > 0")
+		}
+		if cfg.KafkaPopIdleTimeout <= 0 {
+			return errors.New("KAFKA_POP_IDLE_TIMEOUT must be > 0")
 		}
 	}
 	if cfg.SplunkHECFlushInterval <= 0 {
@@ -637,6 +645,7 @@ func LoadConfig() Config {
 		KafkaGlobalTopic:         env("KAFKA_GLOBAL_TOPIC", ""),
 		KafkaNotificationTimeout: envDuration("KAFKA_NOTIFICATION_TIMEOUT", defaultKafkaNotificationTimeout),
 		KafkaPopTimeout:          envDuration("KAFKA_POP_TIMEOUT", defaultKafkaPopTimeout),
+		KafkaPopIdleTimeout:      envDuration("KAFKA_POP_IDLE_TIMEOUT", defaultKafkaPopIdleTimeout),
 		KafkaPopMaxConsumers:     envInt("KAFKA_POP_MAX_CONSUMERS", defaultKafkaPopMaxConsumers),
 
 		SplunkHECEndpoint:      env("SPLUNK_HEC_ENDPOINT", ""),

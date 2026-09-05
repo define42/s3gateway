@@ -369,6 +369,29 @@ func TestConfigValidateMatrix(t *testing.T) {
 			wantMsg: "KAFKA_POP_MAX_CONSUMERS",
 		},
 		{
+			name: "zero kafka pop idle timeout",
+			mutate: func(c *Config) {
+				c.KafkaBrokers = []string{"kafka:9092"}
+				c.EnableKafkaBucketTopic = true
+				c.KafkaNotificationTimeout = time.Second
+				c.KafkaPopTimeout = time.Second
+				c.KafkaPopMaxConsumers = 1
+			},
+			wantMsg: "KAFKA_POP_IDLE_TIMEOUT",
+		},
+		{
+			name: "negative kafka pop idle timeout",
+			mutate: func(c *Config) {
+				c.KafkaBrokers = []string{"kafka:9092"}
+				c.EnableKafkaBucketTopic = true
+				c.KafkaNotificationTimeout = time.Second
+				c.KafkaPopTimeout = time.Second
+				c.KafkaPopIdleTimeout = -time.Second
+				c.KafkaPopMaxConsumers = 1
+			},
+			wantMsg: "KAFKA_POP_IDLE_TIMEOUT",
+		},
+		{
 			name: "splunk flush interval",
 			mutate: func(c *Config) {
 				c.SplunkHECFlushInterval = 0
@@ -540,6 +563,13 @@ func TestApplyDefaultsDoesNotInjectPrivateX25519Key(t *testing.T) {
 			"kafka pop max consumers mismatch: got=%d want=%d",
 			cfg.KafkaPopMaxConsumers,
 			defaultKafkaPopMaxConsumers,
+		)
+	}
+	if cfg.KafkaPopIdleTimeout != defaultKafkaPopIdleTimeout {
+		t.Fatalf(
+			"kafka pop idle timeout mismatch: got=%s want=%s",
+			cfg.KafkaPopIdleTimeout,
+			defaultKafkaPopIdleTimeout,
 		)
 	}
 	if cfg.SplunkHECFlushInterval != defaultSplunkHECFlushInterval {
@@ -728,6 +758,7 @@ func TestLoadConfigKafkaGlobalTopic(t *testing.T) {
 	t.Setenv("KAFKA_GLOBAL_TOPIC", "_all")
 	t.Setenv("KAFKA_NOTIFICATION_TIMEOUT", "3s")
 	t.Setenv("KAFKA_POP_TIMEOUT", "7s")
+	t.Setenv("KAFKA_POP_IDLE_TIMEOUT", "11s")
 	t.Setenv("KAFKA_POP_MAX_CONSUMERS", "42")
 
 	cfg := LoadConfig()
@@ -745,6 +776,9 @@ func TestLoadConfigKafkaGlobalTopic(t *testing.T) {
 	}
 	if cfg.KafkaPopTimeout != 7*time.Second {
 		t.Fatalf("kafka pop timeout mismatch: got=%s want=7s", cfg.KafkaPopTimeout)
+	}
+	if cfg.KafkaPopIdleTimeout != 11*time.Second {
+		t.Fatalf("kafka pop idle timeout mismatch: got=%s want=11s", cfg.KafkaPopIdleTimeout)
 	}
 	if cfg.KafkaPopMaxConsumers != 42 {
 		t.Fatalf("kafka pop max consumers mismatch: got=%d want=42", cfg.KafkaPopMaxConsumers)

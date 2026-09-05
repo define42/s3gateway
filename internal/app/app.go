@@ -71,6 +71,7 @@ func boot(cfg config.Config) (*http.Server, func(), error) {
 		popManager, err := kafkapop.New(kafkapop.Options{
 			Brokers:      cfg.KafkaBrokers,
 			Timeout:      cfg.KafkaPopTimeout,
+			IdleTimeout:  cfg.KafkaPopIdleTimeout,
 			MaxConsumers: cfg.KafkaPopMaxConsumers,
 		})
 		if err != nil {
