@@ -240,7 +240,8 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 
 	objects := make([]types.ObjectIdentifier, 0, len(req.Objects))
 	for i, obj := range req.Objects {
-		key := strings.TrimSpace(aws.ToString(obj.Key))
+		// Whitespace is significant in S3 object keys.
+		key := aws.ToString(obj.Key)
 		if key == "" {
 			s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", fmt.Sprintf("DeleteObjects object[%d] missing Key", i))
 			return

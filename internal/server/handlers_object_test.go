@@ -1,7 +1,11 @@
 package server
 
 import (
+	"encoding/xml"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -60,5 +64,64 @@ func TestDecodeDeleteObjectsRequestLimits(t *testing.T) {
 				t.Fatalf("decodeDeleteObjectsRequest() appended %d objects, want %d", len(got.Objects), tc.wantObjects)
 			}
 		})
+	}
+}
+
+func TestHandleDeleteObjectsPreservesKeys(t *testing.T) {
+	wantKeys := []string{
+		"report",
+		" report",
+		"report ",
+		" report ",
+		" ",
+		"\t\r\n",
+		"\u00a0report\u2003",
+	}
+	upstreamKeys := make(chan []string, 1)
+	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Objects []struct {
+				Key string `xml:"Key"`
+			} `xml:"Object"`
+		}
+		if err := xml.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode upstream delete request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		keys := make([]string, 0, len(request.Objects))
+		for _, object := range request.Objects {
+			keys = append(keys, object.Key)
+		}
+		upstreamKeys <- keys
+		w.Header().Set("Content-Type", "application/xml")
+		_, _ = w.Write([]byte(`<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"/>`))
+	})
+	defer cleanup()
+
+	var body strings.Builder
+	body.WriteString("<Delete>")
+	for _, key := range wantKeys {
+		body.WriteString("<Object><Key>")
+		if err := xml.EscapeText(&body, []byte(key)); err != nil {
+			t.Fatalf("escape object key: %v", err)
+		}
+		body.WriteString("</Key></Object>")
+	}
+	body.WriteString("</Delete>")
+
+	req := httptest.NewRequest(http.MethodPost, "/team2-dst?delete", strings.NewReader(body.String()))
+	rr := httptest.NewRecorder()
+	gw.ServeHTTP(rr, reqWithRules(req, fullTeam2Rule()))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+	select {
+	case gotKeys := <-upstreamKeys:
+		if !slices.Equal(gotKeys, wantKeys) {
+			t.Fatalf("upstream keys = %q, want %q", gotKeys, wantKeys)
+		}
+	default:
+		t.Fatal("delete request did not reach upstream")
 	}
 }

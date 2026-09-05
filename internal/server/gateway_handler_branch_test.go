@@ -621,6 +621,27 @@ func TestHandleDeleteObjectsValidationMatrix(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
+			name:       "empty object key",
+			body:       `<Delete><Object><Key></Key></Object></Delete>`,
+			rules:      fullTeam2Rule(),
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "MalformedXML",
+		},
+		{
+			name:       "valid object followed by missing key",
+			body:       `<Delete><Object><Key>report</Key></Object><Object/></Delete>`,
+			rules:      fullTeam2Rule(),
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "MalformedXML",
+		},
+		{
+			name:       "valid object followed by empty key",
+			body:       `<Delete><Object><Key>report</Key></Object><Object><Key/></Object></Delete>`,
+			rules:      fullTeam2Rule(),
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "MalformedXML",
+		},
+		{
 			name:         "invalid bypass retention header",
 			body:         validBody,
 			rules:        fullTeam2Rule(),
