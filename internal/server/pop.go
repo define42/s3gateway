@@ -27,7 +27,10 @@ const (
 	maxKafkaGroupIDBytes = 249
 )
 
-var errPopResponseHandled = errors.New("pop response handled")
+var (
+	errPopResponseHandled     = errors.New("pop response handled")
+	errPopResponseInterrupted = errors.New("pop response interrupted")
+)
 
 // PopConsumer delivers one Kafka record to handle and commits it only when
 // handle succeeds.
@@ -201,7 +204,7 @@ func (s *Server) handlePopAPI(w http.ResponseWriter, r *http.Request) {
 
 			responseStarted = true
 			if err := s.streamPoppedObject(w, r, event); err != nil {
-				return fmt.Errorf("%w: %v", errPopResponseHandled, err)
+				return fmt.Errorf("%w: %w", errPopResponseHandled, err)
 			}
 			return nil
 		},
@@ -229,6 +232,10 @@ func (s *Server) handlePopAPI(w http.ResponseWriter, r *http.Request) {
 			"group", group,
 			"error", err,
 		)
+		if errors.Is(err, errPopResponseInterrupted) {
+			// Let Consume finish its retry bookkeeping before aborting the response.
+			panic(http.ErrAbortHandler)
+		}
 		return
 	}
 
@@ -286,12 +293,13 @@ func (s *Server) streamPoppedObject(
 	w.WriteHeader(http.StatusOK)
 	written, err := io.Copy(w, out.Body)
 	if err != nil {
-		return fmt.Errorf("write popped object: %w", err)
+		return fmt.Errorf("%w: write popped object: %w", errPopResponseInterrupted, err)
 	}
 	if out.ContentLength != nil && *out.ContentLength >= 0 &&
 		written != *out.ContentLength {
 		return fmt.Errorf(
-			"write popped object: %w: wrote %d of %d bytes",
+			"%w: write popped object: %w: wrote %d of %d bytes",
+			errPopResponseInterrupted,
 			io.ErrUnexpectedEOF,
 			written,
 			*out.ContentLength,
@@ -299,7 +307,7 @@ func (s *Server) streamPoppedObject(
 	}
 	if err := http.NewResponseController(w).Flush(); err != nil &&
 		!errors.Is(err, http.ErrNotSupported) {
-		return fmt.Errorf("flush popped object: %w", err)
+		return fmt.Errorf("%w: flush popped object: %w", errPopResponseInterrupted, err)
 	}
 	return nil
 }

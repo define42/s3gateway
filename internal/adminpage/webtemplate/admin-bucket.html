@@ -617,11 +617,11 @@
                 <div class="row-actions">
                   <a class="btn small" href="/admin/bucket/download?name={{$.BucketName | urlquery}}&key={{.Key | urlquery}}">Download</a>
                   {{if $.CanDeleteObjects}}
-                  <form class="inline" method="post" action="/admin/bucket/delete">
+                  {{/* Keep the key in the URL so form submission cannot normalize its line breaks. */}}
+                  <form class="inline" method="post" action="/admin/bucket/delete?key={{.Key | urlquery}}">
                     <input type="hidden" name="name" value="{{$.BucketName}}">
                     <input type="hidden" name="cursor" value="{{$.CurrentCursor}}">
                     <input type="hidden" name="history" value="{{$.CurrentHistory}}">
-                    <input type="hidden" name="key" value="{{.Key}}">
                     <button class="btn warn small" type="submit">Delete</button>
                   </form>
                   {{end}}

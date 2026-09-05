@@ -321,7 +321,7 @@ func TestHandlePopAPIDoesNotAcknowledgeWriteFailure(t *testing.T) {
 		fullTeam2Rule(),
 		"alice",
 	)
-	gateway.ServeHTTP(response, request)
+	assertPopResponseAborted(t, gateway, response, request)
 
 	consumer.mu.Lock()
 	defer consumer.mu.Unlock()
@@ -355,7 +355,7 @@ func TestHandlePopAPIDoesNotAcknowledgeShortObject(t *testing.T) {
 		"alice",
 	)
 	response := httptest.NewRecorder()
-	gateway.ServeHTTP(response, request)
+	assertPopResponseAborted(t, gateway, response, request)
 
 	consumer.mu.Lock()
 	defer consumer.mu.Unlock()
@@ -366,6 +366,16 @@ func TestHandlePopAPIDoesNotAcknowledgeShortObject(t *testing.T) {
 		!strings.Contains(consumer.handleErr.Error(), "unexpected EOF") {
 		t.Fatalf("handler error = %v, want unexpected EOF", consumer.handleErr)
 	}
+}
+
+func assertPopResponseAborted(t *testing.T, gateway *Server, w http.ResponseWriter, r *http.Request) {
+	t.Helper()
+	defer func() {
+		if got := recover(); got != http.ErrAbortHandler {
+			t.Fatalf("response abort = %v, want http.ErrAbortHandler", got)
+		}
+	}()
+	gateway.ServeHTTP(w, r)
 }
 
 type failingPopResponseWriter struct {

@@ -866,7 +866,8 @@ func (h *handler) listBucketObjects(ctx context.Context, bucket, continuationTok
 		if obj.Key == nil {
 			continue
 		}
-		key := strings.TrimSpace(*obj.Key)
+		// S3 keys are literal identifiers; trimming can select a different object.
+		key := *obj.Key
 		if key == "" {
 			continue
 		}
@@ -1401,7 +1402,7 @@ func (h *handler) handleAdminBucketDownload(w http.ResponseWriter, r *http.Reque
 	}
 
 	bucket := strings.TrimSpace(r.URL.Query().Get("name"))
-	key := strings.TrimSpace(r.URL.Query().Get("key"))
+	key := r.URL.Query().Get("key")
 	if h == nil || h.s3 == nil {
 		http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, "", "", "", "Admin backend is not configured."), http.StatusSeeOther)
 		return
@@ -1448,7 +1449,10 @@ func (h *handler) handleAdminBucketDownload(w http.ResponseWriter, r *http.Reque
 	if r.Method == http.MethodHead {
 		return
 	}
-	_, _ = io.Copy(w, out.Body)
+	if _, err := io.Copy(w, out.Body); err != nil {
+		// Headers are committed; abort so a truncated body cannot look complete.
+		panic(http.ErrAbortHandler)
+	}
 }
 
 func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request) {
@@ -1833,7 +1837,7 @@ func (h *handler) handleAdminBucketDelete(w http.ResponseWriter, r *http.Request
 	}
 
 	bucket := strings.TrimSpace(r.FormValue("name"))
-	key := strings.TrimSpace(r.FormValue("key"))
+	key := r.FormValue("key")
 	if bucket == "" {
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return

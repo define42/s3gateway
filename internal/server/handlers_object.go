@@ -959,7 +959,10 @@ func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 		status = http.StatusPartialContent
 	}
 	w.WriteHeader(status)
-	_, _ = io.Copy(w, out.Body)
+	if _, err := io.Copy(w, out.Body); err != nil {
+		// Headers are committed; abort so a truncated body cannot look complete.
+		panic(http.ErrAbortHandler)
+	}
 }
 
 func (s *Server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket, key string) {

@@ -178,11 +178,12 @@ func TestGatewayGetAndHeadObjectRichHeaderMatrix(t *testing.T) {
 			w.Header().Set("x-amz-object-lock-legal-hold", "ON")
 			w.Header().Set("x-amz-object-lock-retain-until-date", retainUntil)
 			w.Header().Set("x-amz-request-charged", "requester")
-			w.Header().Set("x-amz-checksum-crc32", "AAAAAA==")
-			w.Header().Set("x-amz-checksum-crc32c", "BBBBBB==")
-			w.Header().Set("x-amz-checksum-crc64nvme", "CCCCCC==")
-			w.Header().Set("x-amz-checksum-sha1", "DDDDDD==")
-			w.Header().Set("x-amz-checksum-sha256", "EEEEEE==")
+			// Valid checksums of "hello world" let the SDK finish reading the body.
+			w.Header().Set("x-amz-checksum-crc32", "DUoRhQ==")
+			w.Header().Set("x-amz-checksum-crc32c", "yZRlqg==")
+			w.Header().Set("x-amz-checksum-crc64nvme", "jSnVw/bqjr4=")
+			w.Header().Set("x-amz-checksum-sha1", "Kq5sNclPz7QV2+lfQIuc6R7oRu0=")
+			w.Header().Set("x-amz-checksum-sha256", "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=")
 			w.Header().Set("x-amz-checksum-type", "FULL_OBJECT")
 			w.Header().Set("x-amz-meta-k1", "v1")
 			w.WriteHeader(http.StatusOK)
@@ -244,7 +245,7 @@ func TestGatewayGetAndHeadObjectRichHeaderMatrix(t *testing.T) {
 	if headRR.Header().Get("x-amz-object-lock-mode") != "GOVERNANCE" {
 		t.Fatalf("head object lock mode mismatch: got=%q", headRR.Header().Get("x-amz-object-lock-mode"))
 	}
-	if headRR.Header().Get("x-amz-checksum-sha256") != "EEEEEE==" {
+	if headRR.Header().Get("x-amz-checksum-sha256") != "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=" {
 		t.Fatalf("head object checksum mismatch: got=%q", headRR.Header().Get("x-amz-checksum-sha256"))
 	}
 }
