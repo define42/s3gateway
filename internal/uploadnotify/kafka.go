@@ -80,7 +80,8 @@ func (p *KafkaPublisher) Notify(ctx context.Context, event Event) error {
 	if strings.TrimSpace(event.Bucket) == "" {
 		return errors.New("uploadnotify: event bucket is required")
 	}
-	if strings.TrimSpace(event.Key) == "" {
+	// Whitespace is significant in S3 object keys, including whitespace-only keys.
+	if event.Key == "" {
 		return errors.New("uploadnotify: event key is required")
 	}
 	if event.SchemaVersion == 0 {

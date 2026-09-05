@@ -493,8 +493,10 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 | `SPLUNK_HEC_FLUSH_INTERVAL` | No | `30s` | Interval for batching HEC log events |
 | `S3_AUDIT_HASH_KEY` | No | Ephemeral | HMAC seed for stable audit pseudonyms; when set, it must contain at least 32 characters |
 | `HTTP_READ_HEADER_TIMEOUT` | No | `10s` | HTTP header-read timeout |
-| `HTTP_READ_TIMEOUT` | No | `0s` | HTTP request-read timeout; `0s` disables it |
-| `HTTP_WRITE_TIMEOUT` | No | `0s` | HTTP response-write timeout; `0s` disables it |
+| `HTTP_READ_TIMEOUT` | No | `0s` | Absolute HTTP request-read timeout; `0s` disables it; must be nonnegative |
+| `HTTP_WRITE_TIMEOUT` | No | `0s` | Absolute HTTP response-write timeout; `0s` disables it; must be nonnegative |
+| `HTTP_TRANSFER_IDLE_TIMEOUT` | No | `60s` | Maximum active-request interval without request-body read or response-write progress; must be positive |
+| `HTTP_MAX_CONCURRENT_REQUESTS` | No | `32` | Maximum active HTTP requests per instance, excluding `/healthz` and `/readyz`; must be positive |
 | `HTTP_IDLE_TIMEOUT` | No | `120s` | HTTP keep-alive idle timeout |
 | `HTTP_SHUTDOWN_TIMEOUT` | No | `20s` | Graceful-shutdown timeout |
 | `HTTP_MAX_HEADER_BYTES` | No | `1048576` | Maximum request-header size in bytes |
@@ -524,6 +526,29 @@ proxies that sanitize or append `X-Forwarded-For`. The gateway then walks the
 header from right to left and selects the nearest untrusted address. Deploy an
 edge or load-balancer rate limit as well when traffic is distributed across
 gateway replicas, because application limiter state is not shared.
+
+### Transfer resource limits
+
+Each instance accepts at most `HTTP_MAX_CONCURRENT_REQUESTS` active requests
+(default `32`). The limit includes S3 API calls, browser requests, Kafka Pop,
+and authentication. `/healthz` and `/readyz` remain available when all request
+slots are occupied. Excess requests receive an immediate `503 SlowDown` with
+`Retry-After: 1`.
+
+`HTTP_TRANSFER_IDLE_TIMEOUT` defaults to `60s`. If an active request makes no
+request-body read or response-write progress for that interval, the gateway
+cancels its context and upstream work and interrupts blocked client reads and
+writes. Transfers can run longer while they keep making progress. The separate
+absolute `HTTP_READ_TIMEOUT` and `HTTP_WRITE_TIMEOUT` remain disabled by
+default; setting them limits total read and write duration even for transfers
+that continue making progress.
+
+A signed streaming upload or browser upload can retain a `16 MiB` buffer.
+At the default request limit, 32 such uploads can use `512 MiB` for these buffers
+alone, plus HTTP, upstream SDK, and other process overhead. Size the request
+limit and container memory together for the workload. Each replica enforces
+its own limit; configure aggregate concurrency and idle limits at the reverse
+proxy or load balancer when deploying multiple replicas.
 
 ### Kafka upload notifications
 

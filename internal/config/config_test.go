@@ -55,6 +55,8 @@ func TestConfigValidateMatrix(t *testing.T) {
 		AuthTrustedCredentialTTL:      time.Minute,
 		SigV4MaxSkew:                  time.Second,
 		ReadHeaderTimeout:             time.Second,
+		TransferIdleTimeout:           time.Second,
+		MaxConcurrentRequests:         1,
 		IdleTimeout:                   time.Second,
 		ShutdownTimeout:               time.Second,
 		MaxHeaderBytes:                1,
@@ -245,6 +247,36 @@ func TestConfigValidateMatrix(t *testing.T) {
 				c.ReadHeaderTimeout = 0
 			},
 			wantMsg: "HTTP_READ_HEADER_TIMEOUT",
+		},
+		{
+			name:    "negative read timeout",
+			mutate:  func(c *Config) { c.ReadTimeout = -time.Second },
+			wantMsg: "HTTP_READ_TIMEOUT",
+		},
+		{
+			name:    "negative write timeout",
+			mutate:  func(c *Config) { c.WriteTimeout = -time.Second },
+			wantMsg: "HTTP_WRITE_TIMEOUT",
+		},
+		{
+			name:    "zero transfer idle timeout",
+			mutate:  func(c *Config) { c.TransferIdleTimeout = 0 },
+			wantMsg: "HTTP_TRANSFER_IDLE_TIMEOUT",
+		},
+		{
+			name:    "negative transfer idle timeout",
+			mutate:  func(c *Config) { c.TransferIdleTimeout = -time.Second },
+			wantMsg: "HTTP_TRANSFER_IDLE_TIMEOUT",
+		},
+		{
+			name:    "zero max concurrent requests",
+			mutate:  func(c *Config) { c.MaxConcurrentRequests = 0 },
+			wantMsg: "HTTP_MAX_CONCURRENT_REQUESTS",
+		},
+		{
+			name:    "negative max concurrent requests",
+			mutate:  func(c *Config) { c.MaxConcurrentRequests = -1 },
+			wantMsg: "HTTP_MAX_CONCURRENT_REQUESTS",
 		},
 		{
 			name: "idle timeout",
@@ -618,6 +650,102 @@ func TestApplyDefaultsDoesNotInjectPrivateX25519Key(t *testing.T) {
 	}
 	if len(cfg.ReadinessAllowedCIDRs) != 2 {
 		t.Fatalf("readiness CIDR defaults mismatch: %v", cfg.ReadinessAllowedCIDRs)
+	}
+}
+
+func TestApplyDefaultsTransferLimits(t *testing.T) {
+	tests := []struct {
+		name           string
+		cfg            Config
+		wantIdle       time.Duration
+		wantConcurrent int
+	}{
+		{name: "defaults", wantIdle: 60 * time.Second, wantConcurrent: 32},
+		{
+			name:           "configured",
+			cfg:            Config{TransferIdleTimeout: 2 * time.Minute, MaxConcurrentRequests: 8},
+			wantIdle:       2 * time.Minute,
+			wantConcurrent: 8,
+		},
+		{
+			name:           "negative values retained for validation",
+			cfg:            Config{TransferIdleTimeout: -time.Second, MaxConcurrentRequests: -1},
+			wantIdle:       -time.Second,
+			wantConcurrent: -1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.cfg.ApplyDefaults()
+			if tt.cfg.TransferIdleTimeout != tt.wantIdle || tt.cfg.MaxConcurrentRequests != tt.wantConcurrent {
+				t.Fatalf(
+					"transfer limits = %s/%d, want %s/%d",
+					tt.cfg.TransferIdleTimeout, tt.cfg.MaxConcurrentRequests,
+					tt.wantIdle, tt.wantConcurrent,
+				)
+			}
+			if tt.cfg.ReadTimeout != 0 || tt.cfg.WriteTimeout != 0 {
+				t.Fatal("absolute read/write timeouts should remain disabled by default")
+			}
+		})
+	}
+}
+
+func TestLoadConfigTransferLimits(t *testing.T) {
+	setRequiredX25519PrivateKeyEnv(t)
+	t.Setenv("LDAP_URL", "ldap://ldap.example:389")
+	t.Setenv("LDAP_BASE_DN", "dc=example,dc=com")
+	t.Setenv("LDAP_GROUP_BASE_DN", "ou=groups,dc=example,dc=com")
+	t.Setenv("S3_ENDPOINT", "https://s3.example")
+	t.Setenv("S3_ACCESS_KEY", "access-key")
+	t.Setenv("S3_SECRET_KEY", "secret-key")
+
+	tests := []struct {
+		name           string
+		idleTimeout    string
+		maxConcurrent  string
+		readTimeout    string
+		writeTimeout   string
+		wantIdle       time.Duration
+		wantConcurrent int
+		wantRead       time.Duration
+		wantWrite      time.Duration
+	}{
+		{name: "defaults", wantIdle: 60 * time.Second, wantConcurrent: 32},
+		{
+			name:           "configured",
+			idleTimeout:    "90s",
+			maxConcurrent:  "12",
+			readTimeout:    "5m",
+			writeTimeout:   "7m",
+			wantIdle:       90 * time.Second,
+			wantConcurrent: 12,
+			wantRead:       5 * time.Minute,
+			wantWrite:      7 * time.Minute,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HTTP_TRANSFER_IDLE_TIMEOUT", tt.idleTimeout)
+			t.Setenv("HTTP_MAX_CONCURRENT_REQUESTS", tt.maxConcurrent)
+			t.Setenv("HTTP_READ_TIMEOUT", tt.readTimeout)
+			t.Setenv("HTTP_WRITE_TIMEOUT", tt.writeTimeout)
+
+			cfg := LoadConfig()
+			if cfg.TransferIdleTimeout != tt.wantIdle || cfg.MaxConcurrentRequests != tt.wantConcurrent {
+				t.Fatalf(
+					"transfer limits = %s/%d, want %s/%d",
+					cfg.TransferIdleTimeout, cfg.MaxConcurrentRequests,
+					tt.wantIdle, tt.wantConcurrent,
+				)
+			}
+			if cfg.ReadTimeout != tt.wantRead || cfg.WriteTimeout != tt.wantWrite {
+				t.Fatalf(
+					"absolute timeouts = %s/%s, want %s/%s",
+					cfg.ReadTimeout, cfg.WriteTimeout, tt.wantRead, tt.wantWrite,
+				)
+			}
+		})
 	}
 }
 

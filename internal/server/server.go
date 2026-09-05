@@ -49,7 +49,7 @@ func NewHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
 
 	return &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           handler,
+		Handler:           withTransferLimits(cfg, handler),
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		ReadTimeout:       cfg.ReadTimeout,
 		WriteTimeout:      cfg.WriteTimeout,

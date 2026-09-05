@@ -228,6 +228,49 @@ func TestKafkaPublisherNotifyGeneratesSharedEventID(t *testing.T) {
 	}
 }
 
+func TestKafkaPublisherNotifyPreservesObjectKeyWhitespace(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "single space", key: " "},
+		{name: "ASCII whitespace", key: " \t\r\n"},
+		{name: "Unicode whitespace", key: "\u00a0\u2003\u3000"},
+		{name: "surrounding whitespace", key: " \tpath/object.txt\u2003 "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			producer := &fakeRecordProducer{}
+			publisher := newKafkaPublisher(producer, true, "_all", time.Second)
+			event := Event{
+				EventName: EventObjectCreatedPut,
+				Bucket:    "bucket",
+				Key:       tt.key,
+			}
+
+			if err := publisher.Notify(t.Context(), event); err != nil {
+				t.Fatalf("Notify() error = %v", err)
+			}
+			if len(producer.records) != 2 {
+				t.Fatalf("produced record count = %d, want 2", len(producer.records))
+			}
+			for _, record := range producer.records {
+				if got, want := string(record.Key), event.Bucket+"/"+tt.key; got != want {
+					t.Fatalf("record key = %q, want %q", got, want)
+				}
+				var got Event
+				if err := json.Unmarshal(record.Value, &got); err != nil {
+					t.Fatalf("decode produced event: %v", err)
+				}
+				if got.Key != tt.key {
+					t.Fatalf("event key = %q, want %q", got.Key, tt.key)
+				}
+			}
+		})
+	}
+}
+
 func TestKafkaPublisherNotifyFailure(t *testing.T) {
 	produceErr := errors.New("broker unavailable")
 	producer := &fakeRecordProducer{produceErr: produceErr}

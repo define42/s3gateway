@@ -76,6 +76,8 @@ type Config struct {
 	ReadHeaderTimeout         time.Duration
 	ReadTimeout               time.Duration
 	WriteTimeout              time.Duration
+	TransferIdleTimeout       time.Duration
+	MaxConcurrentRequests     int
 	IdleTimeout               time.Duration
 	ShutdownTimeout           time.Duration
 	MaxHeaderBytes            int
@@ -95,6 +97,8 @@ const (
 	defaultSigV4MaxSkew                  = 15 * time.Minute
 	defaultReadTimeout                   = 0 * time.Second
 	defaultWriteTimeout                  = 0 * time.Second
+	defaultTransferIdleTimeout           = 60 * time.Second
+	defaultMaxConcurrentRequests         = 32
 	defaultShutdownTimeout               = 20 * time.Second
 	defaultKafkaNotificationTimeout      = 5 * time.Second
 	defaultKafkaPopTimeout               = 30 * time.Second
@@ -214,6 +218,12 @@ func (cfg *Config) ApplyDefaults() {
 	}
 	if cfg.ReadHeaderTimeout == 0 {
 		cfg.ReadHeaderTimeout = DefaultReadHeaderTimeout
+	}
+	if cfg.TransferIdleTimeout == 0 {
+		cfg.TransferIdleTimeout = defaultTransferIdleTimeout
+	}
+	if cfg.MaxConcurrentRequests == 0 {
+		cfg.MaxConcurrentRequests = defaultMaxConcurrentRequests
 	}
 	if cfg.IdleTimeout == 0 {
 		cfg.IdleTimeout = DefaultIdleTimeout
@@ -359,6 +369,18 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.ReadHeaderTimeout <= 0 {
 		return errors.New("HTTP_READ_HEADER_TIMEOUT must be > 0")
+	}
+	if cfg.ReadTimeout < 0 {
+		return errors.New("HTTP_READ_TIMEOUT must be >= 0")
+	}
+	if cfg.WriteTimeout < 0 {
+		return errors.New("HTTP_WRITE_TIMEOUT must be >= 0")
+	}
+	if cfg.TransferIdleTimeout <= 0 {
+		return errors.New("HTTP_TRANSFER_IDLE_TIMEOUT must be > 0")
+	}
+	if cfg.MaxConcurrentRequests <= 0 {
+		return errors.New("HTTP_MAX_CONCURRENT_REQUESTS must be > 0")
 	}
 	if cfg.IdleTimeout <= 0 {
 		return errors.New("HTTP_IDLE_TIMEOUT must be > 0")
@@ -657,6 +679,8 @@ func LoadConfig() Config {
 		ReadHeaderTimeout:         envDuration("HTTP_READ_HEADER_TIMEOUT", DefaultReadHeaderTimeout),
 		ReadTimeout:               envDuration("HTTP_READ_TIMEOUT", defaultReadTimeout),
 		WriteTimeout:              envDuration("HTTP_WRITE_TIMEOUT", defaultWriteTimeout),
+		TransferIdleTimeout:       envDuration("HTTP_TRANSFER_IDLE_TIMEOUT", defaultTransferIdleTimeout),
+		MaxConcurrentRequests:     envInt("HTTP_MAX_CONCURRENT_REQUESTS", defaultMaxConcurrentRequests),
 		IdleTimeout:               envDuration("HTTP_IDLE_TIMEOUT", DefaultIdleTimeout),
 		ShutdownTimeout:           envDuration("HTTP_SHUTDOWN_TIMEOUT", defaultShutdownTimeout),
 		MaxHeaderBytes:            envInt("HTTP_MAX_HEADER_BYTES", DefaultMaxHeaderBytes),
