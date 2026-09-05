@@ -586,17 +586,21 @@ func TestHandleDeleteObjectsValidationMatrix(t *testing.T) {
 	validBody := `<?xml version="1.0" encoding="UTF-8"?><Delete><Object><Key>a.txt</Key></Object></Delete>`
 
 	tests := []struct {
-		name       string
-		body       string
-		headers    map[string]string
-		rules      []authz.Rule
-		wantStatus int
+		name         string
+		body         string
+		headers      map[string]string
+		bypassValues []string
+		rules        []authz.Rule
+		wantStatus   int
+		wantCode     string
 	}{
 		{
-			name:       "forbidden",
-			body:       validBody,
-			rules:      nil,
-			wantStatus: http.StatusForbidden,
+			name:         "forbidden before bypass validation",
+			body:         validBody,
+			bypassValues: []string{"not-bool"},
+			rules:        nil,
+			wantStatus:   http.StatusForbidden,
+			wantCode:     "AccessDenied",
 		},
 		{
 			name:       "malformed xml",
@@ -617,11 +621,28 @@ func TestHandleDeleteObjectsValidationMatrix(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "invalid bypass retention header",
-			body:       validBody,
-			rules:      fullTeam2Rule(),
-			headers:    map[string]string{"x-amz-bypass-governance-retention": "not-bool"},
-			wantStatus: http.StatusBadRequest,
+			name:         "invalid bypass retention header",
+			body:         validBody,
+			rules:        fullTeam2Rule(),
+			bypassValues: []string{"not-bool"},
+			wantStatus:   http.StatusBadRequest,
+			wantCode:     "InvalidArgument",
+		},
+		{
+			name:         "governance retention bypass denied",
+			body:         validBody,
+			rules:        fullTeam2Rule(),
+			bypassValues: []string{"true"},
+			wantStatus:   http.StatusForbidden,
+			wantCode:     "AccessDenied",
+		},
+		{
+			name:         "duplicate bypass retention header",
+			body:         validBody,
+			rules:        fullTeam2Rule(),
+			bypassValues: []string{"false", "true"},
+			wantStatus:   http.StatusBadRequest,
+			wantCode:     "InvalidArgument",
 		},
 		{
 			name:       "invalid request payer",
@@ -638,11 +659,17 @@ func TestHandleDeleteObjectsValidationMatrix(t *testing.T) {
 			for k, v := range tc.headers {
 				req.Header.Set(k, v)
 			}
+			for _, v := range tc.bypassValues {
+				req.Header.Add(bypassGovernanceRetentionHeader, v)
+			}
 			req = reqWithRules(req, tc.rules)
 			rr := httptest.NewRecorder()
 			gw.handleDeleteObjects(rr, req, "team2-dst")
 			if rr.Code != tc.wantStatus {
 				t.Fatalf("status mismatch: got=%d want=%d body=%s", rr.Code, tc.wantStatus, rr.Body.String())
+			}
+			if tc.wantCode != "" && !strings.Contains(rr.Body.String(), "<Code>"+tc.wantCode+"</Code>") {
+				t.Fatalf("error code mismatch: want=%s body=%s", tc.wantCode, rr.Body.String())
 			}
 		})
 	}
@@ -653,6 +680,9 @@ func TestHandleDeleteObjectsRichSuccessAndUpstreamError(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		if values := r.Header.Values(bypassGovernanceRetentionHeader); len(values) != 0 {
+			t.Fatalf("governance retention bypass header reached upstream: %q", values)
+		}
 		w.Header().Set("x-amz-request-charged", "requester")
 		w.Header().Set("Content-Type", "application/xml")
 		w.WriteHeader(http.StatusOK)
@@ -676,7 +706,7 @@ func TestHandleDeleteObjectsRichSuccessAndUpstreamError(t *testing.T) {
 
 	body := `<?xml version="1.0" encoding="UTF-8"?><Delete><Object><Key>a.txt</Key><VersionId>v1</VersionId><ETag>\"etag1\"</ETag></Object><Object><Key>b.txt</Key></Object><Quiet>true</Quiet></Delete>`
 	req := httptest.NewRequest(http.MethodPost, "/team2-dst?delete", strings.NewReader(body))
-	req.Header.Set("x-amz-bypass-governance-retention", "true")
+	req.Header.Set(bypassGovernanceRetentionHeader, "false")
 	req.Header.Set("x-amz-mfa", "device 123456")
 	req.Header.Set("x-amz-expected-bucket-owner", "123456789012")
 	req.Header.Set("x-amz-request-payer", "requester")
@@ -1927,20 +1957,52 @@ func TestHandleListMultipartUploadsAndDeleteObjectBranches(t *testing.T) {
 		defer cleanupNoUpstream()
 
 		reqForbidden := httptest.NewRequest(http.MethodDelete, "/team2-dst/a.txt", nil)
+		reqForbidden.Header.Set(bypassGovernanceRetentionHeader, "not-bool")
 		reqForbidden = reqWithRules(reqForbidden, nil)
 		rrForbidden := httptest.NewRecorder()
 		gwNoUpstream.handleDeleteObject(rrForbidden, reqForbidden, "team2-dst", "a.txt")
 		if rrForbidden.Code != http.StatusForbidden {
 			t.Fatalf("forbidden status mismatch: got=%d body=%s", rrForbidden.Code, rrForbidden.Body.String())
 		}
+		if !strings.Contains(rrForbidden.Body.String(), "<Code>AccessDenied</Code>") {
+			t.Fatalf("forbidden error code mismatch: body=%s", rrForbidden.Body.String())
+		}
 
 		reqBadBypass := httptest.NewRequest(http.MethodDelete, "/team2-dst/a.txt", nil)
-		reqBadBypass.Header.Set("x-amz-bypass-governance-retention", "invalid")
+		reqBadBypass.Header.Set(bypassGovernanceRetentionHeader, "invalid")
 		reqBadBypass = reqWithRules(reqBadBypass, fullTeam2Rule())
 		rrBadBypass := httptest.NewRecorder()
 		gwNoUpstream.handleDeleteObject(rrBadBypass, reqBadBypass, "team2-dst", "a.txt")
 		if rrBadBypass.Code != http.StatusBadRequest {
 			t.Fatalf("invalid bypass status mismatch: got=%d body=%s", rrBadBypass.Code, rrBadBypass.Body.String())
+		}
+		if !strings.Contains(rrBadBypass.Body.String(), "<Code>InvalidArgument</Code>") {
+			t.Fatalf("invalid bypass error code mismatch: body=%s", rrBadBypass.Body.String())
+		}
+
+		reqDeniedBypass := httptest.NewRequest(http.MethodDelete, "/team2-dst/a.txt", nil)
+		reqDeniedBypass.Header.Set(bypassGovernanceRetentionHeader, "true")
+		reqDeniedBypass = reqWithRules(reqDeniedBypass, fullTeam2Rule())
+		rrDeniedBypass := httptest.NewRecorder()
+		gwNoUpstream.handleDeleteObject(rrDeniedBypass, reqDeniedBypass, "team2-dst", "a.txt")
+		if rrDeniedBypass.Code != http.StatusForbidden {
+			t.Fatalf("denied bypass status mismatch: got=%d body=%s", rrDeniedBypass.Code, rrDeniedBypass.Body.String())
+		}
+		if !strings.Contains(rrDeniedBypass.Body.String(), "<Code>AccessDenied</Code>") {
+			t.Fatalf("denied bypass error code mismatch: body=%s", rrDeniedBypass.Body.String())
+		}
+
+		reqDuplicateBypass := httptest.NewRequest(http.MethodDelete, "/team2-dst/a.txt", nil)
+		reqDuplicateBypass.Header.Add(bypassGovernanceRetentionHeader, "false")
+		reqDuplicateBypass.Header.Add(bypassGovernanceRetentionHeader, "true")
+		reqDuplicateBypass = reqWithRules(reqDuplicateBypass, fullTeam2Rule())
+		rrDuplicateBypass := httptest.NewRecorder()
+		gwNoUpstream.handleDeleteObject(rrDuplicateBypass, reqDuplicateBypass, "team2-dst", "a.txt")
+		if rrDuplicateBypass.Code != http.StatusBadRequest {
+			t.Fatalf("duplicate bypass status mismatch: got=%d body=%s", rrDuplicateBypass.Code, rrDuplicateBypass.Body.String())
+		}
+		if !strings.Contains(rrDuplicateBypass.Body.String(), "<Code>InvalidArgument</Code>") {
+			t.Fatalf("duplicate bypass error code mismatch: body=%s", rrDuplicateBypass.Body.String())
 		}
 
 		reqBadPayer := httptest.NewRequest(http.MethodDelete, "/team2-dst/a.txt", nil)
@@ -1968,6 +2030,9 @@ func TestHandleListMultipartUploadsAndDeleteObjectBranches(t *testing.T) {
 		}
 
 		gwOK, cleanupOK := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+			if values := r.Header.Values(bypassGovernanceRetentionHeader); len(values) != 0 {
+				t.Fatalf("governance retention bypass header reached upstream: %q", values)
+			}
 			w.Header().Set("x-amz-delete-marker", "true")
 			w.Header().Set("x-amz-version-id", "v1")
 			w.Header().Set("x-amz-request-charged", "requester")
@@ -1978,7 +2043,7 @@ func TestHandleListMultipartUploadsAndDeleteObjectBranches(t *testing.T) {
 		reqOK := httptest.NewRequest(http.MethodDelete, "/team2-dst/a.txt?versionId=v1", nil)
 		reqOK.Header.Set("If-Match", "\"etag\"")
 		reqOK.Header.Set("x-amz-expected-bucket-owner", "123456789012")
-		reqOK.Header.Set("x-amz-bypass-governance-retention", "true")
+		reqOK.Header.Set(bypassGovernanceRetentionHeader, "  ")
 		reqOK.Header.Set("x-amz-request-payer", "requester")
 		reqOK = reqWithRules(reqOK, fullTeam2Rule())
 		rrOK := httptest.NewRecorder()

@@ -643,6 +643,9 @@ readinessProbe:
   documents, and only owner-retaining canned ACLs are accepted as no-ops for
   client compatibility on bucket creation, object writes/copies, multipart
   initiation, and ACL subresources.
+- LDAP `d` permission grants ordinary object deletion only. Requests to bypass
+  governance retention are rejected and never forwarded upstream. The shared
+  upstream identity should not be granted governance-retention bypass authority.
 - For non-streaming signed payloads, the gateway verifies the declared
   `x-amz-content-sha256` digest while streaming and withholds the final byte
   until verification succeeds, so an invalid body cannot complete an upstream

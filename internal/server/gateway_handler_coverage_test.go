@@ -364,7 +364,7 @@ func TestGatewayWriteCopyAndDeleteHandlerMatrix(t *testing.T) {
 	delReq := httptest.NewRequest(http.MethodDelete, "/team2-rich/copied.txt?versionId=v1", nil)
 	delReq = delReq.WithContext(permCtx)
 	delReq.Header.Set("If-Match", "\"copy-etag\"")
-	delReq.Header.Set("x-amz-bypass-governance-retention", "true")
+	delReq.Header.Set(bypassGovernanceRetentionHeader, "false")
 	delReq.Header.Set("x-amz-request-payer", "requester")
 	delRR := httptest.NewRecorder()
 	gw.ServeHTTP(delRR, delReq)

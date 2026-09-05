@@ -23,7 +23,8 @@ import (
 )
 
 const (
-	maxSinglePutObjectSize = int64(5 * 1024 * 1024 * 1024) // 5 GiB
+	maxSinglePutObjectSize          = int64(5 * 1024 * 1024 * 1024) // 5 GiB
+	bypassGovernanceRetentionHeader = "x-amz-bypass-governance-retention"
 
 	maxDeleteObjectsBodyBytes = int64(4 * 1024 * 1024)
 	maxDeleteObjects          = 1000
@@ -69,6 +70,31 @@ func decodeDeleteObjectsRequest(r io.Reader) (deleteObjectsReqXML, error) {
 	var req deleteObjectsReqXML
 	err := s3xml.DecodeLimited(r, &req, deleteObjectsDecodeLimits)
 	return req, err
+}
+
+// requireNoGovernanceRetentionBypass rejects attempts to borrow the shared
+// upstream identity's governance-retention bypass authority. False and blank
+// values are accepted as compatibility no-ops and are never forwarded.
+func requireNoGovernanceRetentionBypass(w http.ResponseWriter, r *http.Request) bool {
+	values := r.Header.Values(bypassGovernanceRetentionHeader)
+	if len(values) > 1 {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-bypass-governance-retention header")
+		return false
+	}
+	if len(values) == 0 {
+		return true
+	}
+
+	bypass, _, err := s3http.ParseOptionalBool(values[0])
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-bypass-governance-retention header")
+		return false
+	}
+	if bypass {
+		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Governance-retention bypass is not permitted")
+		return false
+	}
+	return true
 }
 
 func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, bucket, key string) {
@@ -198,6 +224,9 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
+	if !requireNoGovernanceRetentionBypass(w, r) {
+		return
+	}
 
 	req, err := decodeDeleteObjectsRequest(r.Body)
 	if err != nil {
@@ -238,12 +267,6 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 			Objects: objects,
 			Quiet:   req.Quiet,
 		},
-	}
-	if bypass, set, err := s3http.ParseOptionalBool(r.Header.Get("x-amz-bypass-governance-retention")); err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-bypass-governance-retention header")
-		return
-	} else if set {
-		in.BypassGovernanceRetention = aws.Bool(bypass)
 	}
 	if mfa := strings.TrimSpace(r.Header.Get("x-amz-mfa")); mfa != "" {
 		in.MFA = aws.String(mfa)
@@ -1923,6 +1946,9 @@ func (s *Server) handleDeleteObject(w http.ResponseWriter, r *http.Request, buck
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
+	if !requireNoGovernanceRetentionBypass(w, r) {
+		return
+	}
 
 	in := &s3.DeleteObjectInput{
 		Bucket: &bucket,
@@ -1936,12 +1962,6 @@ func (s *Server) handleDeleteObject(w http.ResponseWriter, r *http.Request, buck
 	}
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)
-	}
-	if bypass, set, err := s3http.ParseOptionalBool(r.Header.Get("x-amz-bypass-governance-retention")); err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-bypass-governance-retention header")
-		return
-	} else if set {
-		in.BypassGovernanceRetention = aws.Bool(bypass)
 	}
 	if payer, err := s3http.ParseRequestPayerHeader(r.Header); err != nil {
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
