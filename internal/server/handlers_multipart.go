@@ -564,6 +564,24 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		s3http.WriteUpstreamError(w, err)
 		return
 	}
+	if out.VersionId != nil {
+		w.Header().Set("x-amz-version-id", *out.VersionId)
+	}
+	if out.ServerSideEncryption != "" {
+		w.Header().Set("x-amz-server-side-encryption", string(out.ServerSideEncryption))
+	}
+	if out.SSEKMSKeyId != nil {
+		w.Header().Set("x-amz-server-side-encryption-aws-kms-key-id", *out.SSEKMSKeyId)
+	}
+	if out.BucketKeyEnabled != nil {
+		w.Header().Set("x-amz-server-side-encryption-bucket-key-enabled", s3xml.BoolString(*out.BucketKeyEnabled))
+	}
+	if out.Expiration != nil {
+		w.Header().Set("x-amz-expiration", *out.Expiration)
+	}
+	if out.RequestCharged != "" {
+		w.Header().Set("x-amz-request-charged", string(out.RequestCharged))
+	}
 
 	s.notifyUpload(r, uploadnotify.Event{
 		EventName: uploadnotify.EventObjectCreatedCompleteMultipartUpload,
