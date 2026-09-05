@@ -135,8 +135,11 @@ func TestHandlePopAPIBucketStreamsAndAcknowledgesObject(t *testing.T) {
 			if response.Header().Get("Cache-Control") != "no-store" {
 				t.Fatalf("Cache-Control = %q, want no-store", response.Header().Get("Cache-Control"))
 			}
-			if response.Header().Get("Content-Type") != "image/jpeg" {
-				t.Fatalf("Content-Type = %q, want image/jpeg", response.Header().Get("Content-Type"))
+			if response.Header().Get("Content-Type") != "application/octet-stream" {
+				t.Fatalf("Content-Type = %q, want application/octet-stream", response.Header().Get("Content-Type"))
+			}
+			if response.Header().Get("Content-Disposition") != "attachment" {
+				t.Fatalf("Content-Disposition = %q, want attachment", response.Header().Get("Content-Disposition"))
 			}
 			if response.Header().Get("X-S3Gateway-Bucket") != "team2-images" {
 				t.Fatalf("pop bucket header = %q", response.Header().Get("X-S3Gateway-Bucket"))
@@ -155,6 +158,62 @@ func TestHandlePopAPIBucketStreamsAndAcknowledgesObject(t *testing.T) {
 			}
 			if !consumer.acknowledged {
 				t.Fatal("record was not acknowledged after successful response")
+			}
+		})
+	}
+}
+
+func TestHandlePopAPIForcesDownloadForUntrustedObjectMetadata(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		contentType string
+		disposition string
+	}{
+		{name: "inline HTML", contentType: "text/html", disposition: "inline; filename=page.html"},
+		{name: "inline SVG", contentType: "image/svg+xml", disposition: "inline"},
+		{name: "HTML without disposition", contentType: "text/html"},
+		{name: "missing metadata"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			const body = "<html><body>untrusted object</body></html>"
+			gateway, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) {
+				// Suppress net/http's automatic content sniffing when metadata is absent.
+				w.Header()["Content-Type"] = nil
+				if tt.contentType != "" {
+					w.Header().Set("Content-Type", tt.contentType)
+				}
+				if tt.disposition != "" {
+					w.Header().Set("Content-Disposition", tt.disposition)
+				}
+				_, _ = w.Write([]byte(body))
+			})
+			defer cleanup()
+
+			consumer := &fakePopConsumer{record: popRecord(t, "team2-images", uploadnotify.Event{
+				EventName: uploadnotify.EventObjectCreatedPut,
+				Bucket:    "team2-images",
+				Key:       "page.html",
+			})}
+			configurePopGateway(gateway, consumer)
+			request := reqWithRulesAndUploader(
+				httptest.NewRequest(http.MethodGet, "/api/pop/team2-images/scanner", nil),
+				fullTeam2Rule(),
+				"alice",
+			)
+			response := httptest.NewRecorder()
+			gateway.ServeHTTP(response, request)
+
+			if response.Code != http.StatusOK || response.Body.String() != body {
+				t.Fatalf("status = %d, body = %q; want 200 and unchanged object", response.Code, response.Body.String())
+			}
+			for header, want := range map[string]string{
+				"Content-Type":           "application/octet-stream",
+				"Content-Disposition":    "attachment",
+				"X-Content-Type-Options": "nosniff",
+			} {
+				if got := response.Header().Get(header); got != want {
+					t.Errorf("%s = %q, want %q", header, got, want)
+				}
 			}
 		})
 	}

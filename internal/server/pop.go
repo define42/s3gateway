@@ -263,15 +263,13 @@ func (s *Server) streamPoppedObject(
 
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// Object metadata is untrusted; pop shares an origin with the admin UI.
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment")
 	w.Header().Set("X-S3Gateway-Bucket", event.Bucket)
 	w.Header().Set("X-S3Gateway-Object-Key", url.QueryEscape(event.Key))
 	setSafePopHeader(w.Header(), "X-S3Gateway-Event-ID", event.EventID)
 	setSafePopHeader(w.Header(), "X-S3Gateway-Event-Name", string(event.EventName))
-	if out.ContentType != nil {
-		w.Header().Set("Content-Type", *out.ContentType)
-	} else {
-		w.Header().Set("Content-Type", "application/octet-stream")
-	}
 	if out.ContentLength != nil && *out.ContentLength >= 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(*out.ContentLength, 10))
 	}
@@ -280,9 +278,6 @@ func (s *Server) streamPoppedObject(
 	}
 	if out.LastModified != nil {
 		w.Header().Set("Last-Modified", out.LastModified.UTC().Format(http.TimeFormat))
-	}
-	if out.ContentDisposition != nil {
-		w.Header().Set("Content-Disposition", *out.ContentDisposition)
 	}
 	if out.VersionId != nil {
 		w.Header().Set("x-amz-version-id", *out.VersionId)

@@ -531,8 +531,12 @@ it in the shell history.
 
 The response body is the S3 object. `X-S3Gateway-Bucket` identifies its bucket,
 and `X-S3Gateway-Object-Key` contains the URL-query-escaped object key. A
-successful response also includes available object headers such as
-`Content-Type`, `Content-Length`, `ETag`, and `x-amz-version-id`. If no event is
+successful response uses `Content-Type: application/octet-stream`,
+`Content-Disposition: attachment`, and `X-Content-Type-Options: nosniff` so
+browsers download objects instead of rendering untrusted content on the admin
+interface's origin. The object's original content type and disposition are not
+forwarded; object bytes are unchanged. Available object headers such as
+`Content-Length`, `ETag`, and `x-amz-version-id` are included. If no event is
 available within `KAFKA_POP_TIMEOUT`, the gateway returns `204 No Content`.
 
 Automatic acknowledgement occurs only after the complete object body has been
