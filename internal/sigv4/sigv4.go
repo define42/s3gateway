@@ -504,7 +504,9 @@ var (
 	ErrTrailerChecksumMismatch = errors.New("aws-chunked trailing checksum mismatch")
 )
 
-func isAWSChunkedPayload(h http.Header) bool {
+// IsAWSChunkedPayload reports whether the payload hash declares a streaming
+// body, including requests that omit the Content-Encoding header.
+func IsAWSChunkedPayload(h http.Header) bool {
 	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(h.Get("x-amz-content-sha256"))), "STREAMING-")
 }
 
@@ -712,7 +714,7 @@ func WithSigV4Secret(ctx context.Context, secret string) context.Context {
 // payload modes. Non-streaming and unsigned-trailer requests return nil; signed
 // modes require Auth and secret values previously stored in the request context.
 func ChunkSignatureVerifierFromRequest(r *http.Request) (*AWSChunkSignatureVerifier, error) {
-	if !isAWSChunkedPayload(r.Header) {
+	if !IsAWSChunkedPayload(r.Header) {
 		return nil, nil
 	}
 
@@ -1343,7 +1345,7 @@ func (r *awsChunkedReader) consumeTrailers() error {
 // validated before the final payload byte is released. Non-streaming bodies
 // require a known Content-Length.
 func DecodeBodyForS3Write(r *http.Request, verifier *AWSChunkSignatureVerifier) (io.ReadCloser, int64, error) {
-	if isAWSChunkedPayload(r.Header) {
+	if IsAWSChunkedPayload(r.Header) {
 		mode := streamingPayloadMode(r.Header)
 		signedTrailer := false
 		var checksums []trailerChecksum

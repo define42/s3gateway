@@ -509,6 +509,27 @@ func firstUnsupportedSubresource(q url.Values) string {
 	return found[0]
 }
 
+// supportsStreamingPayload allows only object PUT routes whose handlers decode
+// and verify aws-chunked bodies. Restrict query parameters as well as the method
+// and path so control subresources cannot take precedence over an upload route.
+func supportsStreamingPayload(r *http.Request) bool {
+	if r.Method != http.MethodPut || strings.TrimSpace(r.Header.Get("x-amz-copy-source")) != "" {
+		return false
+	}
+	bucket, key, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	if !ok || bucket == "" || key == "" {
+		return false
+	}
+	for name := range r.URL.Query() {
+		switch name {
+		case "x-id", "uploadId", "partNumber":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // ServeHTTP dispatches health checks, the Kafka pop API, and the supported
 // path-style S3 bucket and object operations. Unsupported subresources are
 // rejected before dispatch so they cannot fall through to a different S3
@@ -553,6 +574,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if sub := firstUnsupportedSubresource(r.URL.Query()); sub != "" {
 		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented: "+sub)
+		return
+	}
+	if sigv4.IsAWSChunkedPayload(r.Header) && !supportsStreamingPayload(r) {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Streaming payloads are supported only for PutObject and UploadPart")
 		return
 	}
 

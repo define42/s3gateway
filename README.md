@@ -189,6 +189,12 @@ requests are not.
 Streaming writes require `x-amz-decoded-content-length`. Signed-trailer mode
 also requires `x-amz-trailer-signature`.
 
+Only `PutObject` and `UploadPart` accept these streaming modes. Other implemented
+S3 operations, including XML configuration requests and multipart completion,
+return `400 InvalidRequest` for streaming payloads. Streaming upload query
+parameters are limited to `x-id`, `uploadId`, and `partNumber`. Use a hexadecimal
+SHA-256 payload digest for XML requests, or `UNSIGNED-PAYLOAD` over TLS.
+
 ## Demo
 
 The included Python and Go clients create a bucket, upload and download an
