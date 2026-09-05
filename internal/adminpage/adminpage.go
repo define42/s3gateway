@@ -85,7 +85,7 @@ func normalizeAdminRoutePath(path string) string {
 }
 
 // IsAdminRoute reports whether path names a route owned by the administration
-// interface. It ignores trailing slashes on non-root paths.
+// interface. It ignores surrounding whitespace and trailing slashes on non-root paths.
 func IsAdminRoute(path string) bool {
 	switch normalizeAdminRoutePath(path) {
 	case "/", "/login", "/admin", "/admin/kafka-topics", "/admin/create-bucket", "/admin/bucket", "/admin/bucket/download", "/admin/bucket/upload", "/admin/bucket/delete", "/logout":
@@ -93,6 +93,12 @@ func IsAdminRoute(path string) bool {
 	default:
 		return false
 	}
+}
+
+// IsLoginRoute reports whether path reaches the administration login handler,
+// using the same path normalization as the administration router.
+func IsLoginRoute(path string) bool {
+	return normalizeAdminRoutePath(path) == "/login"
 }
 
 func requestOrigin(r *http.Request) string {

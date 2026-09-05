@@ -254,7 +254,7 @@ func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Han
 			return
 		}
 		if adminpage.IsBrowser(r) && adminpage.IsAdminRoute(r.URL.Path) {
-			if normalizePath := strings.TrimRight(r.URL.Path, "/"); r.Method == http.MethodPost && normalizePath == "/login" {
+			if r.Method == http.MethodPost && adminpage.IsLoginRoute(r.URL.Path) {
 				controller := http.NewResponseController(w)
 				// Keep the deadline through request-body cleanup; net/http replaces it
 				// with the next request's header deadline on a reused connection.
@@ -345,7 +345,7 @@ func isAuthenticationIngressRequest(r *http.Request) bool {
 		return false
 	}
 	if adminpage.IsBrowser(r) && adminpage.IsAdminRoute(r.URL.Path) {
-		return r.Method == http.MethodPost && strings.TrimRight(r.URL.Path, "/") == "/login"
+		return r.Method == http.MethodPost && adminpage.IsLoginRoute(r.URL.Path)
 	}
 	return true
 }

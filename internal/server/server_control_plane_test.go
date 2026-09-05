@@ -15,98 +15,107 @@ import (
 	"testing"
 	"time"
 
+	"github.com/define42/s3gateway/internal/adminpage"
 	"github.com/define42/s3gateway/internal/authn"
 	"github.com/define42/s3gateway/internal/config"
 )
 
 func TestAdminLoginBodyReadDeadline(t *testing.T) {
-	gw := New(config.Config{AdminLoginReadTimeout: 100 * time.Millisecond}, nil)
-	readResult := make(chan error, 1)
-	adminHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, err := io.Copy(io.Discard, r.Body)
-		readResult <- err
-		w.WriteHeader(http.StatusRequestTimeout)
-	})
-	testServer := httptest.NewServer(gw.WithAuth(http.NotFoundHandler(), adminHandler))
-	defer testServer.Close()
+	for _, requestPath := range []string{
+		"/login", "/login/", "/login///", "/login%20", "/login/%20", "/login%E2%80%83",
+	} {
+		t.Run(requestPath, func(t *testing.T) {
+			gw := New(config.Config{AdminLoginReadTimeout: 100 * time.Millisecond}, nil)
+			var authenticationCalls atomic.Int32
+			adminHandler := adminpage.NewHandler(nil, strings.Repeat("a", 32), 1, nil,
+				func(string, string) (map[string]struct{}, error) {
+					authenticationCalls.Add(1)
+					return nil, errors.New("unexpected authentication")
+				})
+			testServer := httptest.NewServer(gw.WithAuth(http.NotFoundHandler(), adminHandler))
+			defer testServer.Close()
 
-	conn, err := net.Dial("tcp", strings.TrimPrefix(testServer.URL, "http://"))
-	if err != nil {
-		t.Fatalf("dial test server: %v", err)
-	}
-	defer conn.Close()
-	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
-		t.Fatalf("set client read deadline: %v", err)
-	}
+			conn, err := net.Dial("tcp", strings.TrimPrefix(testServer.URL, "http://"))
+			if err != nil {
+				t.Fatalf("dial test server: %v", err)
+			}
+			defer conn.Close()
+			if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+				t.Fatalf("set client read deadline: %v", err)
+			}
 
-	started := time.Now()
-	request := "POST /login HTTP/1.1\r\n" +
-		"Host: example.test\r\n" +
-		"Accept: text/html\r\n" +
-		"User-Agent: Mozilla/5.0\r\n" +
-		"Content-Type: application/x-www-form-urlencoded\r\n" +
-		"Content-Length: 100\r\n" +
-		"Connection: close\r\n\r\n" +
-		"x"
-	if _, err := io.WriteString(conn, request); err != nil {
-		t.Fatalf("write slow login request: %v", err)
-	}
-	response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodPost})
-	if err != nil {
-		t.Fatalf("read timeout response: %v", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusRequestTimeout {
-		t.Fatalf("status mismatch: got=%d want=%d", response.StatusCode, http.StatusRequestTimeout)
-	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("login body deadline took too long: %s", elapsed)
-	}
-	select {
-	case err := <-readResult:
-		if err == nil {
-			t.Fatal("slow login body read unexpectedly completed")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for login body read to stop")
+			started := time.Now()
+			request := "POST " + requestPath + " HTTP/1.1\r\n" +
+				"Host: example.test\r\n" +
+				"Accept: text/html\r\n" +
+				"User-Agent: Mozilla/5.0\r\n" +
+				"Origin: http://example.test\r\n" +
+				"Content-Type: application/x-www-form-urlencoded\r\n" +
+				"Content-Length: 100\r\n" +
+				"Connection: close\r\n\r\n" +
+				"x"
+			if _, err := io.WriteString(conn, request); err != nil {
+				t.Fatalf("write slow login request: %v", err)
+			}
+			response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodPost})
+			if err != nil {
+				t.Fatalf("read timeout response: %v", err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status mismatch: got=%d want=%d", response.StatusCode, http.StatusBadRequest)
+			}
+			if elapsed := time.Since(started); elapsed > time.Second {
+				t.Fatalf("login body deadline took too long: %s", elapsed)
+			}
+			if got := authenticationCalls.Load(); got != 0 {
+				t.Fatalf("incomplete login reached authentication: calls=%d", got)
+			}
+		})
 	}
 }
 
 func TestAuthenticationIngressRateLimitRunsBeforeAdminHandler(t *testing.T) {
-	gw := New(config.Config{
-		AuthIngressPerIPRatePerSecond: 1,
-		AuthIngressPerIPBurst:         1,
-	}, nil)
-	var calls atomic.Int32
-	adminHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls.Add(1)
-		w.WriteHeader(http.StatusNoContent)
-	})
-	handler := gw.WithAuth(http.NotFoundHandler(), adminHandler)
+	for _, requestPath := range []string{
+		"/login", "/login/", "/login///", "/login%20", "/login/%20", "/login%E2%80%83",
+	} {
+		t.Run(requestPath, func(t *testing.T) {
+			gw := New(config.Config{
+				AuthIngressPerIPRatePerSecond: 1,
+				AuthIngressPerIPBurst:         1,
+			}, nil)
+			var calls atomic.Int32
+			adminHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(http.StatusNoContent)
+			})
+			handler := gw.WithAuth(http.NotFoundHandler(), adminHandler)
 
-	serve := func(remoteAddress string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/login", nil)
-		req.RemoteAddr = remoteAddress
-		req.Header.Set("Accept", "text/html")
-		req.Header.Set("User-Agent", "Mozilla/5.0")
-		rr := httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-		return rr
-	}
+			serve := func(path, remoteAddress string) *httptest.ResponseRecorder {
+				req := httptest.NewRequest(http.MethodPost, path, nil)
+				req.RemoteAddr = remoteAddress
+				req.Header.Set("Accept", "text/html")
+				req.Header.Set("User-Agent", "Mozilla/5.0")
+				rr := httptest.NewRecorder()
+				handler.ServeHTTP(rr, req)
+				return rr
+			}
 
-	if rr := serve("192.0.2.1:1234"); rr.Code != http.StatusNoContent {
-		t.Fatalf("first status = %d, want %d", rr.Code, http.StatusNoContent)
-	}
-	if rr := serve("192.0.2.1:5678"); rr.Code != http.StatusTooManyRequests {
-		t.Fatalf("limited status = %d, want %d", rr.Code, http.StatusTooManyRequests)
-	} else if rr.Header().Get("Retry-After") != "1" {
-		t.Fatalf("Retry-After = %q, want 1", rr.Header().Get("Retry-After"))
-	}
-	if rr := serve("192.0.2.2:1234"); rr.Code != http.StatusNoContent {
-		t.Fatalf("independent client status = %d, want %d", rr.Code, http.StatusNoContent)
-	}
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("admin handler calls = %d, want 2", got)
+			if rr := serve("/login", "192.0.2.1:1234"); rr.Code != http.StatusNoContent {
+				t.Fatalf("first status = %d, want %d", rr.Code, http.StatusNoContent)
+			}
+			if rr := serve(requestPath, "192.0.2.1:5678"); rr.Code != http.StatusTooManyRequests {
+				t.Fatalf("limited status = %d, want %d", rr.Code, http.StatusTooManyRequests)
+			} else if rr.Header().Get("Retry-After") != "1" {
+				t.Fatalf("Retry-After = %q, want 1", rr.Header().Get("Retry-After"))
+			}
+			if rr := serve(requestPath, "192.0.2.2:1234"); rr.Code != http.StatusNoContent {
+				t.Fatalf("independent client status = %d, want %d", rr.Code, http.StatusNoContent)
+			}
+			if got := calls.Load(); got != 2 {
+				t.Fatalf("admin handler calls = %d, want 2", got)
+			}
+		})
 	}
 }
 
