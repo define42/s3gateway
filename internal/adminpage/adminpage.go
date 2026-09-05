@@ -1455,6 +1455,22 @@ func (h *handler) handleAdminBucketDownload(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+// adminUploadBody keeps source EOF distinct from the multipart parser's EOF
+// after a valid closing boundary. Otherwise, truncated part headers can also
+// make NextPart return bare EOF.
+type adminUploadBody struct {
+	io.Reader
+	io.Closer
+}
+
+func (b adminUploadBody) Read(p []byte) (int, error) {
+	n, err := b.Reader.Read(p)
+	if err == io.EOF {
+		err = io.ErrUnexpectedEOF
+	}
+	return n, err
+}
+
 func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
@@ -1500,6 +1516,14 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 		http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, cursor, history, "", pageErr), http.StatusSeeOther)
 	}
 
+	if r.Body != nil {
+		// A final boundary may legally omit its newline. Supply it before
+		// translating source EOF so that case still reaches the parser's EOF.
+		r.Body = adminUploadBody{
+			Reader: io.MultiReader(r.Body, strings.NewReader("\r\n")),
+			Closer: r.Body,
+		}
+	}
 	reader, err := r.MultipartReader()
 	if err != nil {
 		redirectUploadPayloadError("Could not process upload payload.")
@@ -1510,7 +1534,7 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 
 	for {
 		part, partErr := reader.NextPart()
-		if errors.Is(partErr, io.EOF) {
+		if partErr == io.EOF {
 			break
 		}
 		if partErr != nil {
@@ -1685,6 +1709,7 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 			buf := make([]byte, uploadPartSize)
 			completedParts := make([]types.CompletedPart, 0, 16)
 			var partNumber int32 = 1
+			var receivedSize int64
 
 			for {
 				n, readErr := io.ReadFull(part, buf)
@@ -1698,6 +1723,11 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 				}
 				if n == 0 {
 					break
+				}
+				receivedSize += int64(n)
+				if size >= 0 && receivedSize > size {
+					redirectToBucket("", "Uploaded file size does not match the declared size.")
+					return
 				}
 				if partNumber > 10000 {
 					_ = part.Close()
@@ -1737,6 +1767,18 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 				}
 			}
 			_ = part.Close()
+
+			if size >= 0 && receivedSize != size {
+				redirectToBucket("", "Uploaded file size does not match the declared size.")
+				return
+			}
+			// The browser sends the file last. Only bare EOF proves that the
+			// multipart parser saw the closing boundary; wrapped EOF can mean
+			// truncated input, even after ReadFull returned a short final part.
+			if _, err := reader.NextPart(); err != io.EOF {
+				redirectToBucket("", "Could not process upload payload.")
+				return
+			}
 
 			if len(completedParts) == 0 {
 				// Multipart uploads require at least one uploaded part.
