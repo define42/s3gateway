@@ -119,9 +119,10 @@ func newManager(timeout time.Duration, maxConsumers int, factory clientFactory) 
 }
 
 // Consume polls one record, calls handle, and synchronously commits the record
-// only when handle succeeds. A failed handler or commit rewinds the local
-// partition position so the record remains eligible for redelivery. Waiting
-// for another call on the same topic and group respects ctx cancellation.
+// only when handle succeeds. A failed poll, handler, or commit rewinds any
+// returned record's local partition position so it remains eligible for
+// redelivery. Waiting for another call on the same topic and group respects
+// ctx cancellation.
 func (m *Manager) Consume(
 	ctx context.Context,
 	topic string,
@@ -156,13 +157,18 @@ func (m *Manager) Consume(
 	defer consumer.client.AllowRebalance()
 	cancelPoll()
 
+	records := fetches.Records()
 	if err := fetches.Err(); err != nil {
+		// PollRecords can advance one record even when another partition fails.
+		// Rewind it before returning the error and allowing a rebalance.
+		if len(records) > 0 {
+			rewindRecord(consumer.client, records[0])
+		}
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			return ErrNoEvent
 		}
 		return fmt.Errorf("kafkapop: poll record: %w", err)
 	}
-	records := fetches.Records()
 	if len(records) == 0 {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("kafkapop: poll record: %w", err)

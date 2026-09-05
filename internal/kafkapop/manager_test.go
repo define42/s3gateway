@@ -19,6 +19,7 @@ type fakeConsumerClient struct {
 	sequence       []string
 	committed      []*kgo.Record
 	setOffsets     []map[string]map[int32]kgo.EpochOffset
+	onSetOffsets   func(map[string]map[int32]kgo.EpochOffset)
 	allowCount     int
 	closeCount     int
 	commitCtxError error
@@ -49,6 +50,9 @@ func (c *fakeConsumerClient) SetOffsets(offsets map[string]map[int32]kgo.EpochOf
 	defer c.mu.Unlock()
 	c.sequence = append(c.sequence, "rewind")
 	c.setOffsets = append(c.setOffsets, offsets)
+	if c.onSetOffsets != nil {
+		c.onSetOffsets(offsets)
+	}
 }
 
 func (c *fakeConsumerClient) AllowRebalance() {
@@ -242,6 +246,106 @@ func TestManagerConsumeRewindsUnacknowledgedRecord(t *testing.T) {
 				t.Fatalf("sequence = %v, want %v", client.sequence, wantSequence)
 			}
 		})
+	}
+}
+
+func TestManagerConsumeRewindsRecordReturnedWithPollError(t *testing.T) {
+	pollErr := errors.New("partition fetch failed")
+	tests := []struct {
+		name          string
+		pollErr       error
+		wantErr       error
+		cancelRequest bool
+	}{
+		{name: "partition error", pollErr: pollErr, wantErr: pollErr},
+		{name: "poll timeout", pollErr: context.DeadlineExceeded, wantErr: ErrNoEvent},
+		{name: "request canceled", pollErr: context.Canceled, wantErr: context.Canceled, cancelRequest: true},
+	}
+	for _, tt := range tests {
+		for _, order := range []string{"error first", "record first"} {
+			t.Run(tt.name+"/"+order, func(t *testing.T) {
+				records := []*kgo.Record{
+					{Topic: "images", Partition: 4, LeaderEpoch: 7, Offset: 41},
+					{Topic: "images", Partition: 4, LeaderEpoch: 7, Offset: 42},
+				}
+				nextOffset := records[0].Offset
+				firstPoll := true
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				client := &fakeConsumerClient{
+					poll: func(context.Context) kgo.Fetches {
+						index := nextOffset - records[0].Offset
+						if index < 0 || index >= int64(len(records)) {
+							return nil
+						}
+						fetches := fetchWithRecord(records[index])
+						nextOffset++ // Polling advances the cursor even when another partition fails.
+						if firstPoll {
+							firstPoll = false
+							if tt.cancelRequest {
+								cancel()
+							}
+							errorFetches := kgo.Fetches{{Topics: []kgo.FetchTopic{{
+								Topic: "images",
+								Partitions: []kgo.FetchPartition{{
+									Partition: 5,
+									Err:       tt.pollErr,
+								}},
+							}}}}
+							if order == "error first" {
+								return append(errorFetches, fetches...)
+							}
+							return append(fetches, errorFetches...)
+						}
+						return fetches
+					},
+					onSetOffsets: func(offsets map[string]map[int32]kgo.EpochOffset) {
+						offset, ok := offsets["images"][4]
+						want := kgo.EpochOffset{Epoch: 7, Offset: 41}
+						if !ok || offset != want {
+							t.Errorf("rewind offset = %+v, want %+v", offsets, want)
+							return
+						}
+						nextOffset = offset.Offset
+					},
+				}
+				manager := newManager(time.Second, 1, func(_, _ string) (consumerClient, error) {
+					return client, nil
+				})
+				defer manager.Close()
+
+				err := manager.Consume(ctx, "images", "scanner", func(*kgo.Record) error {
+					t.Error("handler must not run when polling fails")
+					return nil
+				})
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("Consume() error = %v, want %v", err, tt.wantErr)
+				}
+				if len(client.committed) != 0 {
+					t.Errorf("committed records after poll error = %v, want none", client.committed)
+				}
+				wantSequence := []string{"poll", "rewind", "allow rebalance"}
+				if !slices.Equal(client.sequence, wantSequence) {
+					t.Errorf("sequence = %v, want %v", client.sequence, wantSequence)
+				}
+
+				var delivered []*kgo.Record
+				for range records {
+					if err := manager.Consume(t.Context(), "images", "scanner", func(record *kgo.Record) error {
+						delivered = append(delivered, record)
+						return nil
+					}); err != nil {
+						t.Errorf("Consume() retry error = %v", err)
+					}
+				}
+				if !slices.Equal(delivered, records) {
+					t.Errorf("delivered records = %v, want %v", delivered, records)
+				}
+				if !slices.Equal(client.committed, records) {
+					t.Errorf("committed records = %v, want %v", client.committed, records)
+				}
+			})
+		}
 	}
 }
 
