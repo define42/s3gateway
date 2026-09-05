@@ -8,7 +8,7 @@
 - Executable: `./cmd/s3gateway`
 - Latest release tag: `v1.0.64` (2026-08-28)
 - Required Go version: 1.27.0 or later
-- Distribution: source, `ghcr.io/define42/s3gateway` container images, and GitHub releases
+- Distribution: source, `ghcr.io/define42/s3gateway` container images (`linux/amd64`, running as non-root UID 65532), and GitHub releases
 - License: this repository currently has no license file; do not assume permission to redistribute or reuse it
 
 ## Quick start

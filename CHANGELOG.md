@@ -18,6 +18,7 @@ Release versions and dates below come from this repository's Git tags.
 - S3 authentication now accepts only X25519-encrypted `X1...` access key IDs, and `S3GATEWAY_PRIVATE_X25519_KEY` is required at startup.
 - The global Kafka pop route now requires `s3gateway-all-r` before creating or polling a consumer.
 - The admin Kafka topic inventory now follows LDAP read permissions; `s3gateway-all-r` can view every topic.
+- The container image runs as the non-root user `s3gateway` (UID 65532) with `/data` as its working directory. ACME mode now needs `net.ipv4.ip_unprivileged_port_start=0` to bind ports 80 and 443.
 
 ### Removed
 

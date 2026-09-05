@@ -274,6 +274,25 @@ docker run --rm -p 8080:8080 \
 Versioned images use the generated `v*` release tag; commit images use the full
 Git commit SHA.
 
+The container runs as the non-root user `s3gateway` (UID and GID 65532) with `/data` as its working
+directory, so the default `ACME_DATA_DIR` of `./certs` resolves to
+`/data/certs`. Mount a volume owned by UID 65532 there to keep ACME account
+data and certificates across restarts.
+
+ACME mode binds ports 80 and 443, which an unprivileged user cannot open by
+default. Allow it with the kernel setting instead of running the container as
+root:
+
+```bash
+docker run --rm -p 80:80 -p 443:443 \
+  --sysctl net.ipv4.ip_unprivileged_port_start=0 \
+  --env-file ./s3gateway.env \
+  ghcr.io/define42/s3gateway:latest
+```
+
+Kubernetes exposes the same setting as the safe sysctl
+`net.ipv4.ip_unprivileged_port_start` in the pod `securityContext`.
+
 ### From source
 
 Building from source requires Go 1.27.0 or later and reachable LDAP and upstream

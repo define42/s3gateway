@@ -105,7 +105,7 @@ Every request with fresh credentials — S3 API (`server.go:136`) or admin login
 
 - **F-9 — FIXED: S3 credentials now require X25519.** The reversible `AD...` decoder and generator were removed, `Decode` accepts only `X1...` credentials, and `S3GATEWAY_PRIVATE_X25519_KEY` is required at startup.
 - **F-10 — Auth errors use HTTP 401 + code `AccessDenied`** (`server.go:117-139`). Real S3 uses 403 with `AccessDenied` / `SignatureDoesNotMatch` / `InvalidAccessKeyId`; some SDK retry/error mapping branches on these. Prefer S3-conformant status/code pairs.
-- **F-11 — Container runs as root.** `Dockerfile` (scratch stage) has no `USER` directive; add a non-root uid. `GOARCH=amd64` is also hardcoded — no arm64 image.
+- **F-11 — FIXED: Container runs as non-root.** The scratch stage now sets `USER 65532:65532` with a writable `/data` working directory. The image remains `linux/amd64` only by choice.
 - **F-12 — No CSP on the admin pages.** `adminpage.go:1754-1757` sets nosniff/frame headers; the templates use inline CSS, so a nonce/`style-src` CSP would be the next step. Also `msg`/`err` query params render attacker-influenced (escaped) text on the dashboard — a minor phishing aid.
 - **F-13 — `main.go` data race on `tlsLn`** (`main.go:59,109,150`): written by the server goroutine, read by `main` after a signal, no synchronization. Harmless in practice, but a `-race` CI run could flag it; hand the listener over via channel or mutex.
 - **F-14 — `AdminSessionStore.save` ID-reuse branch** (`adminpage.go:238-249`) is unreachable from the login flow (a valid session redirects before save) but would re-bind an existing session ID to a new identity if ever reached. Always mint a fresh ID on (re)login.
