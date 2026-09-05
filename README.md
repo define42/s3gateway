@@ -337,6 +337,20 @@ They are invalidated on restart and are not shared between gateway replicas.
 Set `COOKIE_SECRET` to the same strong value on persistent deployments so the
 cookie encryption keys do not change on every restart.
 
+### Multi-object delete checksums
+
+`DeleteObjects` validates supplied `Content-MD5` and CRC32, CRC32C, CRC64NVME,
+SHA1, or SHA256 checksum headers over the original XML before forwarding a
+deletion. If both MD5 and one alternate checksum are supplied, both must match.
+Malformed, duplicate, unsupported, or conflicting checksum headers return
+`400`; checksum mismatches return `BadDigest`. Algorithm selectors require a
+matching checksum value. Checksum trailers are unsupported for this operation;
+send checksum headers instead. The SDK generates a fresh checksum over the
+XML it sends upstream.
+
+Requests without checksum headers remain accepted for compatibility.
+[AWS documents stricter checksum requirements for DeleteObjects](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html).
+
 ### Upload checksums
 
 Multipart uploads preserve CRC32, CRC32C, CRC64NVME, SHA1, and SHA256

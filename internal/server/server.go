@@ -242,6 +242,7 @@ func (s *Server) GroupsForCredentialsContext(ctx context.Context, upn, pass stri
 // key. Successful requests receive authorization and identity context values.
 func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		preserveDeleteObjectsTrailers(r)
 		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
 			next.ServeHTTP(w, r)
 			return

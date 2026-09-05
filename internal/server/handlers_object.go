@@ -224,9 +224,8 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 		return
 	}
 
-	req, err := decodeDeleteObjectsRequest(r.Body)
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid DeleteObjects payload")
+	req, ok := decodeDeleteObjectsWithChecksums(w, r)
+	if !ok {
 		return
 	}
 	if len(req.Objects) == 0 || len(req.Objects) > maxDeleteObjects {
