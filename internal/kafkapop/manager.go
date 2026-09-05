@@ -47,7 +47,7 @@ type consumerKey struct {
 }
 
 type groupConsumer struct {
-	mu       sync.Mutex
+	gate     chan struct{} // A single permit serializes polling, handling, and closing.
 	client   consumerClient
 	lastUsed time.Time
 	users    int
@@ -63,6 +63,7 @@ type Manager struct {
 	timeout      time.Duration
 	maxConsumers int
 	isClosed     bool
+	closed       chan struct{}
 }
 
 // New constructs a Kafka pop manager. Kafka connections and group joins are
@@ -113,12 +114,14 @@ func newManager(timeout time.Duration, maxConsumers int, factory clientFactory) 
 		newClient:    factory,
 		timeout:      timeout,
 		maxConsumers: maxConsumers,
+		closed:       make(chan struct{}),
 	}
 }
 
 // Consume polls one record, calls handle, and synchronously commits the record
 // only when handle succeeds. A failed handler or commit rewinds the local
-// partition position so the record remains eligible for redelivery.
+// partition position so the record remains eligible for redelivery. Waiting
+// for another call on the same topic and group respects ctx cancellation.
 func (m *Manager) Consume(
 	ctx context.Context,
 	topic string,
@@ -138,12 +141,12 @@ func (m *Manager) Consume(
 		return errors.New("kafkapop: record handler is required")
 	}
 
-	consumer, err := m.acquire(topic, group)
+	consumer, err := m.acquire(ctx, topic, group)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		consumer.mu.Unlock()
+		<-consumer.gate
 		m.release(consumer)
 	}()
 
@@ -195,7 +198,10 @@ func rewindRecord(client consumerClient, record *kgo.Record) {
 	})
 }
 
-func (m *Manager) acquire(topic, group string) (*groupConsumer, error) {
+func (m *Manager) acquire(ctx context.Context, topic, group string) (*groupConsumer, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	key := consumerKey{topic: topic, group: group}
 	now := time.Now()
 
@@ -207,9 +213,8 @@ func (m *Manager) acquire(topic, group string) (*groupConsumer, error) {
 	if consumer := m.consumers[key]; consumer != nil {
 		consumer.users++
 		consumer.lastUsed = now
-		consumer.mu.Lock()
 		m.mu.Unlock()
-		return consumer, nil
+		return m.waitForConsumer(ctx, consumer)
 	}
 
 	var evictionKey consumerKey
@@ -236,6 +241,7 @@ func (m *Manager) acquire(topic, group string) (*groupConsumer, error) {
 		return nil, fmt.Errorf("kafkapop: initialize consumer: %w", err)
 	}
 	consumer := &groupConsumer{
+		gate:     make(chan struct{}, 1),
 		client:   client,
 		lastUsed: now,
 		users:    1,
@@ -244,11 +250,39 @@ func (m *Manager) acquire(topic, group string) (*groupConsumer, error) {
 		delete(m.consumers, evictionKey)
 	}
 	m.consumers[key] = consumer
-	consumer.mu.Lock()
 	m.mu.Unlock()
 
 	if evicted != nil {
 		evicted.client.CloseAllowingRebalance()
+	}
+	return m.waitForConsumer(ctx, consumer)
+}
+
+// waitForConsumer is called after pinning the consumer under m.mu. Waiting
+// outside that lock lets other groups progress and keeps cancellation prompt.
+func (m *Manager) waitForConsumer(ctx context.Context, consumer *groupConsumer) (*groupConsumer, error) {
+	select {
+	case consumer.gate <- struct{}{}:
+	case <-ctx.Done():
+		m.release(consumer)
+		return nil, ctx.Err()
+	case <-m.closed:
+		m.release(consumer)
+		return nil, ErrClosed
+	}
+
+	// A permit and cancellation can become ready together. Check again before
+	// allowing any client use; Close also acquires the permit before closing it.
+	err := ctx.Err()
+	m.mu.Lock()
+	if m.isClosed {
+		err = ErrClosed
+	}
+	m.mu.Unlock()
+	if err != nil {
+		<-consumer.gate
+		m.release(consumer)
+		return nil, err
 	}
 	return consumer, nil
 }
@@ -262,7 +296,7 @@ func (m *Manager) release(consumer *groupConsumer) {
 	m.mu.Unlock()
 }
 
-// Close prevents new consumers and closes every cached Kafka client. It waits
+// Close rejects queued calls and closes every cached Kafka client. It waits
 // for an in-progress callback to finish before closing that callback's client.
 func (m *Manager) Close() {
 	m.mu.Lock()
@@ -271,6 +305,7 @@ func (m *Manager) Close() {
 		return
 	}
 	m.isClosed = true
+	close(m.closed)
 	consumers := make([]*groupConsumer, 0, len(m.consumers))
 	for _, consumer := range m.consumers {
 		consumers = append(consumers, consumer)
@@ -279,8 +314,8 @@ func (m *Manager) Close() {
 	m.mu.Unlock()
 
 	for _, consumer := range consumers {
-		consumer.mu.Lock()
+		consumer.gate <- struct{}{}
 		consumer.client.CloseAllowingRebalance()
-		consumer.mu.Unlock()
+		<-consumer.gate
 	}
 }

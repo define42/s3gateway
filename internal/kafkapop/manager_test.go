@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -422,6 +423,169 @@ func TestManagerSerializesConsumersWithSameKey(t *testing.T) {
 	if err := <-secondDone; err != nil {
 		t.Fatalf("second Consume() error = %v", err)
 	}
+}
+
+func TestManagerQueuedConsumeDoesNotBlockOtherGroups(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager := newManager(time.Second, 2, func(topic, _ string) (consumerClient, error) {
+			return &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
+				return fetchWithRecord(&kgo.Record{Topic: topic})
+			}}, nil
+		})
+		defer manager.Close()
+		release := make(chan struct{})
+		releaseHandler := sync.OnceFunc(func() { close(release) })
+		defer releaseHandler()
+		firstDone := make(chan error, 1)
+		go func() {
+			firstDone <- manager.Consume(t.Context(), "images", "slow", func(*kgo.Record) error {
+				<-release
+				return nil
+			})
+		}()
+		synctest.Wait()
+
+		queuedDone := make(chan error, 1)
+		go func() {
+			queuedDone <- manager.Consume(t.Context(), "images", "slow", func(*kgo.Record) error {
+				return nil
+			})
+		}()
+		synctest.Wait()
+
+		if err := manager.Consume(t.Context(), "images", "independent", func(*kgo.Record) error {
+			return nil
+		}); err != nil {
+			t.Fatalf("unrelated group Consume() error = %v", err)
+		}
+		select {
+		case err := <-queuedDone:
+			t.Fatalf("queued Consume() returned before the first handler finished: %v", err)
+		default:
+		}
+		releaseHandler()
+		if err := <-firstDone; err != nil {
+			t.Fatalf("first Consume() error = %v", err)
+		}
+		if err := <-queuedDone; err != nil {
+			t.Fatalf("queued Consume() error = %v", err)
+		}
+	})
+}
+
+func TestManagerQueuedConsumeCancellationReleasesCapacity(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		want error
+	}{
+		{name: "canceled", want: context.Canceled},
+		{name: "deadline", want: context.DeadlineExceeded},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager := newManager(time.Second, 1, func(topic, _ string) (consumerClient, error) {
+					return &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
+						return fetchWithRecord(&kgo.Record{Topic: topic})
+					}}, nil
+				})
+				defer manager.Close()
+				release := make(chan struct{})
+				releaseHandler := sync.OnceFunc(func() { close(release) })
+				defer releaseHandler()
+				firstDone := make(chan error, 1)
+				go func() {
+					firstDone <- manager.Consume(t.Context(), "images", "slow", func(*kgo.Record) error {
+						<-release
+						return nil
+					})
+				}()
+				synctest.Wait()
+
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				defer cancel()
+				queuedDone := make(chan error, 1)
+				go func() {
+					queuedDone <- manager.Consume(ctx, "images", "slow", func(*kgo.Record) error {
+						return errors.New("canceled handler must not run")
+					})
+				}()
+				synctest.Wait()
+				if tt.want == context.Canceled {
+					cancel()
+				} else {
+					time.Sleep(time.Second)
+				}
+				if err := <-queuedDone; !errors.Is(err, tt.want) {
+					t.Fatalf("queued Consume() error = %v, want %v", err, tt.want)
+				}
+
+				releaseHandler()
+				if err := <-firstDone; err != nil {
+					t.Fatalf("first Consume() error = %v", err)
+				}
+				// The canceled waiter must not keep the sole cache entry pinned.
+				if err := manager.Consume(t.Context(), "documents", "other", func(*kgo.Record) error {
+					return nil
+				}); err != nil {
+					t.Fatalf("Consume() after cancellation and eviction = %v", err)
+				}
+			})
+		})
+	}
+}
+
+func TestManagerCloseRejectsQueuedConsume(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
+			return fetchWithRecord(&kgo.Record{Topic: "images"})
+		}}
+		manager := newManager(time.Second, 1, func(_, _ string) (consumerClient, error) {
+			return client, nil
+		})
+		defer manager.Close()
+		release := make(chan struct{})
+		releaseHandler := sync.OnceFunc(func() { close(release) })
+		defer releaseHandler()
+		firstDone := make(chan error, 1)
+		go func() {
+			firstDone <- manager.Consume(t.Context(), "images", "slow", func(*kgo.Record) error {
+				<-release
+				return nil
+			})
+		}()
+		synctest.Wait()
+
+		queuedDone := make(chan error, 1)
+		go func() {
+			queuedDone <- manager.Consume(t.Context(), "images", "slow", func(*kgo.Record) error {
+				return errors.New("queued handler must not run after Close")
+			})
+		}()
+		synctest.Wait()
+		closeDone := make(chan struct{})
+		go func() {
+			manager.Close()
+			close(closeDone)
+		}()
+		if err := <-queuedDone; !errors.Is(err, ErrClosed) {
+			t.Fatalf("queued Consume() error = %v, want ErrClosed", err)
+		}
+		select {
+		case <-closeDone:
+			t.Fatal("Close() returned before the active callback finished")
+		default:
+		}
+		releaseHandler()
+		if err := <-firstDone; err != nil {
+			t.Fatalf("first Consume() error = %v", err)
+		}
+		<-closeDone
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		if client.closeCount != 1 || len(client.committed) != 1 {
+			t.Fatalf("close count = %d, committed = %d; want one each", client.closeCount, len(client.committed))
+		}
+	})
 }
 
 func TestManagerClose(t *testing.T) {
