@@ -475,6 +475,16 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
+	ssecAlgo, ssecKey, ssecMD5, _, err := s3http.ParseSSECustomerHeaders(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
+		return
+	}
+	payer, err := s3http.ParseRequestPayerHeader(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
+		return
+	}
 	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
 	ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))
 	if ifMatch != "" && ifNoneMatch != "" {
@@ -549,13 +559,20 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		MultipartUpload: &types.CompletedMultipartUpload{
 			Parts: parts,
 		},
-		ChecksumCRC32:     checksum.ChecksumCRC32,
-		ChecksumCRC32C:    checksum.ChecksumCRC32C,
-		ChecksumCRC64NVME: checksum.ChecksumCRC64NVME,
-		ChecksumSHA1:      checksum.ChecksumSHA1,
-		ChecksumSHA256:    checksum.ChecksumSHA256,
-		ChecksumType:      checksum.ChecksumType,
-		MpuObjectSize:     objectSize,
+		ChecksumCRC32:        checksum.ChecksumCRC32,
+		ChecksumCRC32C:       checksum.ChecksumCRC32C,
+		ChecksumCRC64NVME:    checksum.ChecksumCRC64NVME,
+		ChecksumSHA1:         checksum.ChecksumSHA1,
+		ChecksumSHA256:       checksum.ChecksumSHA256,
+		ChecksumType:         checksum.ChecksumType,
+		MpuObjectSize:        objectSize,
+		SSECustomerAlgorithm: ssecAlgo,
+		SSECustomerKey:       ssecKey,
+		SSECustomerKeyMD5:    ssecMD5,
+		RequestPayer:         payer,
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
 	if ifMatch != "" {
 		in.IfMatch = aws.String(ifMatch)
