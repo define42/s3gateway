@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/xml"
 	"errors"
+	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -123,5 +125,88 @@ func TestHandleDeleteObjectsPreservesKeys(t *testing.T) {
 		}
 	default:
 		t.Fatal("delete request did not reach upstream")
+	}
+}
+
+func TestExtractAmzMetaPreservesDistinctNames(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		headers http.Header
+		want    map[string]string
+	}{
+		{name: "no headers"},
+		{name: "ignore unrelated and empty headers", headers: http.Header{
+			"Content-Type": {"text/plain"}, "X-Amz-Meta-": {"ignored"}, "X-Amz-Meta-Empty": nil,
+		}},
+		{name: "case insensitive names and unchanged values", headers: http.Header{
+			"X-AmZ-MeTa-Case-ID": {" Case-123 "},
+		}, want: map[string]string{"case-id": " Case-123 "}},
+		{name: "repeated prefix is part of the name", headers: http.Header{
+			"X-Amz-Meta-Id":                       {"plain"},
+			"X-Amz-Meta-X-Amz-Meta-Id":            {"prefixed"},
+			"X-Amz-Meta-X-Amz-Meta-X-Amz-Meta-Id": {"twice-prefixed"},
+			"X-Amz-Meta-X-Amz-Meta-":              {"prefix-only"},
+		}, want: map[string]string{
+			"id": "plain", "x-amz-meta-id": "prefixed",
+			"x-amz-meta-x-amz-meta-id": "twice-prefixed", "x-amz-meta-": "prefix-only",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractAmzMeta(tc.headers)
+			if !maps.Equal(got, tc.want) || (got == nil) != (tc.want == nil) {
+				t.Fatalf("metadata = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestUploadPreservesDistinctMetadataNames(t *testing.T) {
+	for _, tc := range []struct {
+		name, method, target, response string
+		copy                           bool
+	}{
+		{name: "put", method: http.MethodPut, target: "/team2-dst/object"},
+		{name: "copy", method: http.MethodPut, target: "/team2-dst/object", copy: true,
+			response: `<CopyObjectResult><ETag>"copied"</ETag></CopyObjectResult>`},
+		{name: "multipart initiation", method: http.MethodPost, target: "/team2-dst/object?uploads",
+			response: `<InitiateMultipartUploadResult><UploadId>upload-1</UploadId></InitiateMultipartUploadResult>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := make(chan http.Header, 1)
+			gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				requests <- r.Header.Clone()
+				w.Header().Set("Content-Type", "application/xml")
+				_, _ = io.WriteString(w, tc.response)
+			})
+			t.Cleanup(cleanup)
+			req := httptest.NewRequest(tc.method, tc.target, strings.NewReader(""))
+			req.Header.Set("x-amz-meta-id", "plain")
+			req.Header.Set("x-amz-meta-x-amz-meta-id", "prefixed")
+			if tc.copy {
+				req.Header.Set("x-amz-copy-source", "/team2-src/source")
+				req.Header.Set("x-amz-metadata-directive", "REPLACE")
+			}
+			rr := httptest.NewRecorder()
+			gw.ServeHTTP(rr, reqWithRules(req, fullTeam2Rule()))
+			if rr.Code != http.StatusOK {
+				t.Fatalf("upload failed: %d %s", rr.Code, rr.Body.String())
+			}
+			select {
+			case headers := <-requests:
+				if headers.Get("x-amz-meta-id") != "plain" || headers.Get("x-amz-meta-x-amz-meta-id") != "prefixed" {
+					t.Fatalf("upstream metadata lost: %v", headers)
+				}
+			default:
+				t.Fatal("upload did not reach upstream")
+			}
+		})
+	}
+}
+
+func TestPrefixedMetadataDoesNotSatisfyRequiredName(t *testing.T) {
+	meta := extractAmzMeta(http.Header{"X-Amz-Meta-X-Amz-Meta-Id": {"prefixed"}})
+	if got := missingRequiredUploadMetadata(meta, []string{"id"}); !slices.Equal(got, []string{"x-amz-meta-id"}) {
+		t.Fatalf("missing required metadata = %v, want [x-amz-meta-id]", got)
 	}
 }

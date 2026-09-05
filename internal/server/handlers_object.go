@@ -2027,7 +2027,8 @@ func extractAmzMeta(h http.Header) map[string]string {
 	for k, vs := range h {
 		kl := strings.ToLower(k)
 		if strings.HasPrefix(kl, "x-amz-meta-") && len(vs) > 0 {
-			mk := config.NormalizeRequiredMetadataKey(strings.TrimPrefix(kl, "x-amz-meta-"))
+			// Strip the header prefix once; a repeated prefix belongs to the metadata name.
+			mk := config.NormalizeRequiredMetadataKey(kl)
 			if mk == "" {
 				continue
 			}
