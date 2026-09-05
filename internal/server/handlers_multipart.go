@@ -375,6 +375,12 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
+	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
+	ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))
+	if ifMatch != "" && ifNoneMatch != "" {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "If-Match and If-None-Match cannot both be set")
+		return
+	}
 
 	cmu, err := decodeCompleteMultipartUpload(r.Body)
 	if err != nil {
@@ -419,6 +425,12 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		MultipartUpload: &types.CompletedMultipartUpload{
 			Parts: parts,
 		},
+	}
+	if ifMatch != "" {
+		in.IfMatch = aws.String(ifMatch)
+	}
+	if ifNoneMatch != "" {
+		in.IfNoneMatch = aws.String(ifNoneMatch)
 	}
 
 	out, err := s.up.CompleteMultipartUpload(r.Context(), in)
