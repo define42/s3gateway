@@ -279,6 +279,74 @@ func TestAdminLoginPostSuccessSetsCookieAndRedirects(t *testing.T) {
 	}
 }
 
+func TestAdminLoginPostValidatesBrowserOrigin(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		origin  string
+		referer string
+		allowed bool
+	}{
+		{name: "same origin", origin: "https://gateway.example", allowed: true},
+		{name: "same origin referer fallback", referer: "https://gateway.example/login", allowed: true},
+		{name: "cross origin", origin: "https://untrusted.example"},
+		{name: "cross origin referer", referer: "https://untrusted.example/login"},
+		{name: "origin overrides referer", origin: "https://untrusted.example", referer: "https://gateway.example/login"},
+		{name: "missing origin and referer"},
+		{name: "null origin", origin: "null"},
+		{name: "malformed origin", origin: "://invalid"},
+		{name: "different scheme", origin: "http://gateway.example"},
+		{name: "different port", origin: "https://gateway.example:8443"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := newHandlerWithNilS3(map[string]struct{}{"team2-rw": {}})
+			authenticate := handler.authenticate
+			authCalls := 0
+			handler.authenticate = func(username, password string) (map[string]struct{}, error) {
+				authCalls++
+				return authenticate(username, password)
+			}
+			form := url.Values{"username": {"alice"}, "password": {"secret"}}
+			body := strings.NewReader(form.Encode())
+			req := httptest.NewRequest(http.MethodPost, "https://gateway.example/login", body)
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.Header.Set("Accept", "text/html")
+			req.Header.Set("User-Agent", "Mozilla/5.0")
+			req.Header.Set("Origin", tt.origin)
+			req.Header.Set("Referer", tt.referer)
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if !tt.allowed {
+				if rr.Code != http.StatusForbidden {
+					t.Fatalf("status = %d, want 403", rr.Code)
+				}
+				if authCalls != 0 || body.Len() != len(form.Encode()) {
+					t.Fatal("untrusted login must be rejected before reading credentials or authenticating")
+				}
+				if len(rr.Result().Cookies()) != 0 {
+					t.Fatal("untrusted login must not set a session cookie")
+				}
+				return
+			}
+			if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/admin" {
+				t.Fatalf("status = %d, location = %q; want redirect to /admin", rr.Code, rr.Header().Get("Location"))
+			}
+			if authCalls != 1 {
+				t.Fatalf("authentication calls = %d, want 1", authCalls)
+			}
+			var sessionCookie *http.Cookie
+			for _, cookie := range rr.Result().Cookies() {
+				if cookie.Name == adminSessionCookieName {
+					sessionCookie = cookie
+				}
+			}
+			if sessionCookie == nil || sessionCookie.Value == "" {
+				t.Fatal("trusted login must set a session cookie")
+			}
+		})
+	}
+}
+
 func TestAdminLoginPostReportsAuthenticationLimit(t *testing.T) {
 	handler := newHandlerWithNilS3(nil)
 	handler.authenticate = func(string, string) (map[string]struct{}, error) {

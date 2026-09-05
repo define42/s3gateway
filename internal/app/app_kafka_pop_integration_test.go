@@ -202,6 +202,7 @@ func TestBootRedpandaGlobalPopIntegration(t *testing.T) {
 	loginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	loginRequest.Header.Set("Accept", "text/html")
 	loginRequest.Header.Set("User-Agent", "Mozilla/5.0")
+	loginRequest.Header.Set("Origin", gateway.URL)
 	loginResponse, err := browserClient.Do(loginRequest)
 	if err != nil {
 		t.Fatalf("execute browser login request: %v", err)

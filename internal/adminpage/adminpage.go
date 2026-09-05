@@ -1051,6 +1051,13 @@ func (h *handler) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodPost && !hasTrustedAdminOrigin(r) {
+		writeAdminLoginPage(w, r, http.StatusForbidden, adminLoginPageData{
+			Error: "Invalid form origin.",
+		})
+		return
+	}
+
 	if h != nil {
 		if _, _, ok := h.currentAdminSession(r); ok {
 			http.Redirect(w, r, "/admin", http.StatusSeeOther)
