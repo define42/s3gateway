@@ -52,6 +52,7 @@ const (
 	maxAdminUploadMetadataKeyBytes   = 256
 	maxAdminUploadMetadataValueBytes = int64(4 << 10)
 	maxAdminUploadMetadataBytes      = 16 << 10
+	adminUploadAbortTimeout          = 10 * time.Second
 )
 
 // IsBrowser reports whether a request looks like interactive browser traffic.
@@ -1698,7 +1699,10 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 				if completed {
 					return
 				}
-				_, _ = h.s3.AbortMultipartUpload(r.Context(), &s3.AbortMultipartUploadInput{
+				// Cleanup must survive browser cancellation but cannot wait indefinitely.
+				abortCtx, cancelAbort := context.WithTimeout(context.WithoutCancel(r.Context()), adminUploadAbortTimeout)
+				defer cancelAbort()
+				_, _ = h.s3.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{
 					Bucket:   &bucket,
 					Key:      &finalKey,
 					UploadId: &uploadID,

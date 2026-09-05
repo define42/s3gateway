@@ -2,12 +2,14 @@ package adminpage
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -19,6 +21,80 @@ type adminUploadIntegrityHTTPClient func(*http.Request) (*http.Response, error)
 
 func (f adminUploadIntegrityHTTPClient) Do(r *http.Request) (*http.Response, error) {
 	return f(r)
+}
+
+func TestAdminUploadCancellationReachesUpstreamAbort(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var created, storedParts, aborted, completed atomic.Int32
+	h, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/team2-logs/canceled.txt" {
+			t.Errorf("unexpected upstream path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		query := r.URL.Query()
+		switch {
+		case r.Method == http.MethodPost && query.Has("uploads"):
+			created.Add(1)
+			_, _ = io.WriteString(w, `<InitiateMultipartUploadResult><UploadId>canceled-upload</UploadId></InitiateMultipartUploadResult>`)
+		case r.Method == http.MethodPut && query.Get("uploadId") == "canceled-upload":
+			if _, err := io.Copy(io.Discard, r.Body); err != nil {
+				t.Errorf("read upstream part: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			storedParts.Add(1)
+			// The upstream has stored the part when the browser disconnects.
+			cancel()
+			w.Header().Set("ETag", `"part-etag"`)
+		case r.Method == http.MethodDelete && query.Get("uploadId") == "canceled-upload":
+			aborted.Add(1)
+			storedParts.Store(0)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && query.Get("uploadId") == "canceled-upload":
+			completed.Add(1)
+			w.WriteHeader(http.StatusBadRequest)
+		default:
+			t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	})
+	defer cleanup()
+	creds.set("alice", "secret", map[string]struct{}{"team2-w": {}})
+	cookie := adminLoginSessionCookie(t, h, "alice", "secret")
+	notifier := &recordingAdminUploadNotifier{}
+	h.uploadNotifier = notifier
+	body, contentType := newMultipartBody(t, func(writer *multipart.Writer) error {
+		if err := writer.WriteField("name", "team2-logs"); err != nil {
+			return err
+		}
+		file, err := writer.CreateFormFile("file", "canceled.txt")
+		if err != nil {
+			return err
+		}
+		_, err = io.WriteString(file, "stored before cancellation")
+		return err
+	})
+	req := httptest.NewRequest(http.MethodPost, "/admin/bucket/upload", body).WithContext(ctx)
+	req.Header.Set("Content-Type", contentType)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if ctx.Err() != context.Canceled {
+		t.Fatal("browser request was not canceled")
+	}
+	if created.Load() != 1 || aborted.Load() != 1 || storedParts.Load() != 0 {
+		t.Errorf("unfinished upload cleanup: created=%d aborted=%d stored parts=%d, want 1/1/0",
+			created.Load(), aborted.Load(), storedParts.Load())
+	}
+	if completed.Load() != 0 || len(notifier.events) != 0 {
+		t.Errorf("canceled upload finalized: complete=%d notifications=%d", completed.Load(), len(notifier.events))
+	}
+	location := parseRedirectLocation(t, rr)
+	if location.Query().Get("err") == "" || location.Query().Get("msg") != "" {
+		t.Errorf("canceled upload did not report failure: %s", location)
+	}
 }
 
 func TestAdminUploadValidatesIntegrityBeforeCommit(t *testing.T) {
