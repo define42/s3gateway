@@ -1056,6 +1056,23 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 		t.Fatalf("expected list parts page 2 to be non-truncated")
 	}
 
+	// A malformed manifest must leave both uploaded parts available for a retry.
+	_, err = gatewayClient.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(completeKey),
+		UploadId: createOut.UploadId,
+		MultipartUpload: &s3types.CompletedMultipartUpload{
+			Parts: []s3types.CompletedPart{
+				{PartNumber: aws.Int32(1), ETag: part1Out.ETag},
+				{PartNumber: aws.Int32(2)},
+			},
+		},
+	})
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) || apiErr.ErrorCode() != "MalformedXML" {
+		t.Fatalf("completion with missing part ETag error = %v, want MalformedXML", err)
+	}
+
 	if _, err := gatewayClient.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(bucket),
 		Key:      aws.String(completeKey),

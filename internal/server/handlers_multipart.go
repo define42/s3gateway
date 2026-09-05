@@ -509,7 +509,8 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 	for _, p := range cmu.Parts {
 		etag := strings.TrimSpace(p.ETag)
 		if p.PartNumber <= 0 || etag == "" {
-			continue
+			s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Each part must have a positive PartNumber and a non-empty ETag")
+			return
 		}
 		if !strings.HasPrefix(etag, `"`) {
 			etag = `"` + etag

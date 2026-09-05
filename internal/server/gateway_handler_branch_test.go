@@ -1243,7 +1243,7 @@ func TestCreateCompleteAndListPartsBranchMatrix(t *testing.T) {
 			t.Fatalf("malformed status mismatch: got=%d body=%s", rrMalformed.Code, rrMalformed.Body.String())
 		}
 
-		reqNoParts := httptest.NewRequest(http.MethodPost, "/team2-dst/object.txt?uploadId=u1", strings.NewReader(`<CompleteMultipartUpload><Part><PartNumber>0</PartNumber><ETag></ETag></Part></CompleteMultipartUpload>`))
+		reqNoParts := httptest.NewRequest(http.MethodPost, "/team2-dst/object.txt?uploadId=u1", strings.NewReader(`<CompleteMultipartUpload/>`))
 		reqNoParts = reqWithRules(reqNoParts, fullTeam2Rule())
 		rrNoParts := httptest.NewRecorder()
 		gwNoUpstream.handleCompleteMultipart(rrNoParts, reqNoParts, "team2-dst", "object.txt", "u1")
