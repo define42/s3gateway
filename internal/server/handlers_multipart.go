@@ -18,6 +18,7 @@ import (
 	"github.com/define42/s3gateway/internal/s3xml"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 	"github.com/define42/s3gateway/internal/uploadnotify"
+	"github.com/define42/s3gateway/internal/upstream"
 )
 
 const (
@@ -563,7 +564,7 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		in.IfNoneMatch = aws.String(ifNoneMatch)
 	}
 
-	out, err := s.up.CompleteMultipartUpload(r.Context(), in)
+	out, err := s.up.CompleteMultipartUpload(r.Context(), in, upstream.TrackResponseProgress)
 	if err != nil {
 		s3http.WriteUpstreamError(w, err)
 		return

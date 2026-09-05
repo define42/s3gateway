@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/define42/s3gateway/internal/uploadnotify"
+	"github.com/define42/s3gateway/internal/upstream"
 )
 
 type recordingAdminUploadNotifier struct {
@@ -100,8 +101,15 @@ func TestAdminUploadNotifications(t *testing.T) {
 
 			req := buildAdminUploadRequest(t, bucket, key, tt.payload, nil)
 			req.AddCookie(cookie)
+			var completionProgress int
+			req = req.WithContext(upstream.WithResponseProgress(req.Context(), func() {
+				completionProgress++
+			}))
 			rr := httptest.NewRecorder()
 			gw.ServeHTTP(rr, req)
+			if got, want := completionProgress > 0, tt.payload != ""; got != want {
+				t.Fatalf("multipart completion progress reported = %t, want %t", got, want)
+			}
 
 			if rr.Code != http.StatusSeeOther {
 				t.Fatalf("status mismatch: got=%d want=%d body=%s", rr.Code, http.StatusSeeOther, rr.Body.String())

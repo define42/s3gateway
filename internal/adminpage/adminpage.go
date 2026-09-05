@@ -34,6 +34,7 @@ import (
 	"github.com/define42/s3gateway/internal/config"
 	"github.com/define42/s3gateway/internal/kafkatopic"
 	"github.com/define42/s3gateway/internal/uploadnotify"
+	"github.com/define42/s3gateway/internal/upstream"
 	"github.com/gorilla/securecookie"
 	"github.com/gorilla/sessions"
 )
@@ -1817,7 +1818,7 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 				MultipartUpload: &types.CompletedMultipartUpload{
 					Parts: completedParts,
 				},
-			})
+			}, upstream.TrackResponseProgress)
 			if err != nil || completeOut == nil {
 				redirectToBucket("", "Could not upload object.")
 				return

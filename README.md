@@ -538,9 +538,12 @@ slots are occupied. Excess requests receive an immediate `503 SlowDown` with
 `HTTP_TRANSFER_IDLE_TIMEOUT` defaults to `60s`. If an active request makes no
 request-body read or response-write progress for that interval, the gateway
 cancels its context and upstream work and interrupts blocked client reads and
-writes. Transfers can run longer while they keep making progress. The separate
-absolute `HTTP_READ_TIMEOUT` and `HTTP_WRITE_TIMEOUT` remain disabled by
-default; setting them limits total read and write duration even for transfers
+writes. Transfers can run longer while they keep making progress. Multipart
+completion also counts upstream response headers and body bytes as progress,
+including S3's whitespace keepalives while assembling the object.
+If those keepalives stop, the same idle timeout still cancels the operation.
+The separate absolute `HTTP_READ_TIMEOUT` and `HTTP_WRITE_TIMEOUT` remain disabled
+by default; setting them limits total read and write duration even for transfers
 that continue making progress.
 
 A signed streaming upload or browser upload can retain a `16 MiB` buffer.

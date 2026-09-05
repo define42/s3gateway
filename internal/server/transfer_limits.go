@@ -9,6 +9,7 @@ import (
 
 	"github.com/define42/s3gateway/internal/config"
 	"github.com/define42/s3gateway/internal/s3xml"
+	"github.com/define42/s3gateway/internal/upstream"
 )
 
 // withTransferLimits bounds active handlers before authentication or upload
@@ -47,7 +48,7 @@ func withTransferLimits(cfg config.Config, next http.Handler) http.Handler {
 				return
 			}
 		}
-		r = r.WithContext(ctx)
+		r = r.WithContext(upstream.WithResponseProgress(ctx, activity.progress))
 		if r.Body != nil && r.Body != http.NoBody {
 			r.Body = &transferRequestBody{ReadCloser: r.Body, activity: activity}
 		}
