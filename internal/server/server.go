@@ -449,28 +449,57 @@ func UploaderFromRequest(r *http.Request) string {
 	return strings.TrimSpace(uploader)
 }
 
-// unsupportedSubresources are the S3 sub-resource query keys of operations the
-// gateway does not implement. They must be rejected before method dispatch:
-// a sub-resource request that fell through would otherwise be executed as the
-// plain bucket/object operation (e.g. PutObjectAcl `PUT /b/k?acl` would
-// overwrite the object via PutObject, and DeleteBucketPolicy
-// `DELETE /b?policy` would delete the bucket).
-var unsupportedSubresources = map[string]struct{}{
-	"analytics":             {},
-	"intelligent-tiering":   {},
-	"inventory":             {},
-	"legal-hold":            {},
-	"metadataConfiguration": {},
-	"metadataTable":         {},
-	"metrics":               {},
-	"object-lock":           {},
-	"ownershipControls":     {},
-	"renameObject":          {},
-	"restore":               {},
-	"retention":             {},
-	"select":                {},
-	"session":               {},
-	"torrent":               {},
+// supportedS3QueryParameters includes implemented operation selectors and
+// modifiers. Reject unknown names before dispatch so new S3 subresources cannot
+// fall through to ordinary object or bucket mutations.
+var supportedS3QueryParameters = map[string]struct{}{
+	"accelerate":                   {},
+	"acl":                          {},
+	"attributes":                   {},
+	"continuation-token":           {},
+	"cors":                         {},
+	"delete":                       {},
+	"delimiter":                    {},
+	"encoding-type":                {},
+	"encryption":                   {},
+	"fetch-owner":                  {},
+	"key-marker":                   {},
+	"lifecycle":                    {},
+	"list-type":                    {},
+	"location":                     {},
+	"logging":                      {},
+	"marker":                       {},
+	"max-keys":                     {},
+	"max-parts":                    {},
+	"max-uploads":                  {},
+	"notification":                 {},
+	"optional-object-attributes":   {},
+	"part-number-marker":           {},
+	"partNumber":                   {},
+	"policy":                       {},
+	"policyStatus":                 {},
+	"prefix":                       {},
+	"publicAccessBlock":            {},
+	"replication":                  {},
+	"requestPayment":               {},
+	"response-cache-control":       {},
+	"response-content-disposition": {},
+	"response-content-encoding":    {},
+	"response-content-language":    {},
+	"response-content-type":        {},
+	"response-expires":             {},
+	"start-after":                  {},
+	"tagging":                      {},
+	"upload-id-marker":             {},
+	"uploadId":                     {},
+	"uploads":                      {},
+	"version-id-marker":            {},
+	"versionId":                    {},
+	"versioning":                   {},
+	"versions":                     {},
+	"website":                      {},
+	"withUpdatedAt":                {}, // MinIO lifecycle-read compatibility modifier.
+	"x-id":                         {},
 }
 
 // bucketOnlySubresources are implemented bucket-level sub-resources that have
@@ -498,7 +527,7 @@ var bucketOnlySubresources = map[string]struct{}{
 func firstUnsupportedSubresource(q url.Values) string {
 	found := make([]string, 0, 1)
 	for k := range q {
-		if _, ok := unsupportedSubresources[k]; ok {
+		if _, ok := supportedS3QueryParameters[k]; !ok {
 			found = append(found, k)
 		}
 	}
@@ -507,6 +536,57 @@ func firstUnsupportedSubresource(q url.Values) string {
 	}
 	sort.Strings(found)
 	return found[0]
+}
+
+// validateS3OperationQuery preserves operation intent even when its identifier
+// is missing or ambiguous. In particular, an invalid abort or part upload must
+// never become an ordinary object deletion or overwrite.
+func validateS3OperationQuery(method, path string, q url.Values) error {
+	if q.Has("") {
+		return errors.New("query parameter names must not be empty")
+	}
+	_, key, hasKey := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+	objectPath := hasKey && key != ""
+	uploadIDs, hasUploadID := q["uploadId"]
+	if hasUploadID {
+		if !objectPath || len(uploadIDs) != 1 || strings.TrimSpace(uploadIDs[0]) == "" {
+			return errors.New("uploadId requires an object path and one non-empty value")
+		}
+		for name := range q {
+			switch name {
+			case "uploadId", "partNumber", "part-number-marker", "max-parts", "x-id":
+			default:
+				return errors.New("uploadId cannot be combined with another operation")
+			}
+		}
+	}
+	if partNumbers, hasPartNumber := q["partNumber"]; hasPartNumber {
+		if !objectPath || len(partNumbers) != 1 || strings.TrimSpace(partNumbers[0]) == "" {
+			return errors.New("partNumber requires an object path and one non-empty value")
+		}
+		if !hasUploadID && method != http.MethodGet && method != http.MethodHead {
+			return errors.New("partNumber requires uploadId for this operation")
+		}
+	}
+	if q.Has("attributes") && !objectPath {
+		return errors.New("attributes requires an object path")
+	}
+	return nil
+}
+
+// plainMutationQueryAllowed prevents modifiers for other operations from being
+// silently ignored by an ordinary PUT or DELETE after subresource dispatch.
+func plainMutationQueryAllowed(method string, objectPath bool, q url.Values) bool {
+	if method != http.MethodPut && method != http.MethodDelete {
+		return true
+	}
+	for name := range q {
+		if name == "x-id" || (objectPath && method == http.MethodDelete && name == "versionId") {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // supportsStreamingPayload allows only object PUT routes whose handlers decode
@@ -572,12 +652,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if sub := firstUnsupportedSubresource(r.URL.Query()); sub != "" {
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "Malformed query string")
+		return
+	}
+	if sub := firstUnsupportedSubresource(q); sub != "" {
 		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented: "+sub)
 		return
 	}
 	if sigv4.IsAWSChunkedPayload(r.Header) && !supportsStreamingPayload(r) {
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Streaming payloads are supported only for PutObject and UploadPart")
+		return
+	}
+	if err := validateS3OperationQuery(r.Method, p, q); err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
 		return
 	}
 
@@ -599,7 +688,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// /bucket
 	if len(parts) == 1 {
-		q := r.URL.Query()
 		if _, ok := q["lifecycle"]; ok {
 			switch r.Method {
 			case http.MethodPut:
@@ -717,6 +805,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 			return
 		}
+		if !plainMutationQueryAllowed(r.Method, false, q) {
+			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Query parameters are not supported for this operation")
+			return
+		}
 		if r.Method == http.MethodPut {
 			s.handleCreateBucket(w, r, bucket)
 			return
@@ -747,7 +839,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// /bucket/key
 	key := parts[1]
-	q := r.URL.Query()
 
 	for subresource := range q {
 		if _, ok := bucketOnlySubresources[subresource]; ok {
@@ -804,7 +895,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
 		return
 	}
-	if uploadID := q.Get("uploadId"); uploadID != "" {
+	if q.Has("uploadId") {
+		uploadID := q.Get("uploadId")
 		switch r.Method {
 		case http.MethodGet:
 			s.handleListParts(w, r, bucket, key, uploadID)
@@ -835,6 +927,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if !plainMutationQueryAllowed(r.Method, true, q) {
+		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Query parameters are not supported for this operation")
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		s.handleGetObject(w, r, bucket, key)

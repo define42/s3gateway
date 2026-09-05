@@ -113,7 +113,7 @@ func TestS3AuditEventIsCompleteAndRedacted(t *testing.T) {
 	})
 	r := httptest.NewRequest(
 		http.MethodPut,
-		"/private-bucket/private/object.txt?partNumber=7&uploadId=private-upload&X-Amz-Credential=private-credential",
+		"/private-bucket/private/object.txt?partNumber=7&uploadId=private-upload&x-id=private-credential",
 		nil,
 	)
 	r.Header.Set("Authorization", "AWS4-HMAC-SHA256 private-signature")

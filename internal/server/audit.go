@@ -236,10 +236,11 @@ func classifyS3Request(r *http.Request) s3AuditRequest {
 
 	request := s3AuditResource(p)
 	var q url.Values
+	var err error
 	if r.URL.RawQuery != "" {
-		q = r.URL.Query()
+		q, err = url.ParseQuery(r.URL.RawQuery)
 	}
-	if firstUnsupportedSubresource(q) != "" {
+	if err != nil || firstUnsupportedSubresource(q) != "" || validateS3OperationQuery(r.Method, p, q) != nil {
 		request.action = unsupportedS3Action
 		return request
 	}
@@ -369,6 +370,9 @@ func classifyBucketAction(method string, q url.Values) string {
 		return unsupportedS3Action
 	}
 
+	if !plainMutationQueryAllowed(method, false, q) {
+		return unsupportedS3Action
+	}
 	switch method {
 	case http.MethodPut:
 		return "CreateBucket"
@@ -453,7 +457,7 @@ func classifyObjectAction(method string, header http.Header, q url.Values) strin
 		}
 		return unsupportedS3Action
 	}
-	if q.Get("uploadId") != "" {
+	if q.Has("uploadId") {
 		switch method {
 		case http.MethodGet:
 			return "ListParts"
@@ -471,6 +475,9 @@ func classifyObjectAction(method string, header http.Header, q url.Values) strin
 		}
 	}
 
+	if !plainMutationQueryAllowed(method, true, q) {
+		return unsupportedS3Action
+	}
 	switch method {
 	case http.MethodGet:
 		return "GetObject"

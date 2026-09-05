@@ -674,7 +674,12 @@ readinessProbe:
 - Only the operations listed above are implemented. Other routes return
   `NotImplemented`.
 - Unimplemented S3 subresources such as `?retention`, `?object-lock`, and
-  `?select` are rejected before bucket or object dispatch.
+  `?select`, including object annotations, are rejected before bucket or object
+  dispatch. Unknown query parameters return `501 NotImplemented`; malformed
+  query strings and empty or duplicate `uploadId` values return
+  `400 InvalidArgument`. Multipart parameters cannot fall through to ordinary
+  object uploads or deletions. Supported modifiers such as `versionId`, read
+  `partNumber`, and SDK `x-id` remain accepted.
 - LDAP groups are the only source of authorization. Client-supplied ACLs are
   never forwarded upstream. ACL reads return canned owner `FULL_CONTROL`
   documents, and only owner-retaining canned ACLs are accepted as no-ops for

@@ -17,10 +17,11 @@ import (
 func TestWithAuthRejectsStreamingControlRequests(t *testing.T) {
 	const versioning = `<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`
 	routes := []struct {
-		name       string
-		method     string
-		path       string
-		copySource string
+		name        string
+		method      string
+		path        string
+		copySource  string
+		unsupported bool
 	}{
 		{name: "versioning", method: http.MethodPut, path: "/team2-bucket?versioning"},
 		{name: "versioning trailing slash", method: http.MethodPut, path: "/team2-bucket/?versioning"},
@@ -38,7 +39,7 @@ func TestWithAuthRejectsStreamingControlRequests(t *testing.T) {
 		{name: "copy part", method: http.MethodPut, path: "/team2-bucket/key?uploadId=u1&partNumber=1", copySource: "/team2-source/key"},
 		{name: "tagging with part parameters", method: http.MethodPut, path: "/team2-bucket/key?tagging&uploadId=u1&partNumber=1"},
 		{name: "ACL with part parameters", method: http.MethodPut, path: "/team2-bucket/key?acl&uploadId=u1&partNumber=1"},
-		{name: "unknown subresource", method: http.MethodPut, path: "/team2-bucket/key?future-control"},
+		{name: "unknown subresource", method: http.MethodPut, path: "/team2-bucket/key?future-control", unsupported: true},
 	}
 	modes := []struct {
 		name  string
@@ -80,8 +81,12 @@ func TestWithAuthRejectsStreamingControlRequests(t *testing.T) {
 					if got := upstreamCalls.Swap(0); got != 0 {
 						t.Errorf("streaming control request reached upstream: calls=%d", got)
 					}
-					if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "<Code>InvalidRequest</Code>") {
-						t.Fatalf("status=%d body=%s, want 400 InvalidRequest", rr.Code, rr.Body.String())
+					wantStatus, wantCode := http.StatusBadRequest, "InvalidRequest"
+					if route.unsupported {
+						wantStatus, wantCode = http.StatusNotImplemented, "NotImplemented"
+					}
+					if rr.Code != wantStatus || !strings.Contains(rr.Body.String(), "<Code>"+wantCode+"</Code>") {
+						t.Fatalf("status=%d body=%s, want %d %s", rr.Code, rr.Body.String(), wantStatus, wantCode)
 					}
 				})
 			}
