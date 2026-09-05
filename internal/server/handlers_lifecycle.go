@@ -181,14 +181,15 @@ func decodeLifecycleTag(x *lifecycleTagXML) (*types.Tag, error) {
 	if x == nil {
 		return nil, nil
 	}
-	key := strings.TrimSpace(x.Key)
+	// Tag predicates match literally; whitespace is part of the key and value.
+	key := x.Key
 	if key == "" {
 		return nil, errors.New("missing lifecycle tag key")
 	}
 	if utf8.RuneCountInString(key) > maxLifecycleTagKeyRunes {
 		return nil, errors.New("lifecycle tag key is too long")
 	}
-	val := strings.TrimSpace(x.Value)
+	val := x.Value
 	if utf8.RuneCountInString(val) > maxLifecycleTagValueRunes {
 		return nil, errors.New("lifecycle tag value is too long")
 	}
@@ -198,8 +199,8 @@ func decodeLifecycleTag(x *lifecycleTagXML) (*types.Tag, error) {
 	}, nil
 }
 
-func normalizeLifecyclePrefix(raw string) (string, error) {
-	prefix := strings.TrimSpace(raw)
+func decodeLifecyclePrefix(prefix string) (string, error) {
+	// Trimming a whitespace-only prefix would turn it into a bucket-wide match.
 	if utf8.RuneCountInString(prefix) > maxLifecyclePrefixRunes {
 		return "", errors.New("lifecycle prefix is too long")
 	}
@@ -223,7 +224,7 @@ func decodeLifecycleAnd(x *lifecycleAndXML) (*types.LifecycleRuleAndOperator, er
 	out := &types.LifecycleRuleAndOperator{}
 	var hasPred bool
 	if x.Prefix != nil {
-		prefix, err := normalizeLifecyclePrefix(*x.Prefix)
+		prefix, err := decodeLifecyclePrefix(*x.Prefix)
 		if err != nil {
 			return nil, err
 		}
@@ -301,7 +302,7 @@ func decodeLifecycleFilter(x *lifecycleFilterXML) (*types.LifecycleRuleFilter, e
 	out := &types.LifecycleRuleFilter{}
 	var topLevelPredicates int
 	if x.Prefix != nil {
-		prefix, err := normalizeLifecyclePrefix(*x.Prefix)
+		prefix, err := decodeLifecyclePrefix(*x.Prefix)
 		if err != nil {
 			return nil, err
 		}
@@ -610,7 +611,7 @@ func decodeLifecycleConfigXML(r io.Reader) (*types.BucketLifecycleConfiguration,
 			return nil, fmt.Errorf("rule %d has invalid filter: %w", i, err)
 		}
 		if xr.Prefix != nil {
-			prefix, err := normalizeLifecyclePrefix(*xr.Prefix)
+			prefix, err := decodeLifecyclePrefix(*xr.Prefix)
 			if err != nil {
 				return nil, fmt.Errorf("rule %d has invalid prefix: %w", i, err)
 			}
@@ -723,7 +724,7 @@ func lifecycleRuleLegacyPrefix(r types.LifecycleRule) *string {
 	if !ok || legacy == nil {
 		return nil
 	}
-	return aws.String(strings.TrimSpace(*legacy))
+	return aws.String(*legacy)
 }
 
 func (s *Server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r *http.Request, bucket string) {

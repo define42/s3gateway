@@ -27,13 +27,13 @@ func TestDecodeLifecycleFilterCoverage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("decodeLifecycleFilter(tag) error = %v", err)
 		}
-		if got == nil || got.Tag == nil || aws.ToString(got.Tag.Key) != "k" {
+		if got == nil || got.Tag == nil || aws.ToString(got.Tag.Key) != " k " || aws.ToString(got.Tag.Value) != " v " {
 			t.Fatalf("decodeLifecycleFilter(tag) unexpected output: %+v", got)
 		}
 	})
 
 	t.Run("invalid tag", func(t *testing.T) {
-		_, err := decodeLifecycleFilter(&lifecycleFilterXML{Tag: &lifecycleTagXML{Key: "   ", Value: "v"}})
+		_, err := decodeLifecycleFilter(&lifecycleFilterXML{Tag: &lifecycleTagXML{Key: "", Value: "v"}})
 		if err == nil {
 			t.Fatalf("expected error for missing tag key")
 		}
@@ -188,8 +188,8 @@ func TestLifecycleRuleLegacyPrefixReflectionPath(t *testing.T) {
 	if got == nil {
 		t.Fatalf("lifecycleRuleLegacyPrefix() returned nil")
 	}
-	if *got != "legacy-prefix" {
-		t.Fatalf("lifecycleRuleLegacyPrefix() = %q, want %q", *got, "legacy-prefix")
+	if *got != prefix {
+		t.Fatalf("lifecycleRuleLegacyPrefix() = %q, want %q", *got, prefix)
 	}
 }
 
@@ -360,6 +360,26 @@ func TestDecodeLifecycleConfigLimits(t *testing.T) {
 		{
 			name:     "rejects prefix character limit",
 			body:     "<LifecycleConfiguration><Rule><Status>Enabled</Status><Prefix>" + strings.Repeat("p", maxLifecyclePrefixRunes+1) + "</Prefix></Rule></LifecycleConfiguration>",
+			anyError: true,
+		},
+		{
+			name:      "accepts whitespace prefix at character limit",
+			body:      "<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Prefix>" + strings.Repeat(" ", maxLifecyclePrefixRunes) + "</Prefix></Filter></Rule></LifecycleConfiguration>",
+			wantRules: 1,
+		},
+		{
+			name:     "counts whitespace toward prefix character limit",
+			body:     "<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Prefix>" + strings.Repeat(" ", maxLifecyclePrefixRunes+1) + "</Prefix></Filter></Rule></LifecycleConfiguration>",
+			anyError: true,
+		},
+		{
+			name:     "counts whitespace toward tag key character limit",
+			body:     "<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Tag><Key>" + strings.Repeat(" ", maxLifecycleTagKeyRunes) + "k</Key><Value>v</Value></Tag></Filter></Rule></LifecycleConfiguration>",
+			anyError: true,
+		},
+		{
+			name:     "counts whitespace toward tag value character limit",
+			body:     "<LifecycleConfiguration><Rule><Status>Enabled</Status><Filter><Tag><Key>k</Key><Value>" + strings.Repeat(" ", maxLifecycleTagValueRunes) + "v</Value></Tag></Filter></Rule></LifecycleConfiguration>",
 			anyError: true,
 		},
 		{
