@@ -290,7 +290,9 @@ s3gateway
 ```
 
 The process emits structured JSON logs and shuts down gracefully on `SIGINT`
-or `SIGTERM`.
+or `SIGTERM`. Active HTTP requests can finish and publish Kafka notifications
+during the `HTTP_SHUTDOWN_TIMEOUT` grace period. Kafka clients close after
+the requests drain or HTTP shutdown is forced when that period expires.
 
 ## Features and reference
 

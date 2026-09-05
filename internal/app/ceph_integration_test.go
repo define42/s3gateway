@@ -208,10 +208,11 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	}
 	t.Setenv("S3GATEWAY_PRIVATE_X25519_KEY", s3gatewayPrivateKey)
 
-	httpSrv, _, err := gatewayapp.Boot()
+	httpSrv, _, cleanup, err := gatewayapp.Boot()
 	if err != nil {
 		t.Fatalf("boot s3gateway with ceph upstream: %v", err)
 	}
+	t.Cleanup(cleanup)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

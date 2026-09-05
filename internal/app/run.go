@@ -68,6 +68,7 @@ func run(dependencies runDependencies) int {
 		slog.Error("failed to boot s3 gateway", "error", err)
 		return 1
 	}
+	// Keep shared clients available until HTTP shutdown has finished.
 	defer cleanup()
 
 	shutdownSignalsCtx, stop := dependencies.notifyContext(
@@ -103,13 +104,14 @@ func run(dependencies runDependencies) int {
 		serverErr <- nil
 	}()
 
+	exitCode := 0
 	select {
 	case err := <-serverErr:
+		serverErr = nil
 		if err != nil {
 			slog.Error("server error", "error", err)
-			return 1
+			exitCode = 1
 		}
-		return 0
 	case <-shutdownSignalsCtx.Done():
 		slog.Info("shutdown signal received")
 	}
@@ -125,11 +127,13 @@ func run(dependencies runDependencies) int {
 		_ = httpServer.Close()
 	}
 
-	if err := <-serverErr; err != nil {
-		slog.Error("server shutdown error", "error", err)
-		return 1
+	if serverErr != nil {
+		if err := <-serverErr; err != nil {
+			slog.Error("server shutdown error", "error", err)
+			exitCode = 1
+		}
 	}
-	return 0
+	return exitCode
 }
 
 func listenForGateway(httpServer *http.Server, cfg config.Config) (net.Listener, bool, error) {

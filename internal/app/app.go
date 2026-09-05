@@ -19,11 +19,13 @@ import (
 
 // Boot loads process configuration and constructs the gateway HTTP server and
 // optional Kafka integrations. Configuration failures terminate the process;
-// component initialization failures are returned.
-func Boot() (*http.Server, config.Config, error) {
+// component initialization failures are returned. The caller must invoke the
+// returned cleanup function after HTTP requests have finished. Cleanup is safe
+// to call more than once.
+func Boot() (*http.Server, config.Config, func(), error) {
 	cfg := config.LoadConfig()
-	httpServer, _, err := boot(cfg)
-	return httpServer, cfg, err
+	httpServer, cleanup, err := boot(cfg)
+	return httpServer, cfg, cleanup, err
 }
 
 func boot(cfg config.Config) (*http.Server, func(), error) {
@@ -92,6 +94,5 @@ func boot(cfg config.Config) (*http.Server, func(), error) {
 		cfg,
 		gateway.WithS3Audit(gateway.WithAuth(gateway, adminHandler)),
 	)
-	httpServer.RegisterOnShutdown(cleanup)
 	return httpServer, cleanup, nil
 }

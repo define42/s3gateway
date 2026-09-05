@@ -62,10 +62,11 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	}
 	t.Setenv("S3GATEWAY_PRIVATE_X25519_KEY", s3gatewayPrivateKey)
 
-	httpSrv, cfg, err := gatewayapp.Boot()
+	httpSrv, cfg, cleanup, err := gatewayapp.Boot()
 	if err != nil {
 		t.Fatalf("bootS3Gateway returned error: %v", err)
 	}
+	t.Cleanup(cleanup)
 
 	if cfg.LDAPURL != ldapURL {
 		t.Fatalf("cfg.LDAPURL mismatch: got=%q want=%q", cfg.LDAPURL, ldapURL)

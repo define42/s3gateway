@@ -53,10 +53,11 @@ func TestMinioClientIntegration(t *testing.T) {
 	}
 	t.Setenv("S3GATEWAY_PRIVATE_X25519_KEY", s3gatewayPrivateKey)
 
-	httpSrv, _, err := gatewayapp.Boot()
+	httpSrv, _, cleanup, err := gatewayapp.Boot()
 	if err != nil {
 		t.Fatalf("boot s3gateway: %v", err)
 	}
+	t.Cleanup(cleanup)
 
 	gatewaySrv := httptest.NewTLSServer(httpSrv.Handler)
 	defer gatewaySrv.Close()
