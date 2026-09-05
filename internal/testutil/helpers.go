@@ -3,6 +3,8 @@ package testutil
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -182,9 +184,24 @@ func StartGlauthWithConfig(ctx context.Context, tb testing.TB, cfg string, schem
 	return url, cleanup
 }
 
-// StartMinio starts a MinIO container and returns its endpoint URL plus a cleanup function.
+// StartMinio starts MinIO with HTTPS, adds its generated certificate to the
+// test's AWS_CA_BUNDLE, and returns its endpoint URL plus a cleanup function.
 func StartMinio(ctx context.Context, tb testing.TB, accessKey string, secretKey string) (string, func()) {
 	tb.Helper()
+
+	provider, err := testcontainers.NewDockerProvider()
+	if err != nil {
+		tb.Fatalf("create Docker provider: %v", err)
+	}
+	defer func() { _ = provider.Close() }()
+	dockerHost, err := provider.DaemonHost(ctx)
+	if err != nil {
+		tb.Fatalf("get Docker host for test certificate: %v", err)
+	}
+	certificatePath, keyPath, certificate := writeTestTLSCertificate(tb, dockerHost)
+	TrustTLSCertificate(tb, certificate)
+	roots := x509.NewCertPool()
+	roots.AddCert(certificate)
 
 	req := testcontainers.ContainerRequest{
 		Image:        minioTestImage,
@@ -198,9 +215,16 @@ func StartMinio(ctx context.Context, tb testing.TB, accessKey string, secretKey 
 			"/data",
 			"--address",
 			":9000",
+			"--certs-dir",
+			"/certs",
+		},
+		Files: []testcontainers.ContainerFile{
+			{HostFilePath: certificatePath, ContainerFilePath: "/certs/public.crt", FileMode: 0o644},
+			{HostFilePath: keyPath, ContainerFilePath: "/certs/private.key", FileMode: 0o600},
 		},
 		WaitingFor: wait.ForHTTP("/minio/health/ready").
 			WithPort("9000/tcp").
+			WithTLS(true, &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}).
 			WithStartupTimeout(1 * time.Minute),
 	}
 
@@ -229,7 +253,7 @@ func StartMinio(ctx context.Context, tb testing.TB, accessKey string, secretKey 
 		tb.Fatalf("get mapped port: %v", err)
 	}
 
-	endpoint := fmt.Sprintf("http://%s:%s", host, port.Port())
+	endpoint := fmt.Sprintf("https://%s:%s", host, port.Port())
 
 	return endpoint, cleanup
 }

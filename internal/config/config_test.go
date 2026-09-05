@@ -34,6 +34,7 @@ func setRequiredX25519PrivateKeyEnv(t *testing.T) {
 func TestConfigValidateMatrix(t *testing.T) {
 	base := Config{
 		S3GatewayPrivateX25519Key:     mustTestX25519PrivateKey(t),
+		UpstreamEndpoint:              "https://s3.example",
 		LDAPGroupBaseDN:               "ou=groups,dc=example,dc=com",
 		GroupCacheMaxEntries:          1,
 		LDAPOperationTimeout:          time.Second,
@@ -73,6 +74,11 @@ func TestConfigValidateMatrix(t *testing.T) {
 		mutate  func(*Config)
 		wantMsg string
 	}{
+		{
+			name:    "insecure upstream endpoint",
+			mutate:  func(c *Config) { c.UpstreamEndpoint = "http://s3.example" },
+			wantMsg: "S3_ENDPOINT",
+		},
 		{
 			name:    "missing group container",
 			mutate:  func(c *Config) { c.LDAPGroupBaseDN = "" },
@@ -648,6 +654,35 @@ func TestLoadConfigControlPlaneLimits(t *testing.T) {
 	}
 }
 
+func TestLoadConfigUpstreamSkipCertificateValidation(t *testing.T) {
+	setRequiredX25519PrivateKeyEnv(t)
+	t.Setenv("LDAP_URL", "ldap://ldap.example:389")
+	t.Setenv("LDAP_BASE_DN", "dc=example,dc=com")
+	t.Setenv("LDAP_GROUP_BASE_DN", "ou=groups,dc=example,dc=com")
+	t.Setenv("S3_ENDPOINT", "https://s3.example")
+	t.Setenv("S3_ACCESS_KEY", "access-key")
+	t.Setenv("S3_SECRET_KEY", "secret-key")
+
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "default"},
+		{name: "disabled", value: "false"},
+		{name: "enabled", value: "true", want: true},
+		{name: "whitespace", value: " TRUE ", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("S3_UPSTREAM_TLS_SKIP_VERIFY", tc.value)
+			cfg := LoadConfig()
+			if cfg.UpstreamSkipCertificateValidation != tc.want {
+				t.Fatalf("skip certificate validation = %t, want %t", cfg.UpstreamSkipCertificateValidation, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadConfigSplunkHEC(t *testing.T) {
 	setRequiredX25519PrivateKeyEnv(t)
 	t.Setenv("LDAP_URL", "ldap://ldap.example:389")
@@ -717,7 +752,10 @@ func TestLoadConfigKafkaGlobalTopic(t *testing.T) {
 }
 
 func TestCookieSecretValidation(t *testing.T) {
-	base := Config{LDAPGroupBaseDN: "ou=groups,dc=example,dc=com"}
+	base := Config{
+		LDAPGroupBaseDN:  "ou=groups,dc=example,dc=com",
+		UpstreamEndpoint: "https://s3.example",
+	}
 	base.ApplyDefaults()
 	base.S3GatewayPrivateX25519Key = mustTestX25519PrivateKey(t)
 
@@ -749,5 +787,48 @@ func TestCookieSecretValidation(t *testing.T) {
 		t.Fatalf("short CookieSecret should fail validation")
 	} else if !strings.Contains(err.Error(), "COOKIE_SECRET") {
 		t.Fatalf("expected COOKIE_SECRET in error, got: %v", err)
+	}
+}
+
+func TestValidateUpstreamEndpoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		valid    bool
+	}{
+		{name: "HTTPS", endpoint: "https://s3.example", valid: true},
+		{name: "custom port and path", endpoint: "https://localhost:9000/s3/", valid: true},
+		{name: "escaped path", endpoint: "https://s3.example/base%20path/", valid: true},
+		{name: "IPv4", endpoint: "https://127.0.0.1:9000", valid: true},
+		{name: "IPv6", endpoint: "https://[::1]:9000", valid: true},
+		{name: "uppercase scheme", endpoint: "HTTPS://s3.example", valid: true},
+		{name: "empty"},
+		{name: "HTTP", endpoint: "http://s3.example"},
+		{name: "missing scheme", endpoint: "s3.example:9000"},
+		{name: "relative authority", endpoint: "//s3.example"},
+		{name: "missing host", endpoint: "https:///s3"},
+		{name: "port without host", endpoint: "https://:9000"},
+		{name: "opaque URL", endpoint: "https:s3.example"},
+		{name: "host whitespace", endpoint: "https://s3 .example"},
+		{name: "invalid escape", endpoint: "https://s3.example/%zz"},
+		{name: "invalid port", endpoint: "https://s3.example:abc"},
+		{name: "port out of range", endpoint: "https://s3.example:65536"},
+		{name: "zero port", endpoint: "https://s3.example:0"},
+		{name: "empty port", endpoint: "https://s3.example:"},
+		{name: "missing IPv6 bracket", endpoint: "https://[::1"},
+		{name: "invalid IPv6", endpoint: "https://[not-an-IP]:9000"},
+		{name: "unbracketed IPv6", endpoint: "https://::1"},
+		{name: "embedded credentials", endpoint: "https://user:password@s3.example"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateUpstreamEndpoint(tt.endpoint)
+			if (err == nil) != tt.valid {
+				t.Fatalf("ValidateUpstreamEndpoint(%q) = %v, want valid=%t", tt.endpoint, err, tt.valid)
+			}
+			if err != nil && !strings.Contains(err.Error(), "S3_ENDPOINT") {
+				t.Fatalf("error %q does not identify S3_ENDPOINT", err)
+			}
+		})
 	}
 }

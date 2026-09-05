@@ -11,6 +11,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -183,6 +185,14 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 
 	cephEndpoint, container, terminate := startCephRGW(ctx, t)
 	defer terminate()
+	// The legacy Ceph fixture exposes HTTP only; terminate TLS in front of it
+	// so the gateway still exercises its required HTTPS upstream connection.
+	cephURL, err := url.Parse(cephEndpoint)
+	if err != nil {
+		t.Fatalf("parse Ceph endpoint: %v", err)
+	}
+	cephTLS := testutil.NewTLSServer(t, httputil.NewSingleHostReverseProxy(cephURL))
+	cephEndpoint = cephTLS.URL
 
 	upstreamAccessKey, upstreamSecretKey := cephDemoUserCredentials(ctx, t, container)
 	bucket := fmt.Sprintf("team2-cephgw-%d", time.Now().UnixNano())

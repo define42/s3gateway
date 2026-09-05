@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,18 +17,37 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/define42/s3gateway/internal/config"
+	"github.com/define42/s3gateway/internal/sigv4"
 	"github.com/define42/s3gateway/internal/testutil"
 	"github.com/define42/s3gateway/internal/upstream"
 )
 
 func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func()) {
 	t.Helper()
+	return newGatewayWithRawStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		// Most handler tests inspect object bytes, as an S3 service does after
+		// decoding the SDK's HTTPS checksum trailers. Keep decoding lazy so
+		// streaming and interrupted-upload tests observe the actual read flow.
+		if strings.Contains(r.Header.Get("Content-Encoding"), "aws-chunked") {
+			body, length, err := sigv4.DecodeBodyForS3Write(r, nil)
+			if err != nil {
+				t.Errorf("decode upstream aws-chunked request: %v", err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			r.Body = body
+			r.ContentLength = length
+			r.Header.Set("Content-Length", strconv.FormatInt(length, 10))
+		}
+		h(w, r)
+	})
+}
 
-	upstreamSrv := httptest.NewServer(h)
+func newGatewayWithRawStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func()) {
+	t.Helper()
+
+	upstreamSrv := testutil.NewTLSServer(t, h)
 	ctx := t.Context()
-	// A custom CA bundle cannot be installed into the production factory's
-	// plain *http.Client; it is irrelevant for the local stub anyway.
-	t.Setenv("AWS_CA_BUNDLE", "")
 	// Use the production upstream client factory so unit tests exercise the
 	// same client configuration (e.g. request checksums only when required,
 	// which non-seekable proxied bodies depend on).

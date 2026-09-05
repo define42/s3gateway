@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"sync"
@@ -53,7 +52,8 @@ func TestShutdownPreservesInFlightUploadNotificationIntegration(t *testing.T) {
 		t.Fatalf("parse MinIO endpoint: %v", err)
 	}
 	proxy := httputil.NewSingleHostReverseProxy(minioEndpoint)
-	upstreamGate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	proxy.Transport = testutil.NewHTTPClient(t).Transport
+	upstreamGate := testutil.NewTLSServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut && r.URL.Path == "/"+bucket+"/"+key {
 			signalUploadStarted()
 			select {

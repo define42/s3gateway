@@ -2,6 +2,7 @@ package s3http_test
 
 import (
 	"net/http"
+	"reflect"
 	"testing"
 	"time"
 
@@ -261,6 +262,239 @@ func TestParseChecksumAlgorithmHeader(t *testing.T) {
 			}
 			if err == nil && got != tt.want {
 				t.Fatalf("s3http.ParseChecksumAlgorithmHeader() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseChecksumTypeHeader(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		input   string
+		want    types.ChecksumType
+		wantErr bool
+	}{
+		{name: "empty"},
+		{name: "whitespace", input: " \t "},
+		{name: "full object", input: "FULL_OBJECT", want: types.ChecksumTypeFullObject},
+		{name: "composite", input: "COMPOSITE", want: types.ChecksumTypeComposite},
+		{name: "trimmed case insensitive", input: " full_object ", want: types.ChecksumTypeFullObject},
+		{name: "unsupported", input: "PART", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := s3http.ParseChecksumTypeHeader(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseChecksumTypeHeader() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && got != tt.want {
+				t.Fatalf("ParseChecksumTypeHeader() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseChecksumWriteHeadersSupportedAlgorithms(t *testing.T) {
+	for _, algorithm := range []types.ChecksumAlgorithm{
+		types.ChecksumAlgorithmCrc32,
+		types.ChecksumAlgorithmCrc32c,
+		types.ChecksumAlgorithmCrc64nvme,
+		types.ChecksumAlgorithmSha1,
+		types.ChecksumAlgorithmSha256,
+	} {
+		for _, source := range []string{
+			"x-amz-checksum-algorithm",
+			"x-amz-sdk-checksum-algorithm",
+			"STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER",
+			"STREAMING-UNSIGNED-PAYLOAD-TRAILER",
+		} {
+			t.Run(string(algorithm)+"/"+source, func(t *testing.T) {
+				h := http.Header{}
+				if source[0] == 'x' {
+					h.Set(source, string(algorithm))
+				} else {
+					h.Set("x-amz-content-sha256", source)
+					h.Set("x-amz-trailer", "x-amz-checksum-"+string(algorithm))
+				}
+				got, err := s3http.ParseChecksumWriteHeaders(h)
+				if err != nil {
+					t.Fatalf("ParseChecksumWriteHeaders() error = %v", err)
+				}
+				want := s3http.ChecksumWriteHeaders{ChecksumAlgorithm: algorithm}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("ParseChecksumWriteHeaders() = %#v, want %#v", got, want)
+				}
+			})
+		}
+	}
+}
+
+func TestParseChecksumWriteHeadersCombinations(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		headers map[string][]string
+		want    s3http.ChecksumWriteHeaders
+		wantErr bool
+	}{
+		{name: "empty"},
+		{
+			name: "matching selectors normalized",
+			headers: map[string][]string{
+				"x-amz-checksum-algorithm":     {" crc32c "},
+				"x-amz-sdk-checksum-algorithm": {"CRC32C"},
+			},
+			want: s3http.ChecksumWriteHeaders{ChecksumAlgorithm: types.ChecksumAlgorithmCrc32c},
+		},
+		{
+			name: "conflicting selectors",
+			headers: map[string][]string{
+				"x-amz-checksum-algorithm":     {"CRC32"},
+				"x-amz-sdk-checksum-algorithm": {"CRC32C"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "conflicting repeated selector",
+			headers: map[string][]string{
+				"x-amz-sdk-checksum-algorithm": {"CRC32", "SHA256"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty selector values ignored",
+			headers: map[string][]string{
+				"x-amz-checksum-algorithm":     {" "},
+				"x-amz-sdk-checksum-algorithm": {"", "SHA256", "sha256"},
+			},
+			want: s3http.ChecksumWriteHeaders{ChecksumAlgorithm: types.ChecksumAlgorithmSha256},
+		},
+		{
+			name:    "unsupported SDK selector",
+			headers: map[string][]string{"x-amz-sdk-checksum-algorithm": {"MD5"}},
+			wantErr: true,
+		},
+		{
+			name:    "value without selector remains value only",
+			headers: map[string][]string{"x-amz-checksum-crc32": {"  AAAAAA== "}},
+			want:    s3http.ChecksumWriteHeaders{ChecksumCRC32: aws.String("AAAAAA==")},
+		},
+		{
+			name: "matching selector and value",
+			headers: map[string][]string{
+				"x-amz-sdk-checksum-algorithm": {"CRC32"},
+				"x-amz-checksum-crc32":         {"AAAAAA=="},
+			},
+			want: s3http.ChecksumWriteHeaders{
+				ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+				ChecksumCRC32:     aws.String("AAAAAA=="),
+			},
+		},
+		{
+			name: "selector and value disagree",
+			headers: map[string][]string{
+				"x-amz-sdk-checksum-algorithm": {"SHA256"},
+				"x-amz-checksum-crc32":         {"AAAAAA=="},
+			},
+			wantErr: true,
+		},
+		{
+			name: "multiple value headers",
+			headers: map[string][]string{
+				"x-amz-checksum-crc32":  {"AAAAAA=="},
+				"x-amz-checksum-crc32c": {"AAAAAA=="},
+			},
+			wantErr: true,
+		},
+		{
+			name: "trailer selector duplicates and unrelated fields",
+			headers: map[string][]string{
+				"x-amz-content-sha256":         {"STREAMING-UNSIGNED-PAYLOAD-TRAILER"},
+				"x-amz-sdk-checksum-algorithm": {"CRC32"},
+				"x-amz-trailer":                {" , X-Amz-Checksum-CRC32, x-amz-trailer-signature", "x-amz-checksum-crc32"},
+			},
+			want: s3http.ChecksumWriteHeaders{ChecksumAlgorithm: types.ChecksumAlgorithmCrc32},
+		},
+		{
+			name: "trailer conflicts with selector",
+			headers: map[string][]string{
+				"x-amz-content-sha256":         {"STREAMING-UNSIGNED-PAYLOAD-TRAILER"},
+				"x-amz-sdk-checksum-algorithm": {"CRC32"},
+				"x-amz-trailer":                {"x-amz-checksum-sha256"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "trailer conflicts with value header",
+			headers: map[string][]string{
+				"x-amz-content-sha256": {"STREAMING-UNSIGNED-PAYLOAD-TRAILER"},
+				"x-amz-checksum-crc32": {"AAAAAA=="},
+				"x-amz-trailer":        {"x-amz-checksum-sha256"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "matching trailer and value header",
+			headers: map[string][]string{
+				"x-amz-content-sha256": {"STREAMING-UNSIGNED-PAYLOAD-TRAILER"},
+				"x-amz-checksum-crc32": {"AAAAAA=="},
+				"x-amz-trailer":        {"x-amz-checksum-crc32"},
+			},
+			want: s3http.ChecksumWriteHeaders{
+				ChecksumAlgorithm: types.ChecksumAlgorithmCrc32,
+				ChecksumCRC32:     aws.String("AAAAAA=="),
+			},
+		},
+		{
+			name: "multiple trailer algorithms",
+			headers: map[string][]string{
+				"x-amz-content-sha256": {"STREAMING-UNSIGNED-PAYLOAD-TRAILER"},
+				"x-amz-trailer":        {"x-amz-checksum-crc32,x-amz-checksum-sha256"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "unsupported checksum trailer",
+			headers: map[string][]string{
+				"x-amz-content-sha256": {"STREAMING-UNSIGNED-PAYLOAD-TRAILER"},
+				"x-amz-trailer":        {"x-amz-checksum-md5"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty checksum trailer algorithm",
+			headers: map[string][]string{
+				"x-amz-content-sha256": {"STREAMING-UNSIGNED-PAYLOAD-TRAILER"},
+				"x-amz-trailer":        {"x-amz-checksum-"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "ordinary request does not infer from trailer",
+			headers: map[string][]string{
+				"x-amz-content-sha256": {"UNSIGNED-PAYLOAD"},
+				"x-amz-trailer":        {"x-amz-checksum-crc32"},
+			},
+		},
+		{
+			name: "signed chunks without verified trailers do not infer",
+			headers: map[string][]string{
+				"x-amz-content-sha256": {"STREAMING-AWS4-HMAC-SHA256-PAYLOAD"},
+				"x-amz-trailer":        {"x-amz-checksum-crc32"},
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := http.Header{}
+			for name, values := range tt.headers {
+				for _, value := range values {
+					h.Add(name, value)
+				}
+			}
+			got, err := s3http.ParseChecksumWriteHeaders(h)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseChecksumWriteHeaders() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("ParseChecksumWriteHeaders() = %#v, want %#v", got, tt.want)
 			}
 		})
 	}

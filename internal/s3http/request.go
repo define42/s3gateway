@@ -330,35 +330,108 @@ func ParseChecksumAlgorithmHeader(v string) (types.ChecksumAlgorithm, error) {
 	}
 }
 
+// ParseChecksumTypeHeader parses an optional checksum type. FULL_OBJECT and
+// COMPOSITE are accepted case-insensitively.
+func ParseChecksumTypeHeader(v string) (types.ChecksumType, error) {
+	raw := strings.TrimSpace(v)
+	switch strings.ToUpper(raw) {
+	case "":
+		return "", nil
+	case "FULL_OBJECT":
+		return types.ChecksumTypeFullObject, nil
+	case "COMPOSITE":
+		return types.ChecksumTypeComposite, nil
+	default:
+		return "", fmt.Errorf("unsupported checksum type %q", raw)
+	}
+}
+
 // ParseChecksumWriteHeaders extracts the selected algorithm and checksum value
-// headers. It rejects requests containing more than one checksum value header.
+// headers, accepting either algorithm-selection header. For verified streaming
+// trailer payloads, a declared checksum trailer selects the upstream algorithm
+// while value fields remain unset unless supplied as request headers. Conflicting
+// algorithms and multiple checksum value headers are rejected.
 func ParseChecksumWriteHeaders(h http.Header) (ChecksumWriteHeaders, error) {
 	out := ChecksumWriteHeaders{}
-	var err error
-	out.ChecksumAlgorithm, err = ParseChecksumAlgorithmHeader(h.Get("x-amz-checksum-algorithm"))
-	if err != nil {
-		return out, err
+	for _, name := range []string{"x-amz-checksum-algorithm", "x-amz-sdk-checksum-algorithm"} {
+		for _, value := range h.Values(name) {
+			algorithm, err := ParseChecksumAlgorithmHeader(value)
+			if err != nil {
+				return out, err
+			}
+			if algorithm == "" {
+				continue
+			}
+			if out.ChecksumAlgorithm != "" && out.ChecksumAlgorithm != algorithm {
+				return out, errors.New("conflicting checksum algorithm headers")
+			}
+			out.ChecksumAlgorithm = algorithm
+		}
 	}
 
 	var setCount int
-	setField := func(v string) *string {
+	var valueAlgorithm types.ChecksumAlgorithm
+	setField := func(v string, algorithm types.ChecksumAlgorithm) *string {
 		s := strings.TrimSpace(v)
 		if s == "" {
 			return nil
 		}
 		setCount++
+		valueAlgorithm = algorithm
 		return aws.String(s)
 	}
-	out.ChecksumCRC32 = setField(h.Get("x-amz-checksum-crc32"))
-	out.ChecksumCRC32C = setField(h.Get("x-amz-checksum-crc32c"))
-	out.ChecksumCRC64NVME = setField(h.Get("x-amz-checksum-crc64nvme"))
-	out.ChecksumSHA1 = setField(h.Get("x-amz-checksum-sha1"))
-	out.ChecksumSHA256 = setField(h.Get("x-amz-checksum-sha256"))
+	out.ChecksumCRC32 = setField(h.Get("x-amz-checksum-crc32"), types.ChecksumAlgorithmCrc32)
+	out.ChecksumCRC32C = setField(h.Get("x-amz-checksum-crc32c"), types.ChecksumAlgorithmCrc32c)
+	out.ChecksumCRC64NVME = setField(h.Get("x-amz-checksum-crc64nvme"), types.ChecksumAlgorithmCrc64nvme)
+	out.ChecksumSHA1 = setField(h.Get("x-amz-checksum-sha1"), types.ChecksumAlgorithmSha1)
+	out.ChecksumSHA256 = setField(h.Get("x-amz-checksum-sha256"), types.ChecksumAlgorithmSha256)
 
 	if setCount > 1 {
 		return out, errors.New("multiple checksum value headers are not allowed")
 	}
+	trailerAlgorithm, err := checksumTrailerAlgorithm(h)
+	if err != nil {
+		return out, err
+	}
+	if trailerAlgorithm != "" {
+		if out.ChecksumAlgorithm != "" && out.ChecksumAlgorithm != trailerAlgorithm {
+			return out, errors.New("checksum trailer does not match the selected algorithm")
+		}
+		out.ChecksumAlgorithm = trailerAlgorithm
+	}
+	if valueAlgorithm != "" && out.ChecksumAlgorithm != "" && valueAlgorithm != out.ChecksumAlgorithm {
+		return out, errors.New("checksum value header does not match the selected algorithm")
+	}
 	return out, nil
+}
+
+func checksumTrailerAlgorithm(h http.Header) (types.ChecksumAlgorithm, error) {
+	// Match the modes whose declared checksums DecodeBodyForS3Write verifies.
+	switch strings.ToUpper(strings.TrimSpace(h.Get("x-amz-content-sha256"))) {
+	case "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER", "STREAMING-UNSIGNED-PAYLOAD-TRAILER":
+	default:
+		return "", nil
+	}
+
+	var selected types.ChecksumAlgorithm
+	for _, value := range h.Values("x-amz-trailer") {
+		for name := range strings.SplitSeq(value, ",") {
+			name = strings.ToLower(strings.TrimSpace(name))
+			algorithmName, isChecksum := strings.CutPrefix(name, "x-amz-checksum-")
+			if !isChecksum {
+				continue
+			}
+			algorithm, err := ParseChecksumAlgorithmHeader(algorithmName)
+			if err != nil || algorithm == "" {
+				return "", fmt.Errorf("unsupported checksum trailer %q", name)
+			}
+			if selected != "" && selected != algorithm {
+				return "", errors.New("multiple checksum trailer algorithms are not allowed")
+			}
+			selected = algorithm
+		}
+	}
+	return selected, nil
 }
 
 // ParseChecksumMode parses the optional x-amz-checksum-mode value. ENABLED is

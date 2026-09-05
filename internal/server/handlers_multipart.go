@@ -21,25 +21,37 @@ import (
 )
 
 const (
-	maxCompleteMultipartBodyBytes = int64(4 * 1024 * 1024)
-	maxCompleteMultipartParts     = 10_000
-	maxCompleteMultipartETagBytes = 256
+	maxUploadPartSize                 = int64(5 * 1024 * 1024 * 1024) // 5 GiB
+	maxCompleteMultipartBodyBytes     = int64(4 * 1024 * 1024)
+	maxCompleteMultipartParts         = 10_000
+	maxCompleteMultipartETagBytes     = 256
+	maxCompleteMultipartChecksumBytes = 256
 )
 
 var completeMultipartDecodeLimits = s3xml.DecodeLimits{
 	MaxBodyBytes:      maxCompleteMultipartBodyBytes,
 	MaxDepth:          8,
-	MaxElements:       50_000,
+	MaxElements:       8*maxCompleteMultipartParts + 1,
 	MaxAttributes:     16,
 	MaxAttributeBytes: 2048,
 	ElementLimits: map[string]int{
-		"Part":       maxCompleteMultipartParts,
-		"PartNumber": maxCompleteMultipartParts,
-		"ETag":       maxCompleteMultipartParts,
+		"Part":              maxCompleteMultipartParts,
+		"PartNumber":        maxCompleteMultipartParts,
+		"ETag":              maxCompleteMultipartParts,
+		"ChecksumCRC32":     maxCompleteMultipartParts,
+		"ChecksumCRC32C":    maxCompleteMultipartParts,
+		"ChecksumCRC64NVME": maxCompleteMultipartParts,
+		"ChecksumSHA1":      maxCompleteMultipartParts,
+		"ChecksumSHA256":    maxCompleteMultipartParts,
 	},
 	FieldByteLimits: map[string]int{
-		"PartNumber": 16,
-		"ETag":       maxCompleteMultipartETagBytes,
+		"PartNumber":        16,
+		"ETag":              maxCompleteMultipartETagBytes,
+		"ChecksumCRC32":     maxCompleteMultipartChecksumBytes,
+		"ChecksumCRC32C":    maxCompleteMultipartChecksumBytes,
+		"ChecksumCRC64NVME": maxCompleteMultipartChecksumBytes,
+		"ChecksumSHA1":      maxCompleteMultipartChecksumBytes,
+		"ChecksumSHA256":    maxCompleteMultipartChecksumBytes,
 	},
 }
 
@@ -140,8 +152,13 @@ func (s *Server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 type completeMultipartUpload struct {
 	XMLName xml.Name `xml:"CompleteMultipartUpload"`
 	Parts   []struct {
-		PartNumber int32  `xml:"PartNumber"`
-		ETag       string `xml:"ETag"`
+		PartNumber        int32   `xml:"PartNumber"`
+		ETag              string  `xml:"ETag"`
+		ChecksumCRC32     *string `xml:"ChecksumCRC32"`
+		ChecksumCRC32C    *string `xml:"ChecksumCRC32C"`
+		ChecksumCRC64NVME *string `xml:"ChecksumCRC64NVME"`
+		ChecksumSHA1      *string `xml:"ChecksumSHA1"`
+		ChecksumSHA256    *string `xml:"ChecksumSHA256"`
 	} `xml:"Part"`
 }
 
@@ -183,12 +200,18 @@ func (s *Server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum headers")
 		return
 	}
+	checksumType, err := s3http.ParseChecksumTypeHeader(r.Header.Get("x-amz-checksum-type"))
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum type")
+		return
+	}
 
 	in := &s3.CreateMultipartUploadInput{
-		Bucket:   &bucket,
-		Key:      &key,
-		Metadata: meta,
-		Expires:  expires,
+		Bucket:       &bucket,
+		Key:          &key,
+		Metadata:     meta,
+		Expires:      expires,
+		ChecksumType: checksumType,
 	}
 	if ct != "" {
 		in.ContentType = &ct
@@ -209,6 +232,12 @@ func (s *Server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 	if err != nil {
 		s3http.WriteUpstreamError(w, err)
 		return
+	}
+	if out.ChecksumAlgorithm != "" {
+		w.Header().Set("x-amz-checksum-algorithm", string(out.ChecksumAlgorithm))
+	}
+	if out.ChecksumType != "" {
+		w.Header().Set("x-amz-checksum-type", string(out.ChecksumType))
 	}
 
 	xw := s3xml.BeginResponse(w, http.StatusOK)
@@ -247,6 +276,10 @@ func (s *Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 		return
 	}
 	defer func() { _ = body.Close() }()
+	if cl > maxUploadPartSize {
+		s3xml.WriteError(w, http.StatusBadRequest, "EntityTooLarge", "Multipart parts cannot exceed 5 GiB")
+		return
+	}
 	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := s3http.ParseSSECustomerHeaders(r.Header)
 	if err != nil {
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
@@ -303,6 +336,21 @@ func (s *Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 	if out.ETag != nil {
 		w.Header().Set("ETag", *out.ETag)
 	}
+	if out.ChecksumCRC32 != nil {
+		w.Header().Set("x-amz-checksum-crc32", *out.ChecksumCRC32)
+	}
+	if out.ChecksumCRC32C != nil {
+		w.Header().Set("x-amz-checksum-crc32c", *out.ChecksumCRC32C)
+	}
+	if out.ChecksumCRC64NVME != nil {
+		w.Header().Set("x-amz-checksum-crc64nvme", *out.ChecksumCRC64NVME)
+	}
+	if out.ChecksumSHA1 != nil {
+		w.Header().Set("x-amz-checksum-sha1", *out.ChecksumSHA1)
+	}
+	if out.ChecksumSHA256 != nil {
+		w.Header().Set("x-amz-checksum-sha256", *out.ChecksumSHA256)
+	}
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -353,6 +401,12 @@ func (s *Server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 	xw.Elem("NextPartNumberMarker", aws.ToString(out.NextPartNumberMarker))
 	xw.ElemInt("MaxParts", int64(aws.ToInt32(out.MaxParts)))
 	xw.ElemBool("IsTruncated", aws.ToBool(out.IsTruncated))
+	if out.ChecksumAlgorithm != "" {
+		xw.Elem("ChecksumAlgorithm", string(out.ChecksumAlgorithm))
+	}
+	if out.ChecksumType != "" {
+		xw.Elem("ChecksumType", string(out.ChecksumType))
+	}
 	for _, p := range out.Parts {
 		xw.Start("Part")
 		xw.ElemInt("PartNumber", int64(aws.ToInt32(p.PartNumber)))
@@ -363,12 +417,27 @@ func (s *Server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 			xw.Elem("ETag", *p.ETag)
 		}
 		xw.ElemInt("Size", aws.ToInt64(p.Size))
+		if p.ChecksumCRC32 != nil {
+			xw.Elem("ChecksumCRC32", *p.ChecksumCRC32)
+		}
+		if p.ChecksumCRC32C != nil {
+			xw.Elem("ChecksumCRC32C", *p.ChecksumCRC32C)
+		}
+		if p.ChecksumCRC64NVME != nil {
+			xw.Elem("ChecksumCRC64NVME", *p.ChecksumCRC64NVME)
+		}
+		if p.ChecksumSHA1 != nil {
+			xw.Elem("ChecksumSHA1", *p.ChecksumSHA1)
+		}
+		if p.ChecksumSHA256 != nil {
+			xw.Elem("ChecksumSHA256", *p.ChecksumSHA256)
+		}
 		xw.End("Part")
 	}
 	xw.End("ListPartsResult")
 }
 
-// CompleteMultipartUpload requires PartNumber + ETag for each part.
+// CompleteMultipartUpload preserves each part's ETag and optional checksums.
 func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request, bucket, key, uploadID string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanWrite(rules, bucket) {
@@ -380,6 +449,25 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 	if ifMatch != "" && ifNoneMatch != "" {
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "If-Match and If-None-Match cannot both be set")
 		return
+	}
+	checksum, err := s3http.ParseChecksumWriteHeaders(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum headers")
+		return
+	}
+	checksumType, err := s3http.ParseChecksumTypeHeader(r.Header.Get("x-amz-checksum-type"))
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum type")
+		return
+	}
+	var objectSize *int64
+	if raw := strings.TrimSpace(r.Header.Get("x-amz-mp-object-size")); raw != "" {
+		size, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || size < 0 {
+			s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid multipart object size")
+			return
+		}
+		objectSize = aws.Int64(size)
 	}
 
 	cmu, err := decodeCompleteMultipartUpload(r.Body)
@@ -406,8 +494,13 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		}
 		pn := p.PartNumber
 		parts = append(parts, types.CompletedPart{
-			ETag:       &etag,
-			PartNumber: aws.Int32(pn),
+			ETag:              &etag,
+			PartNumber:        aws.Int32(pn),
+			ChecksumCRC32:     p.ChecksumCRC32,
+			ChecksumCRC32C:    p.ChecksumCRC32C,
+			ChecksumCRC64NVME: p.ChecksumCRC64NVME,
+			ChecksumSHA1:      p.ChecksumSHA1,
+			ChecksumSHA256:    p.ChecksumSHA256,
 		})
 	}
 	if len(parts) == 0 {
@@ -425,6 +518,13 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		MultipartUpload: &types.CompletedMultipartUpload{
 			Parts: parts,
 		},
+		ChecksumCRC32:     checksum.ChecksumCRC32,
+		ChecksumCRC32C:    checksum.ChecksumCRC32C,
+		ChecksumCRC64NVME: checksum.ChecksumCRC64NVME,
+		ChecksumSHA1:      checksum.ChecksumSHA1,
+		ChecksumSHA256:    checksum.ChecksumSHA256,
+		ChecksumType:      checksumType,
+		MpuObjectSize:     objectSize,
 	}
 	if ifMatch != "" {
 		in.IfMatch = aws.String(ifMatch)
@@ -458,6 +558,24 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		xw.Start("ETag")
 		xw.RawString(`"` + s3xml.Escape(strings.Trim(*out.ETag, `"`)) + `"`)
 		xw.End("ETag")
+	}
+	if out.ChecksumCRC32 != nil {
+		xw.Elem("ChecksumCRC32", *out.ChecksumCRC32)
+	}
+	if out.ChecksumCRC32C != nil {
+		xw.Elem("ChecksumCRC32C", *out.ChecksumCRC32C)
+	}
+	if out.ChecksumCRC64NVME != nil {
+		xw.Elem("ChecksumCRC64NVME", *out.ChecksumCRC64NVME)
+	}
+	if out.ChecksumSHA1 != nil {
+		xw.Elem("ChecksumSHA1", *out.ChecksumSHA1)
+	}
+	if out.ChecksumSHA256 != nil {
+		xw.Elem("ChecksumSHA256", *out.ChecksumSHA256)
+	}
+	if out.ChecksumType != "" {
+		xw.Elem("ChecksumType", string(out.ChecksumType))
 	}
 	xw.End("CompleteMultipartUploadResult")
 }

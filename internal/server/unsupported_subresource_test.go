@@ -62,6 +62,9 @@ func TestAWSSDKClientDefaultTrailerUpload(t *testing.T) {
 
 	accessKey, secretKey := mustGatewayCredentials(t, gw, "testuser", "dogood")
 
+	// The gateway client already trusts its server's exact certificate. Its
+	// plain HTTP client cannot also accept the separate upstream CA bundle.
+	t.Setenv("AWS_CA_BUNDLE", "")
 	awsCfg, err := awsconfig.LoadDefaultConfig(t.Context(),
 		awsconfig.WithRegion("us-east-1"),
 		awsconfig.WithBaseEndpoint(gwSrv.URL),

@@ -493,8 +493,8 @@ var (
 	ErrInvalidChunkSignature = errors.New("invalid aws-chunked chunk signature")
 	// ErrInvalidChunkHeader indicates malformed aws-chunked size or framing data.
 	ErrInvalidChunkHeader = errors.New("invalid aws-chunked chunk header")
-	// ErrInvalidTrailer indicates malformed or excessive aws-chunked trailer
-	// fields.
+	// ErrInvalidTrailer indicates missing, malformed, or excessive aws-chunked
+	// trailer fields.
 	ErrInvalidTrailer = errors.New("invalid aws-chunked trailer")
 	// ErrMissingTrailerSignature indicates that signed-trailer mode ended without
 	// x-amz-trailer-signature.
@@ -1305,15 +1305,20 @@ func (r *awsChunkedReader) discardOptionalBlankLine() {
 }
 
 func (r *awsChunkedReader) verifyTrailingChecksums(trailers [][2]string) error {
-	for _, kv := range trailers {
-		for _, cs := range r.checksums {
+	for _, cs := range r.checksums {
+		found := false
+		for _, kv := range trailers {
 			if cs.name != kv[0] {
 				continue
 			}
+			found = true
 			want := base64.StdEncoding.EncodeToString(cs.hash.Sum(nil))
 			if kv[1] != want {
 				return fmt.Errorf("%w: %s", ErrTrailerChecksumMismatch, cs.name)
 			}
+		}
+		if !found {
+			return fmt.Errorf("%w: missing %s", ErrInvalidTrailer, cs.name)
 		}
 	}
 	return nil

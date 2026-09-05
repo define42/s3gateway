@@ -224,7 +224,11 @@ The services are available at:
 | --- | --- | --- |
 | s3gateway S3 endpoint | `http://localhost:8080` | Generated from an LDAP username and password |
 | s3gateway admin console | `http://localhost:8080/login` | `testuser` / `dogood` or `readonly` / `dogood` |
-| MinIO console | `http://localhost:9001` | `minioadmin` / `minioadmin` |
+| MinIO console | `https://localhost:9001` | `minioadmin` / `minioadmin` |
+
+The local stack generates a development certificate for MinIO and configures
+the gateway to trust it. The browser may require trusting that certificate
+before opening the MinIO console.
 
 `testuser` has full access to the `team2` and `team8` bucket namespaces.
 `readonly` has read-only access to `team2`.
@@ -327,6 +331,14 @@ They are invalidated on restart and are not shared between gateway replicas.
 Set `COOKIE_SECRET` to the same strong value on persistent deployments so the
 cookie encryption keys do not change on every restart.
 
+### Upload checksums
+
+Multipart uploads preserve CRC32, CRC32C, CRC64NVME, SHA1, and SHA256
+checksums through initiation, part uploads, listing, and completion.
+The gateway requires HTTPS to the upstream S3 service and streams generated
+checksums as trailing headers. Uploads do not require temporary files or
+buffering entire parts in memory. The upstream must support S3 checksum trailers.
+
 ### Upload metadata
 
 `PutObject`, `CreateMultipartUpload`, admin-console uploads, and `CopyObject`
@@ -348,7 +360,9 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 | `LDAP_URL` | Yes | — | LDAP URL, for example `ldaps://ldap.example.com:636` |
 | `LDAP_BASE_DN` | Yes | — | Search base, for example `dc=example,dc=com` |
 | `LDAP_GROUP_BASE_DN` | Yes | — | Trusted group container, for example `ou=S3GatewayGroups,dc=example,dc=com`; only direct child groups grant permissions |
-| `S3_ENDPOINT` | Yes | — | Upstream S3-compatible endpoint |
+| `S3_ENDPOINT` | Yes | — | Absolute HTTPS URL of the upstream S3-compatible service; HTTP is rejected |
+| `S3_UPSTREAM_TLS_SKIP_VERIFY` | No | `false` | Set to `true` to skip the upstream TLS certificate chain and hostname checks. HTTPS remains required |
+| `AWS_CA_BUNDLE` | No | System trust store | Path to a PEM CA bundle for an upstream using private or self-signed certificates |
 | `S3_ACCESS_KEY` | Yes | — | Upstream S3 access key; this is not a client gateway credential |
 | `S3_SECRET_KEY` | Yes | — | Upstream S3 secret key |
 | `LISTEN_ADDR` | No | `:8080` | Plain HTTP listen address when ACME is disabled |

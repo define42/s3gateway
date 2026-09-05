@@ -445,6 +445,78 @@ func TestDecodeUnsignedPayloadTrailerTruncatedChunk(t *testing.T) {
 	}
 }
 
+func TestDecodeRequiresDeclaredChecksumTrailer(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    string
+		trailer string
+	}{
+		{
+			name: "unsigned missing trailer",
+			mode: sigv4.StreamingUnsignedPayloadTrailer,
+		},
+		{
+			name:    "unsigned unrelated trailer",
+			mode:    sigv4.StreamingUnsignedPayloadTrailer,
+			trailer: "x-amz-meta-other:value\n",
+		},
+		{
+			name: "signed missing trailer",
+			mode: sigv4.StreamingSignedPayloadTrailer,
+		},
+		{
+			name:    "signed unrelated trailer",
+			mode:    sigv4.StreamingSignedPayloadTrailer,
+			trailer: "x-amz-meta-other:value\n",
+		},
+	}
+	for _, tc := range tests {
+		for _, payload := range []string{"", "guarded payload"} {
+			t.Run(fmt.Sprintf("%s/bytes=%d", tc.name, len(payload)), func(t *testing.T) {
+				body := ""
+				var verifier *sigv4.AWSChunkSignatureVerifier
+				if tc.mode == sigv4.StreamingSignedPayloadTrailer {
+					auth := newTestAuth()
+					previous := strings.ToLower(auth.SignatureHex)
+					if payload != "" {
+						previous = signTestChunk(auth, previous, []byte(payload))
+						body = fmt.Sprintf("%x;chunk-signature=%s\r\n%s\r\n", len(payload), previous, payload)
+					}
+					finalSig := signTestChunk(auth, previous, nil)
+					body += "0;chunk-signature=" + finalSig + "\r\n" + tc.trailer +
+						"x-amz-trailer-signature:" + signTestTrailer(auth, finalSig, tc.trailer) + "\r\n\r\n"
+					verifier = sigv4.NewAWSChunkSignatureVerifier(auth, testSecret)
+				} else {
+					if payload != "" {
+						body = fmt.Sprintf("%x\r\n%s\r\n", len(payload), payload)
+					}
+					body += "0\r\n" + tc.trailer + "\r\n"
+				}
+				req := newStreamingRequest(tc.mode, body, len(payload), "x-amz-checksum-crc32")
+				rc, _, err := sigv4.DecodeBodyForS3Write(req, verifier)
+				if rc != nil {
+					defer rc.Close()
+				}
+				if payload == "" {
+					if !errors.Is(err, sigv4.ErrInvalidTrailer) {
+						t.Fatalf("empty payload must reject the missing checksum before upstream starts, got %v", err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("decode setup: %v", err)
+				}
+				// Match the upstream transport's fixed-length body copy: the
+				// missing checksum must leave that body one byte short.
+				n, err := io.CopyN(io.Discard, rc, int64(len(payload)))
+				if !errors.Is(err, sigv4.ErrInvalidTrailer) || n != int64(len(payload))-1 {
+					t.Fatalf("delivered %d bytes with error %v, want %d and invalid trailer", n, err, len(payload)-1)
+				}
+			})
+		}
+	}
+}
+
 // TestTrailerGuardWithholdsFinalByteUntilValidation proves the property the
 // upstream write depends on: the decoded stream never delivers its full
 // Content-Length worth of bytes unless end-of-stream validation passed, so a

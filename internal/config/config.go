@@ -47,11 +47,12 @@ type Config struct {
 	AuthTrustedCredentialTTL      time.Duration
 	TrustedProxyCIDRs             []string
 
-	UpstreamEndpoint       string
-	UpstreamRegion         string
-	UpstreamAccessKey      string
-	UpstreamSecretKey      string
-	UpstreamForcePathStyle bool
+	UpstreamEndpoint                  string
+	UpstreamRegion                    string
+	UpstreamAccessKey                 string
+	UpstreamSecretKey                 string
+	UpstreamForcePathStyle            bool
+	UpstreamSkipCertificateValidation bool
 
 	CookieSecret string        // admin web-session secret seed; when empty, ephemeral random keys are used (sessions lost on restart)
 	SigV4MaxSkew time.Duration // max absolute request age/skew based on x-amz-date
@@ -250,11 +251,40 @@ func defaultReadinessAllowedCIDRs() []string {
 	return []string{"127.0.0.0/8", "::1/128"}
 }
 
-// Validate checks numeric bounds and cross-field requirements. It expects
+// ValidateUpstreamEndpoint requires an absolute HTTPS URL with a valid host.
+// Paths and custom ports are supported for S3-compatible endpoints.
+func ValidateUpstreamEndpoint(endpoint string) error {
+	endpointURL, err := url.Parse(endpoint)
+	if err != nil || endpointURL.Scheme != "https" || endpointURL.Hostname() == "" || endpointURL.Opaque != "" {
+		return errors.New("S3_ENDPOINT must be an absolute HTTPS URL with a valid host")
+	}
+	if endpointURL.User != nil {
+		return errors.New("S3_ENDPOINT must not contain user information")
+	}
+	if strings.Contains(endpointURL.Hostname(), ":") || strings.HasPrefix(endpointURL.Host, "[") {
+		if _, err := netip.ParseAddr(endpointURL.Hostname()); err != nil || !strings.HasPrefix(endpointURL.Host, "[") {
+			return errors.New("S3_ENDPOINT must contain a valid host")
+		}
+	}
+	if port := endpointURL.Port(); port != "" {
+		value, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || value == 0 {
+			return errors.New("S3_ENDPOINT port must be between 1 and 65535")
+		}
+	} else if strings.HasSuffix(endpointURL.Host, ":") {
+		return errors.New("S3_ENDPOINT must not contain an empty port")
+	}
+	return nil
+}
+
+// Validate checks endpoints, numeric bounds, and cross-field requirements. It expects
 // defaults to have been applied when zero values should be accepted.
 func (cfg Config) Validate() error {
 	if cfg.S3GatewayPrivateX25519Key == nil {
 		return errors.New("S3GATEWAY_PRIVATE_X25519_KEY is required")
+	}
+	if err := ValidateUpstreamEndpoint(cfg.UpstreamEndpoint); err != nil {
+		return err
 	}
 	if _, err := cfg.LDAPGroupContainerDN(); err != nil {
 		return err
@@ -590,11 +620,12 @@ func LoadConfig() Config {
 		AuthTrustedCredentialTTL:      envDuration("AUTH_TRUSTED_CREDENTIAL_TTL", defaultAuthTrustedCredentialTTL),
 		TrustedProxyCIDRs:             envCSV("TRUSTED_PROXY_CIDRS"),
 
-		UpstreamEndpoint:       envRequired("S3_ENDPOINT"),
-		UpstreamRegion:         env("S3_REGION", "us-east-1"),
-		UpstreamAccessKey:      envRequired("S3_ACCESS_KEY"),
-		UpstreamSecretKey:      envRequired("S3_SECRET_KEY"),
-		UpstreamForcePathStyle: strings.EqualFold(env("S3_FORCE_PATH_STYLE", "true"), "true"),
+		UpstreamEndpoint:                  envRequired("S3_ENDPOINT"),
+		UpstreamRegion:                    env("S3_REGION", "us-east-1"),
+		UpstreamAccessKey:                 envRequired("S3_ACCESS_KEY"),
+		UpstreamSecretKey:                 envRequired("S3_SECRET_KEY"),
+		UpstreamForcePathStyle:            strings.EqualFold(env("S3_FORCE_PATH_STYLE", "true"), "true"),
+		UpstreamSkipCertificateValidation: envBool("S3_UPSTREAM_TLS_SKIP_VERIFY", false),
 
 		CookieSecret: env("COOKIE_SECRET", ""),
 		SigV4MaxSkew: envDuration("SIGV4_MAX_SKEW", defaultSigV4MaxSkew),
