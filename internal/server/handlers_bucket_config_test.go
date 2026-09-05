@@ -21,6 +21,101 @@ func stubUpstreamHeadOK(t *testing.T) http.HandlerFunc {
 	}
 }
 
+func assertNoUpstreamACLHeaders(t *testing.T, r *http.Request) {
+	t.Helper()
+	if got := r.Header.Get("x-amz-acl"); got != "" {
+		t.Errorf("upstream request contains x-amz-acl: %q", got)
+	}
+	for name := range r.Header {
+		if strings.HasPrefix(strings.ToLower(name), "x-amz-grant-") {
+			t.Errorf("upstream request contains ACL grant header %q", name)
+		}
+	}
+}
+
+func TestCreateBucketAcceptsOnlyPrivateACLAsNoOp(t *testing.T) {
+	rejectedGateway, rejectedCleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("upstream should not be called for a rejected ACL: %s %s", r.Method, r.URL.String())
+	})
+	defer rejectedCleanup()
+
+	rejected := []struct {
+		name   string
+		mutate func(*http.Request)
+	}{
+		{
+			name: "public canned ACL",
+			mutate: func(r *http.Request) {
+				r.Header.Set("x-amz-acl", "public-read")
+			},
+		},
+		{
+			name: "object-only owner ACL",
+			mutate: func(r *http.Request) {
+				r.Header.Set("x-amz-acl", "bucket-owner-full-control")
+			},
+		},
+		{
+			name: "explicit grant",
+			mutate: func(r *http.Request) {
+				r.Header.Set("x-amz-grant-read", `uri="http://acs.amazonaws.com/groups/global/AllUsers"`)
+			},
+		},
+		{
+			name: "multiple canned ACL values",
+			mutate: func(r *http.Request) {
+				r.Header.Add("x-amz-acl", "private")
+				r.Header.Add("x-amz-acl", "public-read")
+			},
+		},
+	}
+	for _, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, "/team2-bucket", nil)
+			tc.mutate(req)
+			req = reqWithRules(req, fullTeam2Rule())
+			rr := httptest.NewRecorder()
+
+			rejectedGateway.handleCreateBucket(rr, req, "team2-bucket")
+
+			if rr.Code != http.StatusNotImplemented {
+				t.Fatalf("status=%d want=501 body=%s", rr.Code, rr.Body.String())
+			}
+		})
+	}
+
+	acceptedGateway, acceptedCleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		assertNoUpstreamACLHeaders(t, r)
+		w.WriteHeader(http.StatusOK)
+	})
+	defer acceptedCleanup()
+
+	accepted := []struct {
+		name      string
+		cannedACL string
+	}{
+		{name: "no ACL", cannedACL: ""},
+		{name: "private ACL", cannedACL: "private"},
+		{name: "trimmed case-insensitive private ACL", cannedACL: "  PrIvAtE  "},
+	}
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPut, "/team2-bucket", nil)
+			if tc.cannedACL != "" {
+				req.Header.Set("x-amz-acl", tc.cannedACL)
+			}
+			req = reqWithRules(req, fullTeam2Rule())
+			rr := httptest.NewRecorder()
+
+			acceptedGateway.handleCreateBucket(rr, req, "team2-bucket")
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status=%d want=200 body=%s", rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestBucketAndObjectACLReads(t *testing.T) {
 	gw, cleanup := newGatewayWithStubUpstream(t, stubUpstreamHeadOK(t))
 	defer cleanup()

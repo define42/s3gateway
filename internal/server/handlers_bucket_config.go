@@ -89,22 +89,24 @@ func writeCannedFullControlACL(w http.ResponseWriter) {
 	xw.End("AccessControlPolicy")
 }
 
-// aclWriteIsNoOp reports whether a Put*Acl request keeps full control with the
-// owner, i.e. is safe to accept as a no-op. Anything that would grant access
-// to other parties (public/authenticated canned ACLs, explicit grant headers,
-// or an AccessControlPolicy request body) is not.
-func aclWriteIsNoOp(r *http.Request, bucketLevel bool) bool {
-	for name := range r.Header {
+// aclHeadersAreNoOp reports whether ACL-related headers keep control with the
+// gateway's upstream owner. Accepted values are compatibility no-ops and must
+// never be copied into an upstream SDK request.
+func aclHeadersAreNoOp(header http.Header, bucketLevel bool) bool {
+	for name := range header {
 		if strings.HasPrefix(strings.ToLower(name), "x-amz-grant-") {
 			return false
 		}
 	}
-	// An AccessControlPolicy request body may carry grants; a non-zero (or
-	// unknown) length body is therefore not a no-op.
-	if r.ContentLength != 0 {
+	aclValues := header.Values("x-amz-acl")
+	if len(aclValues) > 1 {
 		return false
 	}
-	switch strings.TrimSpace(r.Header.Get("x-amz-acl")) {
+	acl := ""
+	if len(aclValues) == 1 {
+		acl = aclValues[0]
+	}
+	switch strings.ToLower(strings.TrimSpace(acl)) {
 	case "", "private":
 		return true
 	case "bucket-owner-read", "bucket-owner-full-control":
@@ -113,6 +115,37 @@ func aclWriteIsNoOp(r *http.Request, bucketLevel bool) bool {
 	default:
 		return false
 	}
+}
+
+// aclWriteIsNoOp reports whether a Put*Acl request is safe to accept without
+// changing upstream ACL state. An AccessControlPolicy body may carry grants,
+// so a non-zero (or unknown) length is not a no-op.
+func aclWriteIsNoOp(r *http.Request, bucketLevel bool) bool {
+	// An AccessControlPolicy request body may carry grants; a non-zero (or
+	// unknown) length body is therefore not a no-op.
+	if r.ContentLength != 0 {
+		return false
+	}
+	return aclHeadersAreNoOp(r.Header, bucketLevel)
+}
+
+func writeUnsupportedACLError(w http.ResponseWriter, bucketLevel bool) {
+	if bucketLevel {
+		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Only the private canned ACL is supported; access is managed via LDAP groups")
+		return
+	}
+	s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Only owner-retaining canned ACLs are supported; access is managed via LDAP groups")
+}
+
+// requireOwnerRetainingACLHeaders enforces the gateway's authorization model
+// on create, write, and copy operations. The caller must omit ACL fields from
+// the upstream request even when this accepts a value as a compatibility no-op.
+func requireOwnerRetainingACLHeaders(w http.ResponseWriter, r *http.Request, bucketLevel bool) bool {
+	if aclHeadersAreNoOp(r.Header, bucketLevel) {
+		return true
+	}
+	writeUnsupportedACLError(w, bucketLevel)
+	return false
 }
 
 func (s *Server) handleGetBucketACL(w http.ResponseWriter, r *http.Request, bucket string) {
@@ -134,7 +167,7 @@ func (s *Server) handlePutBucketACL(w http.ResponseWriter, r *http.Request, buck
 		return
 	}
 	if !aclWriteIsNoOp(r, true) {
-		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Only the private canned ACL is supported; access is managed via LDAP groups")
+		writeUnsupportedACLError(w, true)
 		return
 	}
 	if !s.requireBucketExists(w, r, bucket) {
@@ -162,7 +195,7 @@ func (s *Server) handlePutObjectACL(w http.ResponseWriter, r *http.Request, buck
 		return
 	}
 	if !aclWriteIsNoOp(r, false) {
-		s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Only owner-retaining canned ACLs are supported; access is managed via LDAP groups")
+		writeUnsupportedACLError(w, false)
 		return
 	}
 	if !s.requireObjectExists(w, r, bucket, key) {

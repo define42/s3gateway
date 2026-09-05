@@ -45,6 +45,9 @@ func (s *Server) handleCreateBucket(w http.ResponseWriter, r *http.Request, buck
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
+	if !requireOwnerRetainingACLHeaders(w, r, true) {
+		return
+	}
 	_, err := s.up.CreateBucket(r.Context(), &s3.CreateBucketInput{Bucket: &bucket})
 	if err != nil {
 		s3http.WriteUpstreamError(w, err)

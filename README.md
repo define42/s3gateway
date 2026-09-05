@@ -638,9 +638,11 @@ readinessProbe:
   `NotImplemented`.
 - Unimplemented S3 subresources such as `?retention`, `?object-lock`, and
   `?select` are rejected before bucket or object dispatch.
-- LDAP groups are the only source of authorization. ACL reads return canned
-  owner `FULL_CONTROL` documents, and only owner-retaining canned ACL writes
-  are accepted as no-ops for client compatibility.
+- LDAP groups are the only source of authorization. Client-supplied ACLs are
+  never forwarded upstream. ACL reads return canned owner `FULL_CONTROL`
+  documents, and only owner-retaining canned ACLs are accepted as no-ops for
+  client compatibility on bucket creation, object writes/copies, multipart
+  initiation, and ACL subresources.
 - For non-streaming signed payloads, the gateway verifies the declared
   `x-amz-content-sha256` digest while streaming and withholds the final byte
   until verification succeeds, so an invalid body cannot complete an upstream

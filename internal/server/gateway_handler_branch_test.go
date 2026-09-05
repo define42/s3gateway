@@ -119,11 +119,18 @@ func TestHandleCopyObjectValidationMatrix(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name: "invalid acl",
+			name: "unsupported acl",
 			mutate: func(req *http.Request) {
-				req.Header.Set("x-amz-acl", "authenticated")
+				req.Header.Set("x-amz-acl", "public-read")
 			},
-			wantStatus: http.StatusBadRequest,
+			wantStatus: http.StatusNotImplemented,
+		},
+		{
+			name: "explicit acl grant",
+			mutate: func(req *http.Request) {
+				req.Header.Set("x-amz-grant-read", `uri="http://acs.amazonaws.com/groups/global/AllUsers"`)
+			},
+			wantStatus: http.StatusNotImplemented,
 		},
 		{
 			name: "invalid request payer",
@@ -176,6 +183,7 @@ func TestHandleCopyObjectRichSuccess(t *testing.T) {
 		if r.URL.Path != "/team2-dst/object.txt" {
 			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
 		}
+		assertNoUpstreamACLHeaders(t, r)
 		w.Header().Set("x-amz-version-id", "dst-v1")
 		w.Header().Set("x-amz-copy-source-version-id", "src-v1")
 		w.Header().Set("x-amz-server-side-encryption", "aws:kms")
@@ -854,6 +862,26 @@ func TestHandlePutObjectBranchMatrix(t *testing.T) {
 		}
 	})
 
+	t.Run("public acl", func(t *testing.T) {
+		req := newReq("payload")
+		req.Header.Set("x-amz-acl", "public-read")
+		rr := httptest.NewRecorder()
+		gwNoUpstream.handlePutObject(rr, req, "team2-dst", "object-put.txt")
+		if rr.Code != http.StatusNotImplemented {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("explicit acl grant", func(t *testing.T) {
+		req := newReq("payload")
+		req.Header.Set("x-amz-grant-read", `uri="http://acs.amazonaws.com/groups/global/AllUsers"`)
+		rr := httptest.NewRecorder()
+		gwNoUpstream.handlePutObject(rr, req, "team2-dst", "object-put.txt")
+		if rr.Code != http.StatusNotImplemented {
+			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
+		}
+	})
+
 	t.Run("streaming without auth context", func(t *testing.T) {
 		req := newReq("payload")
 		req.Header.Set("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD")
@@ -967,6 +995,14 @@ func TestHandlePutObjectBranchMatrix(t *testing.T) {
 	})
 
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		assertNoUpstreamACLHeaders(t, r)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read upstream PutObject body: %v", err)
+		}
+		if got := string(body); got != "payload" {
+			t.Fatalf("upstream PutObject body=%q want=%q", got, "payload")
+		}
 		w.Header().Set("ETag", "\"etag-put\"")
 		w.Header().Set("x-amz-version-id", "v-put")
 		w.Header().Set("x-amz-server-side-encryption", "aws:kms")
@@ -991,13 +1027,14 @@ func TestHandlePutObjectBranchMatrix(t *testing.T) {
 		req := newReq("payload")
 		rr := httptest.NewRecorder()
 		gw.handlePutObject(rr, req, "team2-dst", "object-put.txt")
-		if rr.Code != http.StatusOK && rr.Code != http.StatusBadGateway {
+		if rr.Code != http.StatusOK {
 			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
 		}
 	})
 
 	t.Run("optional request fields branch coverage", func(t *testing.T) {
 		req := newReq("payload")
+		req.Header.Set("x-amz-acl", "private")
 		req.Header.Set("If-None-Match", "\"etag-old\"")
 		req.Header.Set("Content-Type", "text/plain")
 		req.Header.Set("Expires", time.Now().Add(2*time.Hour).UTC().Format(http.TimeFormat))
@@ -1009,7 +1046,7 @@ func TestHandlePutObjectBranchMatrix(t *testing.T) {
 		req.Header.Set("x-amz-server-side-encryption-context", "eyJhIjoiYiJ9")
 		rr := httptest.NewRecorder()
 		gw.handlePutObject(rr, req, "team2-dst", "object-put.txt")
-		if rr.Code != http.StatusOK && rr.Code != http.StatusBadGateway {
+		if rr.Code != http.StatusOK {
 			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
 		}
 	})
@@ -1036,6 +1073,22 @@ func TestCreateCompleteAndListPartsBranchMatrix(t *testing.T) {
 		gwNoUpstream.handleCreateMultipart(rrForbidden, reqForbidden, "team2-dst", "object.txt")
 		if rrForbidden.Code != http.StatusForbidden {
 			t.Fatalf("forbidden status mismatch: got=%d body=%s", rrForbidden.Code, rrForbidden.Body.String())
+		}
+
+		reqPublicACL := newReq()
+		reqPublicACL.Header.Set("x-amz-acl", "public-read")
+		rrPublicACL := httptest.NewRecorder()
+		gwNoUpstream.handleCreateMultipart(rrPublicACL, reqPublicACL, "team2-dst", "object.txt")
+		if rrPublicACL.Code != http.StatusNotImplemented {
+			t.Fatalf("public ACL status mismatch: got=%d body=%s", rrPublicACL.Code, rrPublicACL.Body.String())
+		}
+
+		reqGrant := newReq()
+		reqGrant.Header.Set("x-amz-grant-read", `uri="http://acs.amazonaws.com/groups/global/AllUsers"`)
+		rrGrant := httptest.NewRecorder()
+		gwNoUpstream.handleCreateMultipart(rrGrant, reqGrant, "team2-dst", "object.txt")
+		if rrGrant.Code != http.StatusNotImplemented {
+			t.Fatalf("ACL grant status mismatch: got=%d body=%s", rrGrant.Code, rrGrant.Body.String())
 		}
 
 		reqBadExpires := newReq()
@@ -1083,6 +1136,7 @@ func TestCreateCompleteAndListPartsBranchMatrix(t *testing.T) {
 			if _, ok := r.URL.Query()["uploads"]; !ok {
 				t.Fatalf("expected uploads query in upstream request: %s", r.URL.RawQuery)
 			}
+			assertNoUpstreamACLHeaders(t, r)
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><InitiateMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Bucket>team2-dst</Bucket><Key>object.txt</Key><UploadId>u1</UploadId></InitiateMultipartUploadResult>`))
@@ -1090,6 +1144,7 @@ func TestCreateCompleteAndListPartsBranchMatrix(t *testing.T) {
 		defer cleanup()
 
 		reqSuccess := newReq()
+		reqSuccess.Header.Set("x-amz-acl", "bucket-owner-full-control")
 		reqSuccess.Header.Set("Content-Type", "text/plain")
 		reqSuccess.Header.Set("x-amz-server-side-encryption", "aws:kms")
 		reqSuccess.Header.Set("x-amz-server-side-encryption-aws-kms-key-id", "kms-key")

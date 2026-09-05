@@ -157,6 +157,9 @@ func (s *Server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
+	if !requireOwnerRetainingACLHeaders(w, r, false) {
+		return
+	}
 
 	ct := r.Header.Get("Content-Type")
 	meta := extractAmzMeta(r.Header)

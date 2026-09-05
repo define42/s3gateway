@@ -1333,6 +1333,9 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
+	if !requireOwnerRetainingACLHeaders(w, r, false) {
+		return
+	}
 
 	verifier, err := sigv4.ChunkSignatureVerifierFromRequest(r)
 	if err != nil {
@@ -1534,6 +1537,9 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
+	if !requireOwnerRetainingACLHeaders(w, r, false) {
+		return
+	}
 
 	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
 	ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))
@@ -1571,11 +1577,6 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 	storageClass, err := s3http.ParseStorageClass(r.Header.Get("x-amz-storage-class"))
 	if err != nil {
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-storage-class header")
-		return
-	}
-	acl, err := s3http.ParseObjectCannedACL(r.Header.Get("x-amz-acl"))
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-acl header")
 		return
 	}
 	payer, err := s3http.ParseRequestPayerHeader(r.Header)
@@ -1651,9 +1652,6 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 	}
 	if storageClass != "" {
 		in.StorageClass = storageClass
-	}
-	if acl != "" {
-		in.ACL = acl
 	}
 	if checksumAlgorithm != "" {
 		in.ChecksumAlgorithm = checksumAlgorithm

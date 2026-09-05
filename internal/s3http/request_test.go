@@ -92,32 +92,6 @@ func TestParseStorageClass(t *testing.T) {
 	}
 }
 
-func TestParseObjectCannedACL(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		want    types.ObjectCannedACL
-		wantErr bool
-	}{
-		{name: "empty", input: "", want: "", wantErr: false},
-		{name: "private", input: "private", want: types.ObjectCannedACL("private"), wantErr: false},
-		{name: "public read trimmed case insensitive", input: "  PuBlIc-ReAd ", want: types.ObjectCannedACL("public-read"), wantErr: false},
-		{name: "unsupported", input: "authenticated", want: "", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := s3http.ParseObjectCannedACL(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("s3http.ParseObjectCannedACL() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if err == nil && got != tt.want {
-				t.Fatalf("s3http.ParseObjectCannedACL() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestParseSSEWriteHeaders(t *testing.T) {
 	mkHeader := func(vals map[string]string) http.Header {
 		h := http.Header{}

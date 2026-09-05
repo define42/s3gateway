@@ -117,21 +117,6 @@ func ParseStorageClass(v string) (types.StorageClass, error) {
 	return "", fmt.Errorf("unsupported storage class %q", raw)
 }
 
-// ParseObjectCannedACL parses an optional, case-insensitive x-amz-acl value
-// supported by the AWS SDK.
-func ParseObjectCannedACL(v string) (types.ObjectCannedACL, error) {
-	raw := strings.TrimSpace(v)
-	if raw == "" {
-		return "", nil
-	}
-	for _, allowed := range types.ObjectCannedACL("").Values() {
-		if strings.EqualFold(raw, string(allowed)) {
-			return allowed, nil
-		}
-	}
-	return "", fmt.Errorf("unsupported x-amz-acl %q", raw)
-}
-
 // ParseOptionalHTTPTime parses an HTTP date and normalizes it to UTC. Blank
 // input returns nil without an error.
 func ParseOptionalHTTPTime(v string) (*time.Time, error) {
