@@ -40,6 +40,7 @@ func TestMinioClientIntegration(t *testing.T) {
 	t.Setenv("LISTEN_ADDR", "127.0.0.1:0")
 	t.Setenv("LDAP_URL", ldapURL)
 	t.Setenv("LDAP_BASE_DN", "dc=glauth,dc=com")
+	t.Setenv("LDAP_GROUP_BASE_DN", "ou=groups,dc=glauth,dc=com")
 	t.Setenv("LDAP_DOMAIN", "example.com")
 	t.Setenv("S3_ENDPOINT", minioURL)
 	t.Setenv("S3_REGION", "us-east-1")

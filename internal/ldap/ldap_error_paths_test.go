@@ -57,9 +57,10 @@ func TestFetchGroupsUPNLDAPBindFailed(t *testing.T) {
 	}()
 
 	cfg := config.Config{
-		LDAPURL:    "ldap://" + ln.Addr().String(),
-		BaseDN:     "dc=example,dc=com",
-		LDAPDomain: "example.com",
+		LDAPURL:         "ldap://" + ln.Addr().String(),
+		BaseDN:          "dc=example,dc=com",
+		LDAPGroupBaseDN: "ou=groups,dc=example,dc=com",
+		LDAPDomain:      "example.com",
 	}
 	_, err = FetchGroupsUPN(cfg, "user", "wrongpass")
 	if err == nil {
@@ -97,6 +98,7 @@ func TestFetchGroupsUPNLDAPOperationTimeout(t *testing.T) {
 	cfg := config.Config{
 		LDAPURL:              "ldap://" + ln.Addr().String(),
 		BaseDN:               "dc=example,dc=com",
+		LDAPGroupBaseDN:      "ou=groups,dc=example,dc=com",
 		LDAPDomain:           "example.com",
 		LDAPOperationTimeout: 50 * time.Millisecond,
 	}

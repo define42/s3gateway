@@ -86,6 +86,25 @@ committed to source control or bake them into container images.
 
 ## Authorization
 
+Only LDAP groups directly inside the required `LDAP_GROUP_BASE_DN` container
+can grant access. For example, with
+`LDAP_GROUP_BASE_DN=OU=S3GatewayGroups,DC=example,DC=com`, membership in
+`CN=team2-r,OU=S3GatewayGroups,DC=example,DC=com` grants namespace read access;
+the same CN in another container or a nested OU is ignored. The gateway compares
+parsed DNs case-insensitively before interpreting the group's CN. Malformed DNs
+and group RDNs other than a single non-empty CN are ignored. This restriction
+also applies to `s3gateway-all-r`, and covers S3, Pop, and browser administration.
+
+Protect the container and its groups from untrusted creation, renaming, and
+membership changes, including inherited directory permissions. `LDAP_BASE_DN`
+is still the user-search base; it does not define trusted authorization groups.
+The development Compose stack uses Glauth's `ou=groups,dc=glauth,dc=com` container.
+
+When upgrading, set `LDAP_GROUP_BASE_DN` explicitly and place authorized groups
+directly inside it before restarting every gateway instance. Restarting clears
+cached groups and existing admin sessions. A missing, empty, or malformed group
+container prevents startup; there is no fallback to unrestricted CN matching.
+
 LDAP group names use `<namespace>-<permissions>`. The namespace is the part of
 a bucket name before its first `-`; permissions are one or more letters:
 
@@ -253,6 +272,7 @@ S3 services:
 ```bash
 export LDAP_URL="ldaps://ldap.example.com:636"
 export LDAP_BASE_DN="dc=example,dc=com"
+export LDAP_GROUP_BASE_DN="ou=S3GatewayGroups,dc=example,dc=com"
 export LDAP_DOMAIN="example.com"
 export S3_ENDPOINT="https://s3.example.com"
 export S3_ACCESS_KEY="upstream-access-key"
@@ -325,6 +345,7 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 | --- | --- | --- | --- |
 | `LDAP_URL` | Yes | — | LDAP URL, for example `ldaps://ldap.example.com:636` |
 | `LDAP_BASE_DN` | Yes | — | Search base, for example `dc=example,dc=com` |
+| `LDAP_GROUP_BASE_DN` | Yes | — | Trusted group container, for example `ou=S3GatewayGroups,dc=example,dc=com`; only direct child groups grant permissions |
 | `S3_ENDPOINT` | Yes | — | Upstream S3-compatible endpoint |
 | `S3_ACCESS_KEY` | Yes | — | Upstream S3 access key; this is not a client gateway credential |
 | `S3_SECRET_KEY` | Yes | — | Upstream S3 secret key |

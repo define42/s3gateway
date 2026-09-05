@@ -41,6 +41,7 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	t.Setenv("LISTEN_ADDR", "127.0.0.1:0")
 	t.Setenv("LDAP_URL", ldapURL)
 	t.Setenv("LDAP_BASE_DN", "dc=glauth,dc=com")
+	t.Setenv("LDAP_GROUP_BASE_DN", "ou=groups,dc=glauth,dc=com")
 	t.Setenv("LDAP_DOMAIN", "example.com")
 	t.Setenv("LDAP_GROUP_TTL", "45s")
 	t.Setenv("LDAP_GROUP_CACHE_MAX_ENTRIES", "256")

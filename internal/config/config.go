@@ -15,6 +15,7 @@ import (
 
 	"github.com/caddyserver/certmagic"
 	"github.com/define42/s3gateway/internal/s3credentials"
+	ldap "github.com/go-ldap/ldap/v3"
 )
 
 // Config contains the gateway's LDAP, upstream S3, notification, logging,
@@ -25,6 +26,7 @@ type Config struct {
 	LDAPURL                       string
 	LDAPDomain                    string
 	BaseDN                        string
+	LDAPGroupBaseDN               string
 	GroupTTL                      time.Duration
 	GroupCacheMaxEntries          int
 	LDAPOperationTimeout          time.Duration
@@ -254,6 +256,9 @@ func (cfg Config) Validate() error {
 	if cfg.S3GatewayPrivateX25519Key == nil {
 		return errors.New("S3GATEWAY_PRIVATE_X25519_KEY is required")
 	}
+	if _, err := cfg.LDAPGroupContainerDN(); err != nil {
+		return err
+	}
 	if cfg.GroupCacheMaxEntries <= 0 {
 		return errors.New("LDAP_GROUP_CACHE_MAX_ENTRIES must be > 0")
 	}
@@ -405,6 +410,27 @@ func (cfg Config) Validate() error {
 	return nil
 }
 
+// LDAPGroupContainerDN parses the required authorization-group container. Both
+// startup validation and direct LDAP lookups use it to fail closed on bad config.
+func (cfg Config) LDAPGroupContainerDN() (*ldap.DN, error) {
+	raw := strings.TrimSpace(cfg.LDAPGroupBaseDN)
+	if raw == "" {
+		return nil, errors.New("LDAP_GROUP_BASE_DN is required")
+	}
+	dn, err := ldap.ParseDN(raw)
+	if err != nil || dn == nil || len(dn.RDNs) == 0 {
+		return nil, errors.New("LDAP_GROUP_BASE_DN must be a valid non-empty DN")
+	}
+	for _, rdn := range dn.RDNs {
+		for _, attribute := range rdn.Attributes {
+			if strings.TrimSpace(attribute.Value) == "" {
+				return nil, errors.New("LDAP_GROUP_BASE_DN must not contain empty attribute values")
+			}
+		}
+	}
+	return dn, nil
+}
+
 func env(key, def string) string {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
@@ -542,6 +568,7 @@ func LoadConfig() Config {
 
 		LDAPURL:                       envRequired("LDAP_URL"),
 		BaseDN:                        envRequired("LDAP_BASE_DN"),
+		LDAPGroupBaseDN:               envRequired("LDAP_GROUP_BASE_DN"),
 		GroupTTL:                      envDuration("LDAP_GROUP_TTL", 2*time.Minute),
 		LDAPDomain:                    env("LDAP_DOMAIN", "example.com"),
 		GroupCacheMaxEntries:          envInt("LDAP_GROUP_CACHE_MAX_ENTRIES", DefaultGroupCacheMaxEntries),

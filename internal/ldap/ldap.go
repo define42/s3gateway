@@ -33,9 +33,14 @@ func DialWithTimeout(ldapURL string, timeout time.Duration) (*ldap.Conn, error) 
 
 // FetchGroupsUPN appends cfg.LDAPDomain to upn, binds with the resulting user
 // principal name, and searches cfg.BaseDN for that identity. It returns
-// lowercase common names from memberOf and fails unless the search yields
-// exactly one user entry.
+// lowercase common names from memberOf only for groups directly inside
+// cfg.LDAPGroupBaseDN. It fails unless the container is valid and the search
+// yields exactly one user entry.
 func FetchGroupsUPN(cfg config.Config, upn, password string) (map[string]struct{}, error) {
+	groupContainer, err := cfg.LDAPGroupContainerDN()
+	if err != nil {
+		return nil, err
+	}
 	operationTimeout := cfg.LDAPOperationTimeout
 	if operationTimeout <= 0 {
 		operationTimeout = defaultLDAPOperationTimeout
@@ -73,7 +78,7 @@ func FetchGroupsUPN(cfg config.Config, upn, password string) (map[string]struct{
 
 	groups := make(map[string]struct{})
 	for _, dn := range res.Entries[0].GetAttributeValues("memberOf") {
-		if cn := cnFromDN(dn); cn != "" {
+		if cn := trustedGroupCN(dn, groupContainer); cn != "" {
 			groups[strings.ToLower(cn)] = struct{}{}
 		}
 	}
@@ -87,17 +92,23 @@ func wrapBindError(err error) error {
 	return fmt.Errorf("ldap bind failed: %w", err)
 }
 
-func cnFromDN(dn string) string {
-	parsed, err := ldap.ParseDN(dn)
-	if err != nil || parsed == nil {
+func trustedGroupCN(dn string, container *ldap.DN) string {
+	if container == nil || len(container.RDNs) == 0 {
 		return ""
 	}
-	for _, rdn := range parsed.RDNs {
-		for _, a := range rdn.Attributes {
-			if strings.EqualFold(a.Type, "CN") {
-				return strings.TrimSpace(a.Value)
-			}
-		}
+	parsed, err := ldap.ParseDN(dn)
+	if err != nil || parsed == nil || len(parsed.RDNs) != len(container.RDNs)+1 {
+		return ""
 	}
-	return ""
+	// Compare the parsed immediate parent, not a string suffix or any ancestor:
+	// groups in delegated child containers must not inherit gateway authority.
+	parent := &ldap.DN{RDNs: parsed.RDNs[1:]}
+	if !parent.EqualFold(container) {
+		return ""
+	}
+	leaf := parsed.RDNs[0]
+	if len(leaf.Attributes) != 1 || !strings.EqualFold(leaf.Attributes[0].Type, "CN") {
+		return ""
+	}
+	return strings.TrimSpace(leaf.Attributes[0].Value)
 }

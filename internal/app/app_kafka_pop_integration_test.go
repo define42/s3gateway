@@ -50,6 +50,7 @@ func TestBootRedpandaGlobalPopIntegration(t *testing.T) {
 	httpServer, cleanup, err := boot(config.Config{
 		LDAPURL:                   ldapURL,
 		BaseDN:                    "dc=glauth,dc=com",
+		LDAPGroupBaseDN:           "ou=groups,dc=glauth,dc=com",
 		LDAPDomain:                "example.com",
 		GroupCacheMaxEntries:      256,
 		UpstreamEndpoint:          minioURL,

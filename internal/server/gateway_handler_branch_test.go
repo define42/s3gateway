@@ -1322,10 +1322,11 @@ func TestServeHTTPAndAuthBranches(t *testing.T) {
 
 		rrBadCreds := httptest.NewRecorder()
 		gwFetch := New(config.Config{
-			SigV4MaxSkew: 0,
-			LDAPURL:      "ldap://127.0.0.1:1",
-			BaseDN:       "dc=example,dc=com",
-			LDAPDomain:   "example.com",
+			SigV4MaxSkew:    0,
+			LDAPURL:         "ldap://127.0.0.1:1",
+			BaseDN:          "dc=example,dc=com",
+			LDAPGroupBaseDN: "ou=groups,dc=example,dc=com",
+			LDAPDomain:      "example.com",
 		}, nil)
 		handlerFetch := gwFetch.WithAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNoContent)

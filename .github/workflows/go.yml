@@ -75,7 +75,7 @@ jobs:
         run: |
           cover_packages=$(go list ./internal/... | grep -v '/internal/testutil$' | paste -sd, -)
           go test -race -tags=integration -shuffle=on -count=1 \
-            ./internal/app ./internal/server \
+            ./internal/app ./internal/server ./internal/ldap \
             -coverprofile=coverage-integration.out -covermode=atomic -coverpkg="$cover_packages"
 
       - name: Show integration coverage in job summary

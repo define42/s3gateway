@@ -195,6 +195,7 @@ func TestCephS3_full_s3gatewaytest(t *testing.T) {
 	t.Setenv("LISTEN_ADDR", "127.0.0.1:0")
 	t.Setenv("LDAP_URL", ldapURL)
 	t.Setenv("LDAP_BASE_DN", "dc=glauth,dc=com")
+	t.Setenv("LDAP_GROUP_BASE_DN", "ou=groups,dc=glauth,dc=com")
 	t.Setenv("LDAP_DOMAIN", "example.com")
 	t.Setenv("S3_ENDPOINT", cephEndpoint)
 	t.Setenv("S3_REGION", "us-east-1")

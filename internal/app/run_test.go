@@ -377,6 +377,7 @@ func TestBootAuditsAuthenticationFailures(t *testing.T) {
 	httpServer, cleanup, err := boot(config.Config{
 		LDAPURL:           "ldap://ldap.example:389",
 		BaseDN:            "dc=example,dc=com",
+		LDAPGroupBaseDN:   "ou=groups,dc=example,dc=com",
 		UpstreamEndpoint:  "https://s3.example",
 		UpstreamRegion:    "us-east-1",
 		UpstreamAccessKey: "access-key",

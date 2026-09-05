@@ -34,6 +34,7 @@ func setRequiredX25519PrivateKeyEnv(t *testing.T) {
 func TestConfigValidateMatrix(t *testing.T) {
 	base := Config{
 		S3GatewayPrivateX25519Key:     mustTestX25519PrivateKey(t),
+		LDAPGroupBaseDN:               "ou=groups,dc=example,dc=com",
 		GroupCacheMaxEntries:          1,
 		LDAPOperationTimeout:          time.Second,
 		AuthMaxConcurrent:             4,
@@ -72,6 +73,26 @@ func TestConfigValidateMatrix(t *testing.T) {
 		mutate  func(*Config)
 		wantMsg string
 	}{
+		{
+			name:    "missing group container",
+			mutate:  func(c *Config) { c.LDAPGroupBaseDN = "" },
+			wantMsg: "LDAP_GROUP_BASE_DN",
+		},
+		{
+			name:    "blank group container",
+			mutate:  func(c *Config) { c.LDAPGroupBaseDN = " \t " },
+			wantMsg: "LDAP_GROUP_BASE_DN",
+		},
+		{
+			name:    "malformed group container",
+			mutate:  func(c *Config) { c.LDAPGroupBaseDN = "not-a-dn" },
+			wantMsg: "LDAP_GROUP_BASE_DN",
+		},
+		{
+			name:    "empty container attribute",
+			mutate:  func(c *Config) { c.LDAPGroupBaseDN = "ou=,dc=example,dc=com" },
+			wantMsg: "LDAP_GROUP_BASE_DN",
+		},
 		{
 			name: "X25519 private key",
 			mutate: func(c *Config) {
@@ -568,6 +589,7 @@ func TestLoadConfigControlPlaneLimits(t *testing.T) {
 	setRequiredX25519PrivateKeyEnv(t)
 	t.Setenv("LDAP_URL", "ldap://ldap.example:389")
 	t.Setenv("LDAP_BASE_DN", "dc=example,dc=com")
+	t.Setenv("LDAP_GROUP_BASE_DN", "ou=groups,dc=example,dc=com")
 	t.Setenv("S3_ENDPOINT", "https://s3.example")
 	t.Setenv("S3_ACCESS_KEY", "access-key")
 	t.Setenv("S3_SECRET_KEY", "secret-key")
@@ -582,6 +604,9 @@ func TestLoadConfigControlPlaneLimits(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "10.1.0.0/16,fd01::/48")
 
 	cfg := LoadConfig()
+	if cfg.LDAPGroupBaseDN != "ou=groups,dc=example,dc=com" {
+		t.Fatalf("group container mismatch: got=%q", cfg.LDAPGroupBaseDN)
+	}
 	if cfg.LDAPOperationTimeout != 7*time.Second || cfg.AuthMaxConcurrent != 8 ||
 		cfg.AuthRatePerSecond != 9 || cfg.AuthRateBurst != 10 {
 		t.Fatalf(
@@ -627,6 +652,7 @@ func TestLoadConfigSplunkHEC(t *testing.T) {
 	setRequiredX25519PrivateKeyEnv(t)
 	t.Setenv("LDAP_URL", "ldap://ldap.example:389")
 	t.Setenv("LDAP_BASE_DN", "dc=example,dc=com")
+	t.Setenv("LDAP_GROUP_BASE_DN", "ou=groups,dc=example,dc=com")
 	t.Setenv("S3_ENDPOINT", "https://s3.example")
 	t.Setenv("S3_ACCESS_KEY", "access-key")
 	t.Setenv("S3_SECRET_KEY", "secret-key")
@@ -658,6 +684,7 @@ func TestLoadConfigKafkaGlobalTopic(t *testing.T) {
 	setRequiredX25519PrivateKeyEnv(t)
 	t.Setenv("LDAP_URL", "ldap://ldap.example:389")
 	t.Setenv("LDAP_BASE_DN", "dc=example,dc=com")
+	t.Setenv("LDAP_GROUP_BASE_DN", "ou=groups,dc=example,dc=com")
 	t.Setenv("S3_ENDPOINT", "https://s3.example")
 	t.Setenv("S3_ACCESS_KEY", "access-key")
 	t.Setenv("S3_SECRET_KEY", "secret-key")
@@ -690,7 +717,7 @@ func TestLoadConfigKafkaGlobalTopic(t *testing.T) {
 }
 
 func TestCookieSecretValidation(t *testing.T) {
-	base := Config{}
+	base := Config{LDAPGroupBaseDN: "ou=groups,dc=example,dc=com"}
 	base.ApplyDefaults()
 	base.S3GatewayPrivateX25519Key = mustTestX25519PrivateKey(t)
 

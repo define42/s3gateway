@@ -51,6 +51,7 @@ func TestLdapS3upstreamWithClient(t *testing.T) {
 	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPGroupBaseDN:        "ou=groups,dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
@@ -243,6 +244,7 @@ func TestLdapS3upstreamWithMinioClient(t *testing.T) {
 	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPGroupBaseDN:        "ou=groups,dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
@@ -337,6 +339,7 @@ func TestLdapS3upstreamListBuckets(t *testing.T) {
 	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPGroupBaseDN:        "ou=groups,dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
@@ -429,6 +432,7 @@ func TestLdapS3upstreamListObjectsV2(t *testing.T) {
 	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPGroupBaseDN:        "ou=groups,dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
@@ -522,6 +526,7 @@ func TestLdapS3upstreamListMultipartUploads(t *testing.T) {
 	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPGroupBaseDN:        "ou=groups,dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
@@ -715,6 +720,7 @@ func TestLdapS3upstreamGetObjectAttributes(t *testing.T) {
 	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPGroupBaseDN:        "ou=groups,dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
@@ -908,6 +914,7 @@ func TestLdapS3upstreamMultipartLifecycle(t *testing.T) {
 	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPGroupBaseDN:        "ou=groups,dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
@@ -1139,6 +1146,7 @@ func TestLdapS3upstreamLifecycleConfiguration(t *testing.T) {
 	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPGroupBaseDN:        "ou=groups,dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
@@ -1889,6 +1897,7 @@ func TestLdapS3upstreamAuthCacheSurvivesLDAPOutage(t *testing.T) {
 	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPGroupBaseDN:        "ou=groups,dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
 		GroupTTL:               2 * time.Minute,
 		UpstreamEndpoint:       minioURL,
@@ -1968,6 +1977,7 @@ func setupIntegrationEnv(tb testing.TB) *integrationEnv {
 	cfg := gatewayconfig.Config{
 		LDAPURL:                ldapURL,
 		BaseDN:                 "dc=glauth,dc=com",
+		LDAPGroupBaseDN:        "ou=groups,dc=glauth,dc=com",
 		LDAPDomain:             "example.com",
 		GroupTTL:               30 * time.Second,
 		UpstreamEndpoint:       minioURL,
