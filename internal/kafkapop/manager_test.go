@@ -3,6 +3,7 @@ package kafkapop
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -159,13 +160,8 @@ func TestManagerConsumeCommitsAfterHandler(t *testing.T) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	wantSequence := []string{"poll", "handle", "commit", "allow rebalance"}
-	if len(client.sequence) < len(wantSequence) {
-		t.Fatalf("sequence too short: got=%v want prefix=%v", client.sequence, wantSequence)
-	}
-	for i, want := range wantSequence {
-		if client.sequence[i] != want {
-			t.Fatalf("sequence[%d] = %q, want %q (all=%v)", i, client.sequence[i], want, client.sequence)
-		}
+	if !slices.Equal(client.sequence, wantSequence) {
+		t.Fatalf("sequence = %v, want %v", client.sequence, wantSequence)
 	}
 	if len(client.committed) != 1 || client.committed[0] != record {
 		t.Fatalf("committed records = %v, want record %p", client.committed, record)
@@ -237,28 +233,95 @@ func TestManagerConsumeRewindsUnacknowledgedRecord(t *testing.T) {
 			if client.allowCount != 1 {
 				t.Fatalf("allow rebalance count = %d, want 1", client.allowCount)
 			}
+			wantSequence := []string{"poll"}
+			if tt.wantCommit != 0 {
+				wantSequence = append(wantSequence, "commit")
+			}
+			wantSequence = append(wantSequence, "rewind", "allow rebalance")
+			if !slices.Equal(client.sequence, wantSequence) {
+				t.Fatalf("sequence = %v, want %v", client.sequence, wantSequence)
+			}
 		})
 	}
 }
 
-func TestManagerConsumeNoEvent(t *testing.T) {
-	client := &fakeConsumerClient{
-		poll: func(ctx context.Context) kgo.Fetches {
-			<-ctx.Done()
-			return kgo.NewErrFetch(ctx.Err())
+func TestManagerConsumeReleasesRebalanceAfterPoll(t *testing.T) {
+	pollErr := errors.New("broker unavailable")
+	tests := []struct {
+		name    string
+		poll    func(context.Context, context.CancelFunc) kgo.Fetches
+		wantErr error
+	}{
+		{
+			name: "poll timeout",
+			poll: func(ctx context.Context, _ context.CancelFunc) kgo.Fetches {
+				<-ctx.Done()
+				return kgo.NewErrFetch(ctx.Err())
+			},
+			wantErr: ErrNoEvent,
+		},
+		{
+			name: "empty fetch",
+			poll: func(context.Context, context.CancelFunc) kgo.Fetches {
+				return nil
+			},
+			wantErr: ErrNoEvent,
+		},
+		{
+			name: "poll error",
+			poll: func(context.Context, context.CancelFunc) kgo.Fetches {
+				return kgo.NewErrFetch(pollErr)
+			},
+			wantErr: pollErr,
+		},
+		{
+			name: "request canceled during poll",
+			poll: func(ctx context.Context, cancel context.CancelFunc) kgo.Fetches {
+				cancel()
+				return kgo.NewErrFetch(ctx.Err())
+			},
+			wantErr: context.Canceled,
+		},
+		{
+			name: "request canceled with empty fetch",
+			poll: func(_ context.Context, cancel context.CancelFunc) kgo.Fetches {
+				cancel()
+				return nil
+			},
+			wantErr: context.Canceled,
 		},
 	}
-	manager := newManager(time.Millisecond, 1, func(_, _ string) (consumerClient, error) {
-		return client, nil
-	})
-	defer manager.Close()
 
-	err := manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error {
-		t.Fatal("handler must not run without an event")
-		return nil
-	})
-	if !errors.Is(err, ErrNoEvent) {
-		t.Fatalf("Consume() error = %v, want ErrNoEvent", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				client := &fakeConsumerClient{
+					poll: func(pollCtx context.Context) kgo.Fetches {
+						return tt.poll(pollCtx, cancel)
+					},
+				}
+				manager := newManager(time.Second, 1, func(_, _ string) (consumerClient, error) {
+					return client, nil
+				})
+				defer manager.Close()
+
+				err := manager.Consume(ctx, "images", "scanner", func(*kgo.Record) error {
+					t.Fatal("handler must not run without an event")
+					return nil
+				})
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("Consume() error = %v, want %v", err, tt.wantErr)
+				}
+				client.mu.Lock()
+				defer client.mu.Unlock()
+				wantSequence := []string{"poll", "allow rebalance"}
+				if !slices.Equal(client.sequence, wantSequence) {
+					t.Fatalf("sequence = %v, want %v", client.sequence, wantSequence)
+				}
+			})
+		})
 	}
 }
 

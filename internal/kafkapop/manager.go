@@ -152,6 +152,8 @@ func (m *Manager) Consume(
 
 	pollCtx, cancelPoll := context.WithTimeout(ctx, m.timeout)
 	fetches := consumer.client.PollRecords(pollCtx, 1)
+	// Polling can block rebalances even when it returns no records or an error.
+	defer consumer.client.AllowRebalance()
 	cancelPoll()
 
 	if err := fetches.Err(); err != nil {
@@ -169,7 +171,6 @@ func (m *Manager) Consume(
 	}
 
 	record := records[0]
-	defer consumer.client.AllowRebalance()
 	if err := handle(record); err != nil {
 		rewindRecord(consumer.client, record)
 		return fmt.Errorf("kafkapop: handle record: %w", err)
