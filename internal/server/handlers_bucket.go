@@ -148,9 +148,8 @@ func (s *Server) handlePutBucketVersioning(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	cfg, err := s3xml.DecodeVersioningConfig(r.Body)
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid versioning configuration")
+	cfg, ok := decodeXMLWithContentMD5(w, r, s3xml.DecodeVersioningConfig, "Invalid versioning configuration")
+	if !ok {
 		return
 	}
 	in := &s3.PutBucketVersioningInput{
@@ -160,13 +159,10 @@ func (s *Server) handlePutBucketVersioning(w http.ResponseWriter, r *http.Reques
 	if mfa := strings.TrimSpace(r.Header.Get("x-amz-mfa")); mfa != "" {
 		in.MFA = aws.String(mfa)
 	}
-	if contentMD5 := strings.TrimSpace(r.Header.Get("Content-MD5")); contentMD5 != "" {
-		in.ContentMD5 = aws.String(contentMD5)
-	}
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
-	_, err = s.up.PutBucketVersioning(r.Context(), in)
+	_, err := s.up.PutBucketVersioning(r.Context(), in)
 	if err != nil {
 		s3http.WriteUpstreamError(w, err)
 		return
@@ -208,9 +204,8 @@ func (s *Server) handlePutBucketTagging(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	tagging, err := s3xml.DecodeBucketTagging(r.Body)
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid tagging payload")
+	tagging, ok := decodeXMLWithContentMD5(w, r, s3xml.DecodeBucketTagging, "Invalid tagging payload")
+	if !ok {
 		return
 	}
 	checksumAlgorithm, err := s3http.ParseChecksumAlgorithmHeader(r.Header.Get("x-amz-checksum-algorithm"))
@@ -225,9 +220,6 @@ func (s *Server) handlePutBucketTagging(w http.ResponseWriter, r *http.Request, 
 	}
 	if checksumAlgorithm != "" {
 		in.ChecksumAlgorithm = checksumAlgorithm
-	}
-	if contentMD5 := strings.TrimSpace(r.Header.Get("Content-MD5")); contentMD5 != "" {
-		in.ContentMD5 = aws.String(contentMD5)
 	}
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)

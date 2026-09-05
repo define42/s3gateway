@@ -104,9 +104,8 @@ func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	tagging, err := s3xml.DecodeObjectTagging(r.Body)
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid tagging payload")
+	tagging, ok := decodeXMLWithContentMD5(w, r, s3xml.DecodeObjectTagging, "Invalid tagging payload")
+	if !ok {
 		return
 	}
 	payer, err := s3http.ParseRequestPayerHeader(r.Header)
@@ -130,9 +129,6 @@ func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, 
 	}
 	if checksumAlgorithm != "" {
 		in.ChecksumAlgorithm = checksumAlgorithm
-	}
-	if contentMD5 := strings.TrimSpace(r.Header.Get("Content-MD5")); contentMD5 != "" {
-		in.ContentMD5 = aws.String(contentMD5)
 	}
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)

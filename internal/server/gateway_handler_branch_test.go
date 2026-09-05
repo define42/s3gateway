@@ -2396,8 +2396,8 @@ func TestHandlePutBucketVersioningBranches(t *testing.T) {
 			if got := r.Header.Get("X-Amz-Mfa"); got != "device 123456" {
 				t.Fatalf("x-amz-mfa mismatch: got=%q", got)
 			}
-			if got := r.Header.Get("Content-Md5"); got != "d41d8cd98f00b204e9800998ecf8427e" {
-				t.Fatalf("content-md5 mismatch: got=%q", got)
+			if got := r.Header.Get("Content-Md5"); got != "" {
+				t.Fatalf("original content-md5 forwarded for rewritten XML: %q", got)
 			}
 			if got := r.Header.Get("X-Amz-Expected-Bucket-Owner"); got != "123456789012" {
 				t.Fatalf("expected bucket owner mismatch: got=%q", got)
@@ -2408,7 +2408,7 @@ func TestHandlePutBucketVersioningBranches(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?versioning", strings.NewReader(validVersioning))
 		req.Header.Set("x-amz-mfa", "device 123456")
-		req.Header.Set("Content-MD5", "d41d8cd98f00b204e9800998ecf8427e")
+		req.Header.Set("Content-MD5", xmlBodyMD5(validVersioning))
 		req.Header.Set("x-amz-expected-bucket-owner", "123456789012")
 		req = reqWithRules(req, fullTeam2Rule())
 		rr := httptest.NewRecorder()
@@ -2532,8 +2532,8 @@ func TestBucketTaggingHandlersBranches(t *testing.T) {
 			if _, ok := r.URL.Query()["tagging"]; !ok {
 				t.Fatalf("missing tagging query in upstream request: %q", r.URL.RawQuery)
 			}
-			if got := r.Header.Get("Content-Md5"); got != "d41d8cd98f00b204e9800998ecf8427e" {
-				t.Fatalf("content-md5 mismatch: got=%q", got)
+			if got := r.Header.Get("Content-Md5"); got != "" {
+				t.Fatalf("original content-md5 forwarded for rewritten XML: %q", got)
 			}
 			if got := r.Header.Get("X-Amz-Expected-Bucket-Owner"); got != "123456789012" {
 				t.Fatalf("expected bucket owner mismatch: got=%q", got)
@@ -2550,7 +2550,7 @@ func TestBucketTaggingHandlersBranches(t *testing.T) {
 		defer cleanup()
 
 		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?tagging", strings.NewReader(validTagging))
-		req.Header.Set("Content-MD5", "d41d8cd98f00b204e9800998ecf8427e")
+		req.Header.Set("Content-MD5", xmlBodyMD5(validTagging))
 		req.Header.Set("x-amz-expected-bucket-owner", "123456789012")
 		req = reqWithRules(req, fullTeam2Rule())
 		rr := httptest.NewRecorder()
