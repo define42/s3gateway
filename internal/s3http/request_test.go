@@ -399,12 +399,66 @@ func TestParseChecksumWriteHeadersCombinations(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "empty selector values ignored",
+			name: "empty or repeated selector values rejected",
 			headers: map[string][]string{
 				"x-amz-checksum-algorithm":     {" "},
 				"x-amz-sdk-checksum-algorithm": {"", "SHA256", "sha256"},
 			},
-			want: s3http.ChecksumWriteHeaders{ChecksumAlgorithm: types.ChecksumAlgorithmSha256},
+			wantErr: true,
+		},
+		{
+			name:    "unsupported SHA512 checksum value",
+			headers: map[string][]string{"x-amz-checksum-sha512": {"incorrect"}},
+			wantErr: true,
+		},
+		{
+			name:    "empty unsupported checksum value",
+			headers: map[string][]string{"x-amz-checksum-xxhash64": {""}},
+			wantErr: true,
+		},
+		{
+			name:    "unknown checksum alongside supported value",
+			headers: map[string][]string{"x-amz-checksum-future": {"incorrect"}, "x-amz-checksum-crc32": {"AAAAAA=="}},
+			wantErr: true,
+		},
+		{
+			name:    "empty supported checksum",
+			headers: map[string][]string{"x-amz-checksum-crc32": {" "}},
+			wantErr: true,
+		},
+		{
+			name:    "duplicate supported checksum",
+			headers: map[string][]string{"x-amz-checksum-crc32": {"AAAAAA==", "BBBBBB=="}},
+			wantErr: true,
+		},
+		{
+			name:    "identical duplicate supported checksum",
+			headers: map[string][]string{"x-amz-checksum-crc32": {"AAAAAA==", "AAAAAA=="}},
+			wantErr: true,
+		},
+		{
+			name:    "checksum metadata is not an integrity header",
+			headers: map[string][]string{"x-amz-meta-checksum-sha512": {"opaque metadata"}},
+		},
+		{
+			name:    "checksum type normalized",
+			headers: map[string][]string{"x-amz-checksum-type": {" composite "}},
+			want:    s3http.ChecksumWriteHeaders{ChecksumType: types.ChecksumTypeComposite},
+		},
+		{
+			name:    "duplicate checksum type",
+			headers: map[string][]string{"x-amz-checksum-type": {"COMPOSITE", "COMPOSITE"}},
+			wantErr: true,
+		},
+		{
+			name:    "blank checksum type",
+			headers: map[string][]string{"x-amz-checksum-type": {""}},
+			wantErr: true,
+		},
+		{
+			name:    "read-only checksum mode rejected",
+			headers: map[string][]string{"x-amz-checksum-mode": {"ENABLED"}},
+			wantErr: true,
 		},
 		{
 			name:    "unsupported SDK selector",
@@ -534,6 +588,29 @@ func TestParseChecksumWriteHeadersCombinations(t *testing.T) {
 			}
 			if err == nil && !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("ParseChecksumWriteHeaders() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseChecksumWriteHeadersRawHeaderNames(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		header  http.Header
+		wantErr bool
+	}{
+		{name: "mixed case value", header: http.Header{"x-AMZ-Checksum-CrC32": {"AAAAAA=="}}},
+		{name: "aliased duplicate value", header: http.Header{"x-amz-checksum-crc32": {"AAAAAA=="}, "X-Amz-Checksum-Crc32": {"BBBBBB=="}}, wantErr: true},
+		{name: "missing value slice", header: http.Header{"X-Amz-Checksum-Crc32": nil}, wantErr: true},
+		{name: "mixed case unsupported value", header: http.Header{"X-AMZ-CHECKSUM-SHA512": {"incorrect"}}, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := s3http.ParseChecksumWriteHeaders(tt.header)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseChecksumWriteHeaders() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && (!got.HasValue() || aws.ToString(got.ChecksumCRC32) != "AAAAAA==") {
+				t.Errorf("supported mixed-case checksum was not preserved: %#v", got)
 			}
 		})
 	}

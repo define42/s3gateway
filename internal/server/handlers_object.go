@@ -1417,7 +1417,11 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 	}
 	checksum, err := s3http.ParseChecksumWriteHeaders(r.Header)
 	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum headers")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
+		return
+	}
+	if checksum.ChecksumType != "" {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "Checksum type is not supported for PutObject")
 		return
 	}
 	contentMD5 := strings.TrimSpace(r.Header.Get("Content-MD5"))
@@ -1597,9 +1601,13 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source SSE-C headers")
 		return
 	}
-	checksumAlgorithm, err := s3http.ParseChecksumAlgorithmHeader(r.Header.Get("x-amz-checksum-algorithm"))
+	checksum, err := s3http.ParseChecksumWriteHeaders(r.Header)
 	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum algorithm")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
+		return
+	}
+	if checksum.HasValue() || checksum.ChecksumType != "" {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "CopyObject supports checksum algorithm selection only")
 		return
 	}
 
@@ -1693,8 +1701,8 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 	if storageClass != "" {
 		in.StorageClass = storageClass
 	}
-	if checksumAlgorithm != "" {
-		in.ChecksumAlgorithm = checksumAlgorithm
+	if checksum.ChecksumAlgorithm != "" {
+		in.ChecksumAlgorithm = checksum.ChecksumAlgorithm
 	}
 	if ct := strings.TrimSpace(r.Header.Get("Content-Type")); ct != "" {
 		in.ContentType = aws.String(ct)
@@ -1833,6 +1841,16 @@ func (s *Server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bu
 	}
 	if !authz.CanRead(rules, sourceBucket) {
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+
+	checksum, err := s3http.ParseChecksumWriteHeaders(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
+		return
+	}
+	if checksum.ChecksumAlgorithm != "" || checksum.HasValue() || checksum.ChecksumType != "" {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "Checksum settings are not supported for UploadPartCopy")
 		return
 	}
 

@@ -152,14 +152,16 @@ func (s *Server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 type completeMultipartUpload struct {
 	XMLName xml.Name `xml:"CompleteMultipartUpload"`
 	Parts   []struct {
-		PartNumber        int32   `xml:"PartNumber"`
-		ETag              string  `xml:"ETag"`
-		ChecksumCRC32     *string `xml:"ChecksumCRC32"`
-		ChecksumCRC32C    *string `xml:"ChecksumCRC32C"`
-		ChecksumCRC64NVME *string `xml:"ChecksumCRC64NVME"`
-		ChecksumSHA1      *string `xml:"ChecksumSHA1"`
-		ChecksumSHA256    *string `xml:"ChecksumSHA256"`
+		PartNumber        completeMultipartPartNumber         `xml:"PartNumber"`
+		ETag              completeMultipartETag               `xml:"ETag"`
+		ChecksumCRC32     completeMultipartChecksum           `xml:"ChecksumCRC32"`
+		ChecksumCRC32C    completeMultipartChecksum           `xml:"ChecksumCRC32C"`
+		ChecksumCRC64NVME completeMultipartChecksum           `xml:"ChecksumCRC64NVME"`
+		ChecksumSHA1      completeMultipartChecksum           `xml:"ChecksumSHA1"`
+		ChecksumSHA256    completeMultipartChecksum           `xml:"ChecksumSHA256"`
+		Unsupported       unsupportedCompleteMultipartElement `xml:",any"`
 	} `xml:"Part"`
+	Unsupported unsupportedCompleteMultipartElement `xml:",any"`
 }
 
 func decodeCompleteMultipartUpload(r io.Reader) (completeMultipartUpload, error) {
@@ -205,12 +207,11 @@ func (s *Server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 	}
 	checksum, err := s3http.ParseChecksumWriteHeaders(r.Header)
 	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum headers")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
 		return
 	}
-	checksumType, err := s3http.ParseChecksumTypeHeader(r.Header.Get("x-amz-checksum-type"))
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum type")
+	if checksum.HasValue() {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "Checksum value headers are not supported for CreateMultipartUpload")
 		return
 	}
 	payer, err := s3http.ParseRequestPayerHeader(r.Header)
@@ -224,7 +225,7 @@ func (s *Server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 		Key:                     &key,
 		Metadata:                meta,
 		Expires:                 expires,
-		ChecksumType:            checksumType,
+		ChecksumType:            checksum.ChecksumType,
 		CacheControl:            properties.CacheControl,
 		ContentDisposition:      properties.ContentDisposition,
 		ContentEncoding:         properties.ContentEncoding,
@@ -312,7 +313,11 @@ func (s *Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 	}
 	checksum, err := s3http.ParseChecksumWriteHeaders(r.Header)
 	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum headers")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
+		return
+	}
+	if checksum.ChecksumType != "" {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "Checksum type is not supported for UploadPart")
 		return
 	}
 	contentMD5 := strings.TrimSpace(r.Header.Get("Content-MD5"))
@@ -477,12 +482,11 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 	}
 	checksum, err := s3http.ParseChecksumWriteHeaders(r.Header)
 	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum headers")
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
 		return
 	}
-	checksumType, err := s3http.ParseChecksumTypeHeader(r.Header.Get("x-amz-checksum-type"))
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum type")
+	if checksum.ChecksumAlgorithm != "" {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "Checksum algorithm selection is not supported for CompleteMultipartUpload")
 		return
 	}
 	var objectSize *int64
@@ -507,7 +511,7 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 
 	parts := make([]types.CompletedPart, 0, len(cmu.Parts))
 	for _, p := range cmu.Parts {
-		etag := strings.TrimSpace(p.ETag)
+		etag := strings.TrimSpace(string(p.ETag))
 		if p.PartNumber <= 0 || etag == "" {
 			s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Each part must have a positive PartNumber and a non-empty ETag")
 			return
@@ -518,15 +522,15 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		if !strings.HasSuffix(etag, `"`) {
 			etag = etag + `"`
 		}
-		pn := p.PartNumber
+		pn := int32(p.PartNumber)
 		parts = append(parts, types.CompletedPart{
 			ETag:              &etag,
 			PartNumber:        aws.Int32(pn),
-			ChecksumCRC32:     p.ChecksumCRC32,
-			ChecksumCRC32C:    p.ChecksumCRC32C,
-			ChecksumCRC64NVME: p.ChecksumCRC64NVME,
-			ChecksumSHA1:      p.ChecksumSHA1,
-			ChecksumSHA256:    p.ChecksumSHA256,
+			ChecksumCRC32:     p.ChecksumCRC32.value,
+			ChecksumCRC32C:    p.ChecksumCRC32C.value,
+			ChecksumCRC64NVME: p.ChecksumCRC64NVME.value,
+			ChecksumSHA1:      p.ChecksumSHA1.value,
+			ChecksumSHA256:    p.ChecksumSHA256.value,
 		})
 	}
 	if len(parts) == 0 {
@@ -549,7 +553,7 @@ func (s *Server) handleCompleteMultipart(w http.ResponseWriter, r *http.Request,
 		ChecksumCRC64NVME: checksum.ChecksumCRC64NVME,
 		ChecksumSHA1:      checksum.ChecksumSHA1,
 		ChecksumSHA256:    checksum.ChecksumSHA256,
-		ChecksumType:      checksumType,
+		ChecksumType:      checksum.ChecksumType,
 		MpuObjectSize:     objectSize,
 	}
 	if ifMatch != "" {

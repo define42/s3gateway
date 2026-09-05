@@ -393,6 +393,25 @@ The gateway requires HTTPS to the upstream S3 service and streams generated
 checksums as trailing headers. Uploads do not require temporary files or
 buffering entire parts in memory. The upstream must support S3 checksum trailers.
 
+Unsupported checksum headers, including `x-amz-checksum-sha512`,
+`x-amz-checksum-md5`, and `x-amz-checksum-xxhash*`, return `400 InvalidArgument`
+before an object upload or copy reaches upstream. Empty, repeated, or conflicting
+checksum headers are also rejected. Unsupported, empty, repeated, or nested
+checksum elements in multipart completion XML return `400 MalformedXML`.
+
+For `x-amz-checksum-*` headers, each operation accepts:
+
+| Operation | Accepted checksum settings |
+| --- | --- |
+| `PutObject`, `UploadPart` | Algorithm selection and checksum value |
+| `CreateMultipartUpload` | Algorithm selection and checksum type |
+| `CompleteMultipartUpload` | Checksum values and checksum type |
+| `CopyObject` | Algorithm selection |
+| `UploadPartCopy` | No checksum request settings |
+
+Settings outside this table are rejected. Both `x-amz-checksum-algorithm` and
+`x-amz-sdk-checksum-algorithm` select an algorithm where selection is supported.
+
 ### Upload properties
 
 `PutObject` and `CreateMultipartUpload` preserve content encoding, cache controls,

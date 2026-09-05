@@ -317,11 +317,19 @@ func ParseSSEWriteHeaders(h http.Header) (SSEWriteHeaders, error) {
 // S3 write request. At most one checksum value field may be non-nil.
 type ChecksumWriteHeaders struct {
 	ChecksumAlgorithm types.ChecksumAlgorithm
+	ChecksumType      types.ChecksumType
 	ChecksumCRC32     *string
 	ChecksumCRC32C    *string
 	ChecksumCRC64NVME *string
 	ChecksumSHA1      *string
 	ChecksumSHA256    *string
+}
+
+// HasValue reports whether the request supplies a checksum value, as opposed
+// to asking the upstream to select or calculate a checksum.
+func (h ChecksumWriteHeaders) HasValue() bool {
+	return h.ChecksumCRC32 != nil || h.ChecksumCRC32C != nil || h.ChecksumCRC64NVME != nil ||
+		h.ChecksumSHA1 != nil || h.ChecksumSHA256 != nil
 }
 
 // ParseChecksumAlgorithmHeader parses an optional checksum algorithm. CRC32,
@@ -367,44 +375,60 @@ func ParseChecksumTypeHeader(v string) (types.ChecksumType, error) {
 // headers, accepting either algorithm-selection header. For verified streaming
 // trailer payloads, a declared checksum trailer selects the upstream algorithm
 // while value fields remain unset unless supplied as request headers. Conflicting
-// algorithms and multiple checksum value headers are rejected.
+// algorithms, unknown headers, empty values, and repeated headers are rejected.
+// Callers must reject parsed fields their particular operation cannot forward.
 func ParseChecksumWriteHeaders(h http.Header) (ChecksumWriteHeaders, error) {
 	out := ChecksumWriteHeaders{}
-	for _, name := range []string{"x-amz-checksum-algorithm", "x-amz-sdk-checksum-algorithm"} {
-		for _, value := range h.Values(name) {
+	var valueAlgorithm types.ChecksumAlgorithm
+	seen := make(map[string]bool)
+	for name, values := range h {
+		name = strings.ToLower(name)
+		if !strings.HasPrefix(name, "x-amz-checksum-") && name != "x-amz-sdk-checksum-algorithm" {
+			continue
+		}
+		if seen[name] || len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+			return out, fmt.Errorf("%s must contain one nonempty value", name)
+		}
+		seen[name] = true
+		value := strings.TrimSpace(values[0])
+		var field **string
+		var algorithm types.ChecksumAlgorithm
+		switch name {
+		case "x-amz-checksum-algorithm", "x-amz-sdk-checksum-algorithm":
 			algorithm, err := ParseChecksumAlgorithmHeader(value)
 			if err != nil {
 				return out, err
-			}
-			if algorithm == "" {
-				continue
 			}
 			if out.ChecksumAlgorithm != "" && out.ChecksumAlgorithm != algorithm {
 				return out, errors.New("conflicting checksum algorithm headers")
 			}
 			out.ChecksumAlgorithm = algorithm
+			continue
+		case "x-amz-checksum-type":
+			checksumType, err := ParseChecksumTypeHeader(value)
+			if err != nil {
+				return out, err
+			}
+			out.ChecksumType = checksumType
+			continue
+		case "x-amz-checksum-crc32":
+			field, algorithm = &out.ChecksumCRC32, types.ChecksumAlgorithmCrc32
+		case "x-amz-checksum-crc32c":
+			field, algorithm = &out.ChecksumCRC32C, types.ChecksumAlgorithmCrc32c
+		case "x-amz-checksum-crc64nvme":
+			field, algorithm = &out.ChecksumCRC64NVME, types.ChecksumAlgorithmCrc64nvme
+		case "x-amz-checksum-sha1":
+			field, algorithm = &out.ChecksumSHA1, types.ChecksumAlgorithmSha1
+		case "x-amz-checksum-sha256":
+			field, algorithm = &out.ChecksumSHA256, types.ChecksumAlgorithmSha256
+		default:
+			return out, fmt.Errorf("unsupported checksum header %q", name)
 		}
-	}
-
-	var setCount int
-	var valueAlgorithm types.ChecksumAlgorithm
-	setField := func(v string, algorithm types.ChecksumAlgorithm) *string {
-		s := strings.TrimSpace(v)
-		if s == "" {
-			return nil
+		if out.HasValue() {
+			return out, errors.New("multiple checksum value headers are not allowed")
 		}
-		setCount++
+		*field = aws.String(value)
 		valueAlgorithm = algorithm
-		return aws.String(s)
-	}
-	out.ChecksumCRC32 = setField(h.Get("x-amz-checksum-crc32"), types.ChecksumAlgorithmCrc32)
-	out.ChecksumCRC32C = setField(h.Get("x-amz-checksum-crc32c"), types.ChecksumAlgorithmCrc32c)
-	out.ChecksumCRC64NVME = setField(h.Get("x-amz-checksum-crc64nvme"), types.ChecksumAlgorithmCrc64nvme)
-	out.ChecksumSHA1 = setField(h.Get("x-amz-checksum-sha1"), types.ChecksumAlgorithmSha1)
-	out.ChecksumSHA256 = setField(h.Get("x-amz-checksum-sha256"), types.ChecksumAlgorithmSha256)
-
-	if setCount > 1 {
-		return out, errors.New("multiple checksum value headers are not allowed")
 	}
 	trailerAlgorithm, err := checksumTrailerAlgorithm(h)
 	if err != nil {

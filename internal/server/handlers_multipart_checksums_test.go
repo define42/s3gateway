@@ -427,6 +427,13 @@ func TestMultipartChecksumsValidation(t *testing.T) {
 		{name: "overflow size", header: "x-amz-mp-object-size", value: "9223372036854775808", code: "InvalidArgument"},
 		{name: "malformed XML", body: `<CompleteMultipartUpload><Part><ChecksumCRC32>`, code: "MalformedXML"},
 		{name: "oversized checksum", body: `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>etag</ETag><ChecksumCRC32>` + strings.Repeat("a", 257) + `</ChecksumCRC32></Part></CompleteMultipartUpload>`, code: "MalformedXML"},
+		{name: "unsupported checksum element", body: `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>etag</ETag><ChecksumSHA512>incorrect</ChecksumSHA512></Part></CompleteMultipartUpload>`, code: "MalformedXML"},
+		{name: "unsupported root checksum", body: `<CompleteMultipartUpload><ChecksumSHA512>incorrect</ChecksumSHA512><Part><PartNumber>1</PartNumber><ETag>etag</ETag></Part></CompleteMultipartUpload>`, code: "MalformedXML"},
+		{name: "empty checksum element", body: `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>etag</ETag><ChecksumCRC32/></Part></CompleteMultipartUpload>`, code: "MalformedXML"},
+		{name: "duplicate checksum element", body: `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>etag</ETag><ChecksumCRC32>AAAAAA==</ChecksumCRC32><ChecksumCRC32>BBBBBB==</ChecksumCRC32></Part></CompleteMultipartUpload>`, code: "MalformedXML"},
+		{name: "nested checksum element", body: `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>etag</ETag><ChecksumCRC32>AAAAAA==<ChecksumSHA512>incorrect</ChecksumSHA512></ChecksumCRC32></Part></CompleteMultipartUpload>`, code: "MalformedXML"},
+		{name: "checksum nested in ETag", body: `<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>etag<ChecksumSHA512>incorrect</ChecksumSHA512></ETag></Part></CompleteMultipartUpload>`, code: "MalformedXML"},
+		{name: "checksum nested in part number", body: `<CompleteMultipartUpload><Part><PartNumber>1<ChecksumSHA512>incorrect</ChecksumSHA512></PartNumber><ETag>etag</ETag></Part></CompleteMultipartUpload>`, code: "MalformedXML"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gw, requests := multipartChecksumStub(t, nil, `<CompleteMultipartUploadResult/>`)
