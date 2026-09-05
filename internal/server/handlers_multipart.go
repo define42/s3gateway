@@ -177,6 +177,14 @@ func (s *Server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 	if !requireOwnerRetainingACLHeaders(w, r, false) {
 		return
 	}
+	if !requireSupportedUploadProperties(w, r) {
+		return
+	}
+	properties, err := parseUploadProperties(r)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
+		return
+	}
 
 	ct := r.Header.Get("Content-Type")
 	meta := extractAmzMeta(r.Header)
@@ -205,13 +213,30 @@ func (s *Server) handleCreateMultipart(w http.ResponseWriter, r *http.Request, b
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum type")
 		return
 	}
+	payer, err := s3http.ParseRequestPayerHeader(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return
+	}
 
 	in := &s3.CreateMultipartUploadInput{
-		Bucket:       &bucket,
-		Key:          &key,
-		Metadata:     meta,
-		Expires:      expires,
-		ChecksumType: checksumType,
+		Bucket:                  &bucket,
+		Key:                     &key,
+		Metadata:                meta,
+		Expires:                 expires,
+		ChecksumType:            checksumType,
+		CacheControl:            properties.CacheControl,
+		ContentDisposition:      properties.ContentDisposition,
+		ContentEncoding:         properties.ContentEncoding,
+		ContentLanguage:         properties.ContentLanguage,
+		Tagging:                 properties.Tagging,
+		StorageClass:            properties.StorageClass,
+		WebsiteRedirectLocation: properties.WebsiteRedirectLocation,
+		BucketKeyEnabled:        sse.BucketKeyEnabled,
+		RequestPayer:            payer,
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
 	if ct != "" {
 		in.ContentType = &ct

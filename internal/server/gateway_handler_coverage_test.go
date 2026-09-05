@@ -28,7 +28,7 @@ func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func
 		// Most handler tests inspect object bytes, as an S3 service does after
 		// decoding the SDK's HTTPS checksum trailers. Keep decoding lazy so
 		// streaming and interrupted-upload tests observe the actual read flow.
-		if strings.Contains(r.Header.Get("Content-Encoding"), "aws-chunked") {
+		if sigv4.IsAWSChunkedPayload(r.Header) {
 			body, length, err := sigv4.DecodeBodyForS3Write(r, nil)
 			if err != nil {
 				t.Errorf("decode upstream aws-chunked request: %v", err)

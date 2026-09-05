@@ -345,6 +345,21 @@ The gateway requires HTTPS to the upstream S3 service and streams generated
 checksums as trailing headers. Uploads do not require temporary files or
 buffering entire parts in memory. The upstream must support S3 checksum trailers.
 
+### Upload properties
+
+`PutObject` and `CreateMultipartUpload` preserve content encoding, cache controls,
+content disposition and language, object tags, storage class, website redirects,
+and S3 Bucket Key settings, in addition to content type, expiry, and user metadata.
+Multipart initiation also forwards the expected bucket owner and request payer.
+When decoding a streaming upload, the gateway removes the `aws-chunked` transport
+encoding and preserves object encodings such as `gzip`.
+
+Object Lock retention and legal-hold request headers are unsupported and return
+`501 NotImplemented` on object uploads, copies, and multipart initiation. The
+gateway also rejects `x-amz-write-offset-bytes`; append writes are unsupported.
+These headers are rejected even when empty, before an upstream write begins.
+Invalid storage classes or bucket-key booleans return `400 InvalidArgument`.
+
 ### Upload metadata
 
 `PutObject`, `CreateMultipartUpload`, admin-console uploads, and `CopyObject`

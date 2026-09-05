@@ -1360,6 +1360,14 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 	if !requireOwnerRetainingACLHeaders(w, r, false) {
 		return
 	}
+	if !requireSupportedUploadProperties(w, r) {
+		return
+	}
+	properties, err := parseUploadProperties(r)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
+		return
+	}
 
 	verifier, err := sigv4.ChunkSignatureVerifierFromRequest(r)
 	if err != nil {
@@ -1427,14 +1435,20 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 	}
 
 	in := &s3.PutObjectInput{
-		Bucket:        &bucket,
-		Key:           &key,
-		Body:          body,
-		ContentLength: aws.Int64(cl),
-		Metadata:      meta,
-		Expires:       expires,
-		IfMatch:       nil,
-		IfNoneMatch:   nil,
+		Bucket:                  &bucket,
+		Key:                     &key,
+		Body:                    body,
+		ContentLength:           aws.Int64(cl),
+		Metadata:                meta,
+		Expires:                 expires,
+		CacheControl:            properties.CacheControl,
+		ContentDisposition:      properties.ContentDisposition,
+		ContentEncoding:         properties.ContentEncoding,
+		ContentLanguage:         properties.ContentLanguage,
+		Tagging:                 properties.Tagging,
+		StorageClass:            properties.StorageClass,
+		WebsiteRedirectLocation: properties.WebsiteRedirectLocation,
+		BucketKeyEnabled:        sse.BucketKeyEnabled,
 	}
 	if ifMatch != "" {
 		in.IfMatch = aws.String(ifMatch)
@@ -1564,6 +1578,9 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 	if !requireOwnerRetainingACLHeaders(w, r, false) {
 		return
 	}
+	if !requireSupportedUploadProperties(w, r) {
+		return
+	}
 
 	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
 	ifNoneMatch := strings.TrimSpace(r.Header.Get("If-None-Match"))
@@ -1636,11 +1653,12 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 	}
 
 	in := &s3.CopyObjectInput{
-		Bucket:     &bucket,
-		Key:        &key,
-		CopySource: aws.String(copySource),
-		Metadata:   meta,
-		Expires:    expires,
+		Bucket:           &bucket,
+		Key:              &key,
+		CopySource:       aws.String(copySource),
+		Metadata:         meta,
+		Expires:          expires,
+		BucketKeyEnabled: sse.BucketKeyEnabled,
 	}
 	if ifMatch != "" {
 		in.IfMatch = aws.String(ifMatch)

@@ -236,6 +236,7 @@ func SourceBucketFromCopySource(copySource string) (string, error) {
 // write request. Nil pointer fields were absent from the request.
 type SSEWriteHeaders struct {
 	ServerSideEncryption    types.ServerSideEncryption
+	BucketKeyEnabled        *bool
 	SSEKMSKeyID             *string
 	SSEKMSEncryptionContext *string
 	SSECustomerAlgorithm    *string
@@ -260,6 +261,19 @@ func ParseSSEWriteHeaders(h http.Header) (SSEWriteHeaders, error) {
 		default:
 			return out, fmt.Errorf("unsupported server-side encryption %q", sse)
 		}
+	}
+	if values := h.Values("x-amz-server-side-encryption-bucket-key-enabled"); len(values) > 0 {
+		if len(values) != 1 {
+			return out, errors.New("multiple bucket-key-enabled headers are not supported")
+		}
+		enabled, present, err := ParseOptionalBool(values[0])
+		if err != nil || !present {
+			return out, errors.New("invalid bucket-key-enabled header")
+		}
+		if out.ServerSideEncryption != "" && out.ServerSideEncryption != types.ServerSideEncryptionAwsKms {
+			return out, errors.New("bucket-key-enabled requires aws:kms encryption")
+		}
+		out.BucketKeyEnabled = aws.Bool(enabled)
 	}
 
 	kmsKeyID := strings.TrimSpace(h.Get("x-amz-server-side-encryption-aws-kms-key-id"))
@@ -287,6 +301,9 @@ func ParseSSEWriteHeaders(h http.Header) (SSEWriteHeaders, error) {
 	if presentSSEC {
 		if out.ServerSideEncryption != "" {
 			return out, errors.New("SSE-C cannot be combined with x-amz-server-side-encryption")
+		}
+		if out.BucketKeyEnabled != nil {
+			return out, errors.New("SSE-C cannot be combined with bucket-key-enabled")
 		}
 		out.SSECustomerAlgorithm = ssecAlgo
 		out.SSECustomerKey = ssecKey

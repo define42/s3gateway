@@ -153,6 +153,45 @@ func TestParseSSEWriteHeaders(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "bucket key disabled with bucket default encryption",
+			headers: mkHeader(map[string]string{
+				"x-amz-server-side-encryption-bucket-key-enabled": "false",
+			}),
+			want: s3http.SSEWriteHeaders{BucketKeyEnabled: aws.Bool(false)},
+		},
+		{
+			name: "empty bucket key header is invalid",
+			headers: mkHeader(map[string]string{
+				"x-amz-server-side-encryption-bucket-key-enabled": "",
+			}),
+			wantErr: true,
+		},
+		{
+			name: "conflicting bucket key headers",
+			headers: http.Header{
+				"X-Amz-Server-Side-Encryption-Bucket-Key-Enabled": {"true", "false"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "bucket key requires kms mode",
+			headers: mkHeader(map[string]string{
+				"x-amz-server-side-encryption":                    "AES256",
+				"x-amz-server-side-encryption-bucket-key-enabled": "true",
+			}),
+			wantErr: true,
+		},
+		{
+			name: "bucket key cannot be combined with ssec",
+			headers: mkHeader(map[string]string{
+				"x-amz-server-side-encryption-bucket-key-enabled": "true",
+				"x-amz-server-side-encryption-customer-algorithm": "AES256",
+				"x-amz-server-side-encryption-customer-key":       "Zm9v",
+				"x-amz-server-side-encryption-customer-key-md5":   "YmFy",
+			}),
+			wantErr: true,
+		},
+		{
 			name: "unsupported server side encryption",
 			headers: mkHeader(map[string]string{
 				"x-amz-server-side-encryption": "AES128",
