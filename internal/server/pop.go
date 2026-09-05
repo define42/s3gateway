@@ -25,6 +25,7 @@ const (
 	popGlobalScope       = "_all"
 	popAllowedMethods    = "GET, POST"
 	maxKafkaGroupIDBytes = 249
+	maxPopETagBytes      = 4096
 )
 
 var (
@@ -261,6 +262,15 @@ func (s *Server) streamPoppedObject(
 	if event.VersionID != "" {
 		input.VersionId = aws.String(event.VersionID)
 	}
+	// The null version can be overwritten when bucket versioning is suspended.
+	if event.VersionID == "" || event.VersionID == "null" {
+		etag, ok := popIfMatchETag(event.ETag)
+		if !ok {
+			http.Error(w, "invalid kafka upload event: missing or invalid revision ETag", http.StatusBadGateway)
+			return errors.New("kafka upload event requires a valid ETag without an immutable version ID")
+		}
+		input.IfMatch = aws.String(etag)
+	}
 	out, err := s.up.GetObject(r.Context(), input)
 	if err != nil {
 		s3http.WriteUpstreamError(w, err)
@@ -310,6 +320,26 @@ func (s *Server) streamPoppedObject(
 		return fmt.Errorf("%w: flush popped object: %w", errPopResponseInterrupted, err)
 	}
 	return nil
+}
+
+// popIfMatchETag accepts the producer's bare ETag or one quoted strong ETag.
+// It never accepts a wildcard or list that could match a different object.
+func popIfMatchETag(etag string) (string, bool) {
+	if len(etag) > maxPopETagBytes {
+		return "", false
+	}
+	if len(etag) >= 2 && etag[0] == '"' && etag[len(etag)-1] == '"' {
+		etag = etag[1 : len(etag)-1]
+	}
+	if etag == "" || etag == "*" || strings.HasPrefix(etag, "W/") {
+		return "", false
+	}
+	for i := range len(etag) {
+		if etag[i] < 0x21 || etag[i] > 0x7e || etag[i] == '"' || etag[i] == ',' {
+			return "", false
+		}
+	}
+	return `"` + etag + `"`, true
 }
 
 func setSafePopHeader(header http.Header, key, value string) {

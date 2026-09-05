@@ -63,6 +63,7 @@ func TestPopDownloadStreaming(t *testing.T) {
 				EventName: uploadnotify.EventObjectCreatedPut,
 				Bucket:    "team2-images",
 				Key:       "object.jpg",
+				ETag:      "object-etag",
 			})}
 			configurePopGateway(gateway, consumer)
 			downstream := httptest.NewServer(gateway.WithS3Audit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

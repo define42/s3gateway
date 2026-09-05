@@ -193,6 +193,7 @@ func TestHandlePopAPIForcesDownloadForUntrustedObjectMetadata(t *testing.T) {
 				EventName: uploadnotify.EventObjectCreatedPut,
 				Bucket:    "team2-images",
 				Key:       "page.html",
+				ETag:      "page-etag",
 			})}
 			configurePopGateway(gateway, consumer)
 			request := reqWithRulesAndUploader(
@@ -232,6 +233,7 @@ func TestHandlePopAPIGlobalUsesEventBucket(t *testing.T) {
 		EventName: uploadnotify.EventObjectCreatedPut,
 		Bucket:    "team2-documents",
 		Key:       "report.pdf",
+		ETag:      "report-etag",
 	})}
 	configurePopGateway(gateway, consumer)
 
@@ -308,6 +310,7 @@ func TestHandlePopAPIDoesNotAcknowledgeWriteFailure(t *testing.T) {
 		EventName: uploadnotify.EventObjectCreatedPut,
 		Bucket:    "team2-images",
 		Key:       "object.jpg",
+		ETag:      "object-etag",
 	})}
 	configurePopGateway(gateway, consumer)
 
@@ -346,6 +349,7 @@ func TestHandlePopAPIDoesNotAcknowledgeShortObject(t *testing.T) {
 		EventName: uploadnotify.EventObjectCreatedPut,
 		Bucket:    "team2-images",
 		Key:       "object.jpg",
+		ETag:      "object-etag",
 	})}
 	configurePopGateway(gateway, consumer)
 
@@ -617,6 +621,7 @@ func TestHandlePopAPICommitFailureOccursAfterBody(t *testing.T) {
 		record: popRecord(t, "team2-images", uploadnotify.Event{
 			Bucket: "team2-images",
 			Key:    "object",
+			ETag:   "object-etag",
 		}),
 		commitErr: errors.New("commit unavailable"),
 	}

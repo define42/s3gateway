@@ -580,6 +580,26 @@ curl --user 'user' \
 With the password omitted from `--user`, curl prompts for it instead of placing
 it in the shell history.
 
+Pop selects the event's object version when `version_id` contains an immutable
+version ID. When the version ID is absent or is the mutable literal `null`, Pop
+requires the event's ETag and sends it as `If-Match` on the S3 read. Both bare
+producer ETags and single quoted strong ETags are accepted; wildcards, lists,
+weak tags, malformed values, and values over 4096 bytes are rejected. An event
+without a usable revision identifier returns `502 Bad Gateway` before any S3
+read. If the object has been overwritten with a different ETag, Pop returns
+`412 Precondition Failed`; a deleted object normally returns `404 Not Found`.
+These events remain unacknowledged, with no retry against the current object
+without the condition. They may repeatedly block delivery from their Kafka
+partition until an operator resolves the unavailable event or deliberately
+advances the consumer group's offset using Kafka tooling.
+
+For exact uploaded-revision delivery, enable bucket versioning before uploads,
+keep it enabled, and retain each version until its events have been consumed.
+ETags can repeat for identical content and metadata-only overwrites, so a
+conditional unversioned read does not uniquely identify an upload or preserve
+its original metadata. See [S3 conditional reads](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)
+and [S3 ETag semantics](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingMetadata.html).
+
 The response body is the S3 object. `X-S3Gateway-Bucket` identifies its bucket,
 and `X-S3Gateway-Object-Key` contains the URL-query-escaped object key. A
 successful response uses `Content-Type: application/octet-stream`,
