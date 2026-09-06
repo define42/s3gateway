@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/define42/s3gateway/internal/adminpage"
@@ -507,6 +508,10 @@ func (w *s3AuditResponseWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+var s3AuditCopyBufferPool = sync.Pool{
+	New: func() any { return new([32 << 10]byte) },
+}
+
 func (w *s3AuditResponseWriter) ReadFrom(r io.Reader) (int64, error) {
 	if w.status == 0 {
 		w.WriteHeader(http.StatusOK)
@@ -516,7 +521,10 @@ func (w *s3AuditResponseWriter) ReadFrom(r io.Reader) (int64, error) {
 		w.bytesWritten += n
 		return n, err
 	}
-	return io.Copy(struct{ io.Writer }{w}, r)
+	buf := s3AuditCopyBufferPool.Get().(*[32 << 10]byte)
+	defer s3AuditCopyBufferPool.Put(buf)
+	// Keep every chunk on Write's accounting and transfer-progress path.
+	return io.CopyBuffer(struct{ io.Writer }{w}, r, buf[:])
 }
 
 func (w *s3AuditResponseWriter) Flush() {

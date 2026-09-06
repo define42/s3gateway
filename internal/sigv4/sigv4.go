@@ -369,6 +369,20 @@ func canonicalHeaders(r *http.Request, signedHeaders []string) (string, string, 
 }
 
 func compressSpaces(s string) string {
+	// Avoid copying already-normalized ASCII headers. Other values retain the
+	// rune-based normalization, including replacement of invalid UTF-8 bytes.
+	previousSpace := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 0x80 || c == '\t' || (c == ' ' && previousSpace) {
+			return compressSpacesSlow(s)
+		}
+		previousSpace = c == ' '
+	}
+	return s
+}
+
+func compressSpacesSlow(s string) string {
 	var out bytes.Buffer
 	inSpace := false
 	for _, r := range s {

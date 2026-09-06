@@ -77,7 +77,8 @@ type Server struct {
 	auditHashKeys        [auditHashScopeCount][sha256.Size]byte
 	auditHashReady       bool
 	gcache               *groupcache.Cache
-	groupLookupSF        singleflight.Group
+	groupLookupMu        sync.Mutex
+	groupLookups         map[string]*groupLookup
 	fetchGroups          func(cfg config.Config, upn, pass string) (map[string]struct{}, error)
 	authLimiter          *authn.Limiter
 	trustedProxyPrefixes []netip.Prefix
@@ -90,6 +91,12 @@ type Server struct {
 	readinessSF              singleflight.Group
 	readinessNow             func() time.Time
 	readinessCheck           func(context.Context) error
+}
+
+type groupLookup struct {
+	done   chan struct{}
+	groups map[string]struct{}
+	err    error
 }
 
 // UploadNotifier receives events only after the upstream S3 operation has
@@ -182,8 +189,12 @@ func (s *Server) GroupsForCredentials(upn, pass string) (map[string]struct{}, er
 
 // GroupsForCredentialsContext returns LDAP groups for a username and password,
 // using the credential-bound cache and coalescing concurrent identical
-// lookups. The returned map is detached from cached state.
+// lookups. Cancellation stops this caller's wait without interrupting the
+// shared lookup. The returned map is detached from cached state.
 func (s *Server) GroupsForCredentialsContext(ctx context.Context, upn, pass string) (map[string]struct{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if upn == "" || pass == "" {
 		return nil, errors.New("missing credentials")
 	}
@@ -197,44 +208,75 @@ func (s *Server) GroupsForCredentialsContext(ctx context.Context, upn, pass stri
 		return nil, authn.ErrRejectedCredentials
 	}
 
-	sfKey := groupcache.SingleflightCredentialKey(upn, pass)
+	lookup := s.startGroupLookup(upn, pass, authn.NewAttempt(authClientIPFromContext(ctx), upn, pass))
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-lookup.done:
+	}
+	// If completion and cancellation race, do not authenticate a caller whose
+	// cancellation is already observable.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if lookup.err != nil {
+		return nil, lookup.err
+	}
+	s.authLimiter.RefundIngress(authClientIPFromContext(ctx))
+	return groupcache.CloneGroups(lookup.groups), nil
+}
+
+func (s *Server) startGroupLookup(upn, pass string, attempt authn.Attempt) *groupLookup {
+	key := groupcache.SingleflightCredentialKey(upn, pass)
+	s.groupLookupMu.Lock()
+	defer s.groupLookupMu.Unlock()
+	if lookup := s.groupLookups[key]; lookup != nil {
+		return lookup
+	}
+	if s.groupLookups == nil {
+		s.groupLookups = make(map[string]*groupLookup)
+	}
+	lookup := &groupLookup{done: make(chan struct{})}
+	s.groupLookups[key] = lookup
+	// One completion channel per lookup lets canceled waiters leave without
+	// retaining per-waiter state. LDAP timeouts and admission limits still apply
+	// to the shared work, independently of any one request's lifetime.
+	go func() {
+		lookup.groups, lookup.err = s.lookupCredentialGroups(upn, pass, attempt)
+		s.groupLookupMu.Lock()
+		delete(s.groupLookups, key)
+		close(lookup.done)
+		s.groupLookupMu.Unlock()
+	}()
+	return lookup
+}
+
+func (s *Server) lookupCredentialGroups(upn, pass string, attempt authn.Attempt) (map[string]struct{}, error) {
+	if cached, ok := s.gcache.Get(upn, pass); ok {
+		return cached, nil
+	}
+	if s.gcache.Rejected(upn, pass) {
+		return nil, authn.ErrRejectedCredentials
+	}
+	release, err := s.authLimiter.TryAcquire(attempt)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	fetchGroups := s.fetchGroups
 	if fetchGroups == nil {
 		fetchGroups = ldapinternal.FetchGroupsUPN
 	}
-	attempt := authn.NewAttempt(authClientIPFromContext(ctx), upn, pass)
-	v, err, _ := s.groupLookupSF.Do(sfKey, func() (any, error) {
-		if cached, ok := s.gcache.Get(upn, pass); ok {
-			return cached, nil
-		}
-		if s.gcache.Rejected(upn, pass) {
-			return nil, authn.ErrRejectedCredentials
-		}
-		release, err := s.authLimiter.TryAcquire(attempt)
-		if err != nil {
-			return nil, err
-		}
-		defer release()
-		fetched, err := fetchGroups(s.cfg, upn, pass)
-		if err != nil {
-			if errors.Is(err, authn.ErrRejectedCredentials) {
-				s.gcache.Reject(upn, pass)
-			}
-			return nil, err
-		}
-		s.gcache.Set(upn, pass, fetched)
-		s.authLimiter.MarkAuthenticated(attempt)
-		return fetched, nil
-	})
+	fetched, err := fetchGroups(s.cfg, upn, pass)
 	if err != nil {
+		if errors.Is(err, authn.ErrRejectedCredentials) {
+			s.gcache.Reject(upn, pass)
+		}
 		return nil, err
 	}
-	s.authLimiter.RefundIngress(authClientIPFromContext(ctx))
-	shared, ok := v.(map[string]struct{})
-	if !ok {
-		return nil, errors.New("internal auth error")
-	}
-	return groupcache.CloneGroups(shared), nil
+	s.gcache.Set(upn, pass, fetched)
+	s.authLimiter.MarkAuthenticated(attempt)
+	return fetched, nil
 }
 
 // WithAuth routes health checks and browser-admin requests before authenticating
