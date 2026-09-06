@@ -96,7 +96,7 @@ func TestGatewayXMLContentMD5(t *testing.T) {
 				code      string
 			}{
 				{name: "valid digest", body: route.body, digests: []string{xmlBodyMD5(route.body)}},
-				{name: "valid digest with SHA256", body: route.body, digests: []string{xmlBodyMD5(route.body)}, algorithm: "SHA256"},
+				{name: "valid MD5 and SHA256 digests", body: route.body, digests: []string{xmlBodyMD5(route.body)}, algorithm: "SHA256"},
 				{name: "absent digest", body: route.body},
 				{name: "mismatched digest", body: route.body, digests: []string{xmlBodyMD5("different body")}, code: "BadDigest"},
 				{name: "digest omits trailing whitespace", body: route.body, digests: []string{xmlBodyMD5(strings.TrimSpace(route.body))}, code: "BadDigest"},
@@ -108,9 +108,6 @@ func TestGatewayXMLContentMD5(t *testing.T) {
 				{name: "oversized XML", body: oversizedXML, digests: []string{xmlBodyMD5(oversizedXML)}, code: "MalformedXML"},
 			}
 			for _, tc := range cases {
-				if tc.algorithm != "" && route.name == "bucket versioning" {
-					continue // The gateway's versioning handler does not forward checksum algorithm selection.
-				}
 				t.Run(tc.name, func(t *testing.T) {
 					req := httptest.NewRequest(http.MethodPut, route.path, strings.NewReader(tc.body))
 					for _, digest := range tc.digests {
@@ -118,6 +115,7 @@ func TestGatewayXMLContentMD5(t *testing.T) {
 					}
 					if tc.algorithm != "" {
 						req.Header.Set("x-amz-checksum-algorithm", tc.algorithm)
+						req.Header.Set("x-amz-checksum-sha256", deleteObjectsTestChecksum("SHA256", tc.body))
 					}
 					req = req.WithContext(authz.WithRules(req.Context(), fullTeam2Rule()))
 					rr := httptest.NewRecorder()
@@ -148,9 +146,6 @@ func TestGatewayXMLContentMD5(t *testing.T) {
 					}
 					if observed.checksum == "" {
 						t.Error("upstream request has no checksum for rewritten XML")
-					}
-					if tc.algorithm != "" && observed.algorithm != tc.algorithm {
-						t.Errorf("upstream checksum algorithm=%q, want %q", observed.algorithm, tc.algorithm)
 					}
 				})
 			}

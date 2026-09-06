@@ -1,7 +1,10 @@
 package server
 
 import (
+	"errors"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -10,12 +13,29 @@ import (
 	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/define42/s3gateway/internal/s3http"
 	"github.com/define42/s3gateway/internal/s3xml"
+	"github.com/define42/s3gateway/internal/upstream"
 )
 
 func (s *Server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
 	rules := authz.RulesFromRequest(r)
+	in, paginated, err := parseListBucketsQuery(r.URL.Query())
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
+		return
+	}
 
-	out, err := s.up.ListBuckets(r.Context(), &s3.ListBucketsInput{})
+	var out *s3.ListBucketsOutput
+	if paginated {
+		out, err = s.up.ListBuckets(r.Context(), in)
+		if err == nil && aws.ToString(out.ContinuationToken) != "" &&
+			aws.ToString(out.ContinuationToken) == aws.ToString(in.ContinuationToken) {
+			err = errors.New("upstream returned a repeated bucket continuation token")
+		}
+	} else {
+		// Preserve complete listings for existing clients while always using
+		// paginated upstream calls, including accounts with elevated quotas.
+		out, err = upstream.ListAllBuckets(r.Context(), s.up)
+	}
 	if err != nil {
 		s3http.WriteUpstreamError(w, err)
 		return
@@ -37,7 +57,54 @@ func (s *Server) handleListBuckets(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	xw.End("Buckets")
+	if out.ContinuationToken != nil && *out.ContinuationToken != "" {
+		xw.Elem("ContinuationToken", *out.ContinuationToken)
+	}
+	if out.Prefix != nil {
+		xw.Elem("Prefix", *out.Prefix)
+	}
 	xw.End("ListAllMyBucketsResult")
+}
+
+func parseListBucketsQuery(q url.Values) (*s3.ListBucketsInput, bool, error) {
+	in := &s3.ListBucketsInput{MaxBuckets: aws.Int32(upstream.DefaultBucketPageSize)}
+	paginated := false
+	for name, values := range q {
+		if name == "x-id" {
+			continue
+		}
+		switch name {
+		case "max-buckets", "bucket-region", "prefix", "continuation-token":
+		default:
+			return nil, false, errors.New("unsupported query parameter for ListBuckets")
+		}
+		if len(values) != 1 {
+			return nil, false, errors.New("ListBuckets parameters require a single value")
+		}
+		value := values[0]
+		paginated = true
+		switch name {
+		case "max-buckets":
+			limit, err := strconv.ParseInt(value, 10, 32)
+			if err != nil || limit < 1 || limit > int64(upstream.DefaultBucketPageSize) {
+				return nil, false, errors.New("max-buckets must be between 1 and 10000")
+			}
+			in.MaxBuckets = aws.Int32(int32(limit))
+		case "bucket-region":
+			if strings.TrimSpace(value) == "" {
+				return nil, false, errors.New("bucket-region must not be empty")
+			}
+			in.BucketRegion = aws.String(value)
+		case "prefix":
+			in.Prefix = aws.String(value)
+		case "continuation-token":
+			if len(value) > 1024 {
+				return nil, false, errors.New("continuation-token must not exceed 1024 bytes")
+			}
+			in.ContinuationToken = aws.String(value)
+		}
+	}
+	return in, paginated, nil
 }
 
 func (s *Server) handleCreateBucket(w http.ResponseWriter, r *http.Request, bucket string) {
@@ -199,7 +266,7 @@ func (s *Server) handlePutBucketVersioning(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	cfg, ok := decodeXMLWithContentMD5(w, r, s3xml.DecodeVersioningConfig, "Invalid versioning configuration")
+	cfg, ok := decodeXMLWithChecksums(w, r, s3xml.DecodeVersioningConfig, "Invalid versioning configuration")
 	if !ok {
 		return
 	}
@@ -255,22 +322,13 @@ func (s *Server) handlePutBucketTagging(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	tagging, ok := decodeXMLWithContentMD5(w, r, s3xml.DecodeBucketTagging, "Invalid tagging payload")
+	tagging, ok := decodeXMLWithChecksums(w, r, s3xml.DecodeBucketTagging, "Invalid tagging payload")
 	if !ok {
 		return
 	}
-	checksumAlgorithm, err := s3http.ParseChecksumAlgorithmHeader(r.Header.Get("x-amz-checksum-algorithm"))
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum algorithm")
-		return
-	}
-
 	in := &s3.PutBucketTaggingInput{
 		Bucket:  &bucket,
 		Tagging: tagging,
-	}
-	if checksumAlgorithm != "" {
-		in.ChecksumAlgorithm = checksumAlgorithm
 	}
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)

@@ -777,7 +777,7 @@ func (h *handler) listAllBuckets(ctx context.Context) ([]string, error) {
 		return nil, errors.New("upstream s3 client is not configured")
 	}
 
-	out, err := h.s3.ListBuckets(ctx, &s3.ListBucketsInput{})
+	out, err := upstream.ListAllBuckets(ctx, h.s3)
 	if err != nil {
 		return nil, err
 	}

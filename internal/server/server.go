@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	adminpage "github.com/define42/s3gateway/internal/adminpage"
 	"github.com/define42/s3gateway/internal/authn"
@@ -242,7 +243,7 @@ func (s *Server) GroupsForCredentialsContext(ctx context.Context, upn, pass stri
 // key. Successful requests receive authorization and identity context values.
 func (s *Server) WithAuth(next http.Handler, adminHandler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		preserveDeleteObjectsTrailers(r)
+		preserveXMLRequestTrailers(r)
 		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
 			next.ServeHTTP(w, r)
 			return
@@ -457,6 +458,7 @@ var supportedS3QueryParameters = map[string]struct{}{
 	"accelerate":                   {},
 	"acl":                          {},
 	"attributes":                   {},
+	"bucket-region":                {},
 	"continuation-token":           {},
 	"cors":                         {},
 	"delete":                       {},
@@ -469,6 +471,7 @@ var supportedS3QueryParameters = map[string]struct{}{
 	"location":                     {},
 	"logging":                      {},
 	"marker":                       {},
+	"max-buckets":                  {},
 	"max-keys":                     {},
 	"max-parts":                    {},
 	"max-uploads":                  {},
@@ -543,6 +546,9 @@ func firstUnsupportedSubresource(q url.Values) string {
 func validateS3OperationQuery(method, path string, q url.Values) error {
 	if q.Has("") {
 		return errors.New("query parameter names must not be empty")
+	}
+	if (q.Has("max-buckets") || q.Has("bucket-region")) && (method != http.MethodGet || path != "/") {
+		return errors.New("max-buckets and bucket-region require a ListBuckets request")
 	}
 	_, key, hasKey := strings.Cut(strings.TrimPrefix(path, "/"), "/")
 	objectPath := hasKey && key != ""
@@ -968,7 +974,8 @@ func (s *Server) checkS3Ready(ctx context.Context) error {
 	if s.up == nil {
 		return errors.New("client not configured")
 	}
-	_, err := s.up.ListBuckets(ctx, &s3.ListBucketsInput{})
+	// A single small page verifies access without walking the bucket inventory.
+	_, err := s.up.ListBuckets(ctx, &s3.ListBucketsInput{MaxBuckets: aws.Int32(1)})
 	return err
 }
 

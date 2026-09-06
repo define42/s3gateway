@@ -90,7 +90,7 @@ func newAuditMasterKey(configured string) ([sha256.Size]byte, bool) {
 // traffic are not S3 operations and are passed through without audit events.
 func (s *Server) WithS3Audit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		preserveDeleteObjectsTrailers(r)
+		preserveXMLRequestTrailers(r)
 		if isS3AuditExcluded(r) {
 			next.ServeHTTP(w, r)
 			return

@@ -740,7 +740,7 @@ func (s *Server) handlePutBucketLifecycleConfiguration(w http.ResponseWriter, r 
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
 		return
 	}
-	cfg, ok := decodeXMLWithContentMD5(w, r, decodeLifecycleConfigXML, "Invalid lifecycle configuration")
+	cfg, ok := decodeXMLWithChecksums(w, r, decodeLifecycleConfigXML, "Invalid lifecycle configuration")
 	if !ok {
 		return
 	}

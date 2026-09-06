@@ -105,7 +105,7 @@ func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	tagging, ok := decodeXMLWithContentMD5(w, r, s3xml.DecodeObjectTagging, "Invalid tagging payload")
+	tagging, ok := decodeXMLWithChecksums(w, r, s3xml.DecodeObjectTagging, "Invalid tagging payload")
 	if !ok {
 		return
 	}
@@ -114,12 +114,6 @@ func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, 
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
 		return
 	}
-	checksumAlgorithm, err := s3http.ParseChecksumAlgorithmHeader(r.Header.Get("x-amz-checksum-algorithm"))
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid checksum algorithm")
-		return
-	}
-
 	in := &s3.PutObjectTaggingInput{
 		Bucket:  &bucket,
 		Key:     &key,
@@ -127,9 +121,6 @@ func (s *Server) handlePutObjectTagging(w http.ResponseWriter, r *http.Request, 
 	}
 	if versionID := strings.TrimSpace(r.URL.Query().Get("versionId")); versionID != "" {
 		in.VersionId = aws.String(versionID)
-	}
-	if checksumAlgorithm != "" {
-		in.ChecksumAlgorithm = checksumAlgorithm
 	}
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)

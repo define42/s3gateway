@@ -87,7 +87,7 @@ func TestDeleteObjectsHTTPChecksumTrailers(t *testing.T) {
 						footer = "X-Amz-Checksum-Crc32: AAAAAA==\r\n"
 					}
 					before := upstreamCalls.Load()
-					status, responseBody := rawChunkedDeleteRequest(t, front, req, body, footer)
+					status, responseBody := rawChunkedXMLRequest(t, front, req, body, footer)
 					calls := upstreamCalls.Load() - before
 					if scenario.wantInvalid {
 						if status != http.StatusBadRequest || !strings.Contains(responseBody, "<Code>InvalidRequest</Code>") || calls != 0 {
@@ -104,7 +104,7 @@ func TestDeleteObjectsHTTPChecksumTrailers(t *testing.T) {
 
 // Raw HTTP/1.1 is necessary because net/http's client declares trailer fields.
 // Omitting that declaration tests trailers discovered only after reading EOF.
-func rawChunkedDeleteRequest(t *testing.T, front *httptest.Server, req *http.Request, body, footer string) (int, string) {
+func rawChunkedXMLRequest(t *testing.T, front *httptest.Server, req *http.Request, body, footer string) (int, string) {
 	t.Helper()
 	endpoint, err := url.Parse(front.URL)
 	if err != nil {
@@ -120,13 +120,13 @@ func rawChunkedDeleteRequest(t *testing.T, front *httptest.Server, req *http.Req
 		t.Fatal(err)
 	}
 	var wire strings.Builder
-	fmt.Fprintf(&wire, "POST %s HTTP/1.1\r\nHost: %s\r\n", req.URL.RequestURI(), endpoint.Host)
+	fmt.Fprintf(&wire, "%s %s HTTP/1.1\r\nHost: %s\r\n", req.Method, req.URL.RequestURI(), endpoint.Host)
 	if err := req.Header.Write(&wire); err != nil {
 		t.Fatalf("encode signed headers: %v", err)
 	}
 	fmt.Fprintf(&wire, "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n%x\r\n%s\r\n0\r\n%s\r\n", len(body), body, footer)
 	if _, err := io.WriteString(conn, wire.String()); err != nil {
-		t.Fatalf("send chunked deletion: %v", err)
+		t.Fatalf("send chunked XML request: %v", err)
 	}
 	response, err := http.ReadResponse(bufio.NewReader(conn), req)
 	if err != nil {

@@ -21,6 +21,7 @@ func withTransferLimits(cfg config.Config, next http.Handler) http.Handler {
 	}
 	slots := make(chan struct{}, cfg.MaxConcurrentRequests)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		preserveXMLRequestTrailers(r)
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 		activity := &transferActivity{

@@ -2,6 +2,8 @@ package adminpage
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -9,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/define42/s3gateway/internal/authn"
@@ -391,10 +394,25 @@ func TestAdminDashboardRequiresSession(t *testing.T) {
 func TestAdminDashboardWithSessionRendersGroupsAndBuckets(t *testing.T) {
 	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/" {
-			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+			t.Errorf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
+			w.WriteHeader(http.StatusBadRequest)
+			return
 		}
 		w.Header().Set("Content-Type", "application/xml")
-		w.WriteHeader(http.StatusOK)
+		if r.URL.Query().Get("max-buckets") != "10000" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `<Error><Code>InvalidArgument</Code><Message>Pagination is required</Message></Error>`)
+			return
+		}
+		if token := r.URL.Query().Get("continuation-token"); token != "" {
+			if token != "opaque/+?=&" {
+				t.Errorf("continuation token = %q", token)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			_, _ = io.WriteString(w, `<ListAllMyBucketsResult><Buckets><Bucket><Name> team2-alpha </Name></Bucket><Bucket/><Bucket><Name> </Name></Bucket></Buckets></ListAllMyBucketsResult>`)
+			return
+		}
 		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
 <ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Owner><ID>owner</ID><DisplayName>owner</DisplayName></Owner>
@@ -403,6 +421,7 @@ func TestAdminDashboardWithSessionRendersGroupsAndBuckets(t *testing.T) {
     <Bucket><Name>team3-writeonly</Name></Bucket>
     <Bucket><Name>team9-hidden</Name></Bucket>
   </Buckets>
+  <ContinuationToken>opaque/+?=&amp;</ContinuationToken>
 </ListAllMyBucketsResult>`))
 	})
 	defer cleanup()
@@ -467,6 +486,56 @@ func TestAdminDashboardWithSessionRendersGroupsAndBuckets(t *testing.T) {
 	}
 	if strings.Contains(body, "team9-hidden") {
 		t.Fatalf("unexpected bucket shown in admin page: %q", body)
+	}
+	alpha := strings.Index(body, "/admin/bucket?name=team2-alpha")
+	logs := strings.Index(body, "/admin/bucket?name=team2-logs")
+	if alpha < 0 || alpha >= logs {
+		t.Fatalf("all bucket pages should be cleaned and sorted: alpha index=%d, logs index=%d", alpha, logs)
+	}
+}
+
+func TestAdminListAllBucketsDiscardsFailedPages(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		name := "upstream error"
+		if canceled {
+			name = "request cancellation"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var calls atomic.Int32
+			gw, _, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Content-Type", "application/xml")
+				if r.URL.Query().Get("max-buckets") != "10000" {
+					t.Error("bucket discovery omitted the required page size")
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if r.URL.Query().Get("continuation-token") == "" {
+					_, _ = io.WriteString(w, `<ListAllMyBucketsResult><Buckets><Bucket><Name>team2-partial</Name></Bucket></Buckets><ContinuationToken>next</ContinuationToken></ListAllMyBucketsResult>`)
+					return
+				}
+				if canceled {
+					cancel()
+					<-r.Context().Done()
+					return
+				}
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, `<Error><Code>AccessDenied</Code><Message>Second page denied</Message></Error>`)
+			})
+			t.Cleanup(cleanup)
+			buckets, err := gw.listAllBuckets(ctx)
+			if err == nil || buckets != nil || calls.Load() != 2 {
+				t.Fatalf("buckets=%v, error=%v, calls=%d", buckets, err, calls.Load())
+			}
+			if canceled && !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation error = %v", err)
+			}
+			if !canceled && !strings.Contains(err.Error(), "AccessDenied") {
+				t.Fatalf("upstream error = %v", err)
+			}
+		})
 	}
 }
 

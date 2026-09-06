@@ -365,6 +365,23 @@ With the setting empty, administration uses the request's Host and TLS state.
 This setting applies only to administration; S3 unsigned-payload requests still
 require TLS on the connection to the gateway.
 
+### Bucket discovery
+
+The gateway always supplies a page size for upstream `ListBuckets` calls,
+supporting [AWS accounts with bucket quotas above 10,000](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListBuckets.html).
+An ordinary `GET /` follows every upstream page and returns the complete list of
+buckets permitted by the caller's LDAP groups. Administration also follows every
+page. Readiness requests only one bucket and does not scan the inventory.
+
+Clients can request individual pages using `max-buckets` (1–10,000),
+`continuation-token`, `prefix`, or `bucket-region`. These requests forward the
+filters and opaque continuation token and return the upstream page's next token.
+Without `max-buckets`, the requested page size is 10,000. Authorization is applied
+to every page, so a page may be empty and still have a continuation token; keep
+following tokens until none remains. Invalid or repeated pagination parameters
+return `400 InvalidArgument`. Failed pages and repeated upstream tokens cause an
+error; complete listings never return a successful partial inventory.
+
 ### Bucket creation
 
 `CreateBucket` forwards `LocationConstraint` and
@@ -381,9 +398,7 @@ payload hashes are verified before creation. An empty body retains the upstream
 default region behavior.
 
 Lifecycle GET, PUT, and DELETE requests forward
-`x-amz-expected-bucket-owner`. Lifecycle PUT validates supplied
-`Content-MD5` values against the original XML before forwarding a change; the
-SDK calculates new checksums for its serialized upstream body.
+`x-amz-expected-bucket-owner`.
 Malformed or oversized configuration XML returns `400 MalformedXML`.
 
 Lifecycle PUT accepts `x-amz-transition-default-minimum-object-size` values
@@ -391,6 +406,22 @@ Lifecycle PUT accepts `x-amz-transition-default-minimum-object-size` values
 values return `400 InvalidArgument`. Lifecycle GET and PUT responses preserve
 the upstream value. Version deletion forwards `x-amz-mfa`, including for
 single-object deletes from buckets with MFA Delete enabled.
+
+### Configuration write checksums
+
+Object tagging, bucket tagging, versioning, and lifecycle PUTs validate supplied
+`Content-MD5` and CRC32, CRC32C, CRC64NVME, SHA1, or SHA256 checksum headers against
+the original XML before writing upstream. If both MD5 and an alternate checksum
+are supplied, both must match. A mismatch returns `400 BadDigest`; malformed,
+duplicate, or unsupported checksum claims return `400` without an upstream write.
+
+Algorithm selectors require an individual checksum value. When a value is
+provided, it takes precedence over algorithm selection, as described by
+[AWS's configuration checksum requirements](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketTagging.html).
+Trailers are unsupported for these configuration operations; send checksum
+headers instead. The SDK calculates fresh checksums for the XML it serializes
+upstream. Requests without checksum headers remain accepted for compatibility.
+Encryption configuration remains unsupported.
 
 ### Multi-object delete checksums
 

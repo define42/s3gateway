@@ -21,14 +21,6 @@ type deleteObjectsChecksum struct {
 	expected []byte
 }
 
-// preserveDeleteObjectsTrailers keeps late HTTP/1 trailers visible across the
-// shallow request copies made by authentication and audit middleware.
-func preserveDeleteObjectsTrailers(r *http.Request) {
-	if r.Method == http.MethodPost && r.Trailer == nil && r.URL.Query().Has("delete") {
-		r.Trailer = make(http.Header)
-	}
-}
-
 func rejectDeleteObjectsTrailers(w http.ResponseWriter, r *http.Request) bool {
 	if len(r.Trailer) == 0 && len(r.Header.Values("Trailer")) == 0 && len(r.Header.Values("x-amz-trailer")) == 0 {
 		return false

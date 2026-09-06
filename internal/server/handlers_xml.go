@@ -12,6 +12,43 @@ import (
 	"github.com/define42/s3gateway/internal/s3xml"
 )
 
+// decodeXMLWithChecksums validates integrity claims against the complete original
+// XML. The SDK must compute its own checksum after serializing the decoded fields.
+func decodeXMLWithChecksums[T any](
+	w http.ResponseWriter,
+	r *http.Request,
+	decode func(io.Reader) (T, error),
+	malformedMessage string,
+) (T, bool) {
+	var zero T
+	if rejectXMLRequestTrailers(w, r) {
+		return zero, false
+	}
+	checksum, ok := parseXMLRequestChecksum(w, r.Header)
+	if !ok {
+		return zero, false
+	}
+	decodeBody := func(body io.Reader) (T, error) {
+		if checksum != nil {
+			body = io.TeeReader(body, checksum.digest)
+		}
+		return decode(body)
+	}
+	decoded, ok := decodeXMLWithContentMD5(w, r, decodeBody, malformedMessage)
+	if !ok {
+		return zero, false
+	}
+	// Reading through EOF can reveal HTTP trailers that were not declared.
+	if rejectXMLRequestTrailers(w, r) {
+		return zero, false
+	}
+	if checksum != nil && !bytes.Equal(checksum.digest.Sum(nil), checksum.expected) {
+		s3xml.WriteError(w, http.StatusBadRequest, "BadDigest", "The checksum does not match the request body")
+		return zero, false
+	}
+	return decoded, true
+}
+
 // decodeXMLWithContentMD5 validates the original bytes before the SDK serializes
 // a new XML body. decode must enforce a body limit and read through EOF on success.
 // The caller must leave the SDK's ContentMD5 unset so its required checksum
