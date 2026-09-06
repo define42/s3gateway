@@ -325,18 +325,6 @@ func classifyBucketAction(method string, q url.Values) string {
 			return unsupportedS3Action
 		}
 	}
-	if q.Has("encryption") {
-		switch method {
-		case http.MethodPut:
-			return "PutBucketEncryption"
-		case http.MethodGet:
-			return "GetBucketEncryption"
-		case http.MethodDelete:
-			return "DeleteBucketEncryption"
-		default:
-			return unsupportedS3Action
-		}
-	}
 	for _, key := range bucketConfigReadKeys {
 		if !q.Has(key) {
 			continue

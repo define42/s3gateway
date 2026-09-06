@@ -23,12 +23,6 @@ var bucketConfigurationRoutes = []struct {
   </Rule>
 </LifecycleConfiguration>
   `},
-	{name: "encryption", target: "/team2-bucket?encryption", limit: maxBucketConfigBodyBytes, content: "<SSEAlgorithm>AES256</SSEAlgorithm>", body: `<?xml version="1.0" encoding="UTF-8"?>
-<!-- The checksum covers the client's formatting. -->
-<ServerSideEncryptionConfiguration>
-  <Rule><ApplyServerSideEncryptionByDefault><SSEAlgorithm>AES256</SSEAlgorithm></ApplyServerSideEncryptionByDefault></Rule>
-</ServerSideEncryptionConfiguration>
-  `},
 }
 
 func TestBucketConfigurationContentMD5(t *testing.T) {

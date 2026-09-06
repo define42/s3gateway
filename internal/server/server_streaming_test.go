@@ -28,7 +28,7 @@ func TestWithAuthRejectsStreamingControlRequests(t *testing.T) {
 		{name: "bucket creation", method: http.MethodPut, path: "/team2-bucket"},
 		{name: "bucket tagging", method: http.MethodPut, path: "/team2-bucket?tagging"},
 		{name: "bucket lifecycle", method: http.MethodPut, path: "/team2-bucket?lifecycle"},
-		{name: "bucket encryption", method: http.MethodPut, path: "/team2-bucket?encryption"},
+		{name: "bucket encryption", method: http.MethodPut, path: "/team2-bucket?encryption", unsupported: true},
 		{name: "bucket ACL", method: http.MethodPut, path: "/team2-bucket?acl"},
 		{name: "multi delete", method: http.MethodPost, path: "/team2-bucket?delete"},
 		{name: "object tagging", method: http.MethodPut, path: "/team2-bucket/key?tagging"},

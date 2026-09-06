@@ -5,10 +5,57 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/define42/s3gateway/internal/authz"
 )
+
+func TestBucketEncryptionUnsupported(t *testing.T) {
+	var upstreamCalls atomic.Int32
+	gw, cleanup := newGatewayWithRawStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
+	t.Cleanup(cleanup)
+
+	bodies := []struct{ name, value string }{
+		{name: "valid", value: `<ServerSideEncryptionConfiguration><Rule><ApplyServerSideEncryptionByDefault><SSEAlgorithm>AES256</SSEAlgorithm></ApplyServerSideEncryptionByDefault></Rule></ServerSideEncryptionConfiguration>`},
+		{name: "malformed", value: `<ServerSideEncryptionConfiguration`},
+		{name: "deeply nested", value: strings.Repeat("<x>", 8192) + strings.Repeat("</x>", 8192)},
+	}
+	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodHead, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			for _, target := range []string{
+				"/team2-bucket?encryption",
+				"/team2-bucket/?encryption",
+				"/team2-bucket/key?encryption",
+				"/team2-bucket?encryption&lifecycle",
+				"/team2-bucket/key?encryption&uploadId=upload",
+			} {
+				t.Run(target, func(t *testing.T) {
+					for _, body := range bodies {
+						t.Run(body.name, func(t *testing.T) {
+							reader := strings.NewReader(body.value)
+							req := httptest.NewRequest(method, target, reader)
+							rr := httptest.NewRecorder()
+							gw.ServeHTTP(rr, reqWithRules(req, fullTeam2Rule()))
+							if rr.Code != http.StatusNotImplemented || !strings.Contains(rr.Body.String(), "<Code>NotImplemented</Code>") {
+								t.Fatalf("status=%d body=%s, want 501 NotImplemented", rr.Code, rr.Body.String())
+							}
+							if reader.Len() != len(body.value) {
+								t.Error("unsupported encryption configuration body was read")
+							}
+							if got := upstreamCalls.Load(); got != 0 {
+								t.Fatalf("unsupported encryption request reached upstream %d times", got)
+							}
+						})
+					}
+				})
+			}
+		})
+	}
+}
 
 // stubUpstreamHeadOK answers HEAD bucket/object probes with 200 and fails the
 // test on any other upstream call.
@@ -332,111 +379,6 @@ func TestBucketConfigLocalReads(t *testing.T) {
 		gwMissing.ServeHTTP(rr, req)
 		if rr.Code != http.StatusNotFound || !strings.Contains(rr.Body.String(), "NoSuchBucket") {
 			t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
-		}
-	})
-}
-
-func TestBucketEncryptionProxied(t *testing.T) {
-	t.Run("put forwards configuration upstream", func(t *testing.T) {
-		var upstreamBody []byte
-		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPut || r.URL.Path != "/team2-bucket" {
-				t.Errorf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
-			}
-			if _, ok := r.URL.Query()["encryption"]; !ok {
-				t.Errorf("expected encryption sub-resource upstream: %s", r.URL.RawQuery)
-			}
-			b, _ := io.ReadAll(r.Body)
-			upstreamBody = b
-			w.WriteHeader(http.StatusOK)
-		})
-		defer cleanup()
-
-		body := `<ServerSideEncryptionConfiguration><Rule><ApplyServerSideEncryptionByDefault><SSEAlgorithm>AES256</SSEAlgorithm></ApplyServerSideEncryptionByDefault><BucketKeyEnabled>true</BucketKeyEnabled></Rule></ServerSideEncryptionConfiguration>`
-		req := httptest.NewRequest(http.MethodPut, "/team2-bucket?encryption", strings.NewReader(body))
-		req = reqWithRules(req, fullTeam2Rule())
-		rr := httptest.NewRecorder()
-		gw.ServeHTTP(rr, req)
-		if rr.Code != http.StatusOK {
-			t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
-		}
-		if !strings.Contains(string(upstreamBody), "AES256") {
-			t.Fatalf("upstream body missing SSE algorithm: %s", string(upstreamBody))
-		}
-	})
-
-	t.Run("put rejects malformed configuration", func(t *testing.T) {
-		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-			t.Errorf("upstream must not be called for malformed configuration")
-		})
-		defer cleanup()
-
-		for _, body := range []string{"not-xml", "<ServerSideEncryptionConfiguration/>"} {
-			req := httptest.NewRequest(http.MethodPut, "/team2-bucket?encryption", strings.NewReader(body))
-			req = reqWithRules(req, fullTeam2Rule())
-			rr := httptest.NewRecorder()
-			gw.ServeHTTP(rr, req)
-			if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "MalformedXML") {
-				t.Fatalf("body %q: status=%d body=%s", body, rr.Code, rr.Body.String())
-			}
-		}
-	})
-
-	t.Run("get renders upstream configuration", func(t *testing.T) {
-		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/xml")
-			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><ServerSideEncryptionConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Rule><ApplyServerSideEncryptionByDefault><SSEAlgorithm>aws:kms</SSEAlgorithm><KMSMasterKeyID>key-1</KMSMasterKeyID></ApplyServerSideEncryptionByDefault><BucketKeyEnabled>true</BucketKeyEnabled></Rule></ServerSideEncryptionConfiguration>`))
-		})
-		defer cleanup()
-
-		req := httptest.NewRequest(http.MethodGet, "/team2-bucket?encryption", nil)
-		req = reqWithRules(req, fullTeam2Rule())
-		rr := httptest.NewRecorder()
-		gw.ServeHTTP(rr, req)
-		if rr.Code != http.StatusOK {
-			t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
-		}
-		for _, want := range []string{"<SSEAlgorithm>aws:kms</SSEAlgorithm>", "<KMSMasterKeyID>key-1</KMSMasterKeyID>", "<BucketKeyEnabled>true</BucketKeyEnabled>"} {
-			if !strings.Contains(rr.Body.String(), want) {
-				t.Fatalf("response missing %q: %s", want, rr.Body.String())
-			}
-		}
-	})
-
-	t.Run("delete proxies and returns 204", func(t *testing.T) {
-		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodDelete {
-				t.Errorf("unexpected upstream method: %s", r.Method)
-			}
-			w.WriteHeader(http.StatusNoContent)
-		})
-		defer cleanup()
-
-		req := httptest.NewRequest(http.MethodDelete, "/team2-bucket?encryption", nil)
-		req = reqWithRules(req, fullTeam2Rule())
-		rr := httptest.NewRecorder()
-		gw.ServeHTTP(rr, req)
-		if rr.Code != http.StatusNoContent {
-			t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
-		}
-	})
-
-	t.Run("permission mapping", func(t *testing.T) {
-		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-			t.Errorf("upstream must not be called without permission")
-		})
-		defer cleanup()
-
-		for _, tc := range []struct {
-			method string
-		}{{http.MethodPut}, {http.MethodGet}, {http.MethodDelete}} {
-			req := httptest.NewRequest(tc.method, "/team2-bucket?encryption", strings.NewReader("<ServerSideEncryptionConfiguration><Rule/></ServerSideEncryptionConfiguration>"))
-			req = reqWithRules(req, nil)
-			rr := httptest.NewRecorder()
-			gw.ServeHTTP(rr, req)
-			if rr.Code != http.StatusForbidden {
-				t.Fatalf("%s without permission: status=%d want=403 body=%s", tc.method, rr.Code, rr.Body.String())
-			}
 		}
 	})
 }

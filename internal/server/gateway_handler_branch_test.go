@@ -77,20 +77,6 @@ func TestHandleCopyObjectValidationMatrix(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name: "invalid sse header",
-			mutate: func(req *http.Request) {
-				req.Header.Set("x-amz-server-side-encryption", "AES128")
-			},
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name: "invalid copy source sse-c headers",
-			mutate: func(req *http.Request) {
-				req.Header.Set("x-amz-copy-source-server-side-encryption-customer-algorithm", "AES256")
-			},
-			wantStatus: http.StatusBadRequest,
-		},
-		{
 			name: "invalid checksum algorithm",
 			mutate: func(req *http.Request) {
 				req.Header.Set("x-amz-checksum-algorithm", "MD5")
@@ -217,10 +203,6 @@ func TestHandleCopyObjectRichSuccess(t *testing.T) {
 	req.Header.Set("x-amz-copy-source-if-none-match", "\"src-none\"")
 	req.Header.Set("x-amz-copy-source-if-modified-since", time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat))
 	req.Header.Set("x-amz-copy-source-if-unmodified-since", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat))
-	req.Header.Set("x-amz-copy-source-server-side-encryption-customer-algorithm", "AES256")
-	req.Header.Set("x-amz-copy-source-server-side-encryption-customer-key", "Zm9v")
-	req.Header.Set("x-amz-copy-source-server-side-encryption-customer-key-md5", "YmFy")
-	req.Header.Set("x-amz-server-side-encryption", "AES256")
 	req.Header.Set("x-amz-metadata-directive", "REPLACE")
 	req.Header.Set("x-amz-tagging-directive", "REPLACE")
 	req.Header.Set("x-amz-tagging", "k=v")
@@ -322,22 +304,6 @@ func TestHandleUploadPartCopyValidationMatrix(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name: "invalid copy source sse-c",
-			mutate: func(req *http.Request) {
-				req.Header.Set("x-amz-copy-source-server-side-encryption-customer-algorithm", "AES256")
-			},
-			rules:      fullTeam2Rule(),
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name: "invalid destination sse-c",
-			mutate: func(req *http.Request) {
-				req.Header.Set("x-amz-server-side-encryption-customer-algorithm", "AES256")
-			},
-			rules:      fullTeam2Rule(),
-			wantStatus: http.StatusBadRequest,
-		},
-		{
 			name: "invalid request payer",
 			mutate: func(req *http.Request) {
 				req.Header.Set("x-amz-request-payer", "owner")
@@ -403,12 +369,6 @@ func TestHandleUploadPartCopyRichSuccessAndUpstreamError(t *testing.T) {
 	req.Header.Set("x-amz-copy-source-if-modified-since", time.Now().Add(-time.Hour).UTC().Format(http.TimeFormat))
 	req.Header.Set("x-amz-copy-source-if-unmodified-since", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat))
 	req.Header.Set("x-amz-copy-source-range", "bytes=0-5")
-	req.Header.Set("x-amz-copy-source-server-side-encryption-customer-algorithm", "AES256")
-	req.Header.Set("x-amz-copy-source-server-side-encryption-customer-key", "Zm9v")
-	req.Header.Set("x-amz-copy-source-server-side-encryption-customer-key-md5", "YmFy")
-	req.Header.Set("x-amz-server-side-encryption-customer-algorithm", "AES256")
-	req.Header.Set("x-amz-server-side-encryption-customer-key", "Zm9v")
-	req.Header.Set("x-amz-server-side-encryption-customer-key-md5", "YmFy")
 	req.Header.Set("x-amz-expected-bucket-owner", "123456789012")
 	req.Header.Set("x-amz-source-expected-bucket-owner", "123456789012")
 	req.Header.Set("x-amz-request-payer", "requester")
@@ -507,16 +467,6 @@ func TestHandleUploadPartValidationAndBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid sse-c headers", func(t *testing.T) {
-		req := newReq("part")
-		req.Header.Set("x-amz-server-side-encryption-customer-algorithm", "AES256")
-		rr := httptest.NewRecorder()
-		gwNoUpstream.handleUploadPart(rr, req, "team2-dst", "object.txt", "u1", 1)
-		if rr.Code != http.StatusBadRequest {
-			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
-		}
-	})
-
 	t.Run("invalid checksum headers", func(t *testing.T) {
 		req := newReq("part")
 		req.Header.Set("x-amz-checksum-crc32", "AAAAAA==")
@@ -551,11 +501,8 @@ func TestHandleUploadPartValidationAndBranches(t *testing.T) {
 	})
 	defer cleanup()
 
-	t.Run("success with sse-c and content-md5", func(t *testing.T) {
+	t.Run("success with content-md5", func(t *testing.T) {
 		req := newReq("part-body")
-		req.Header.Set("x-amz-server-side-encryption-customer-algorithm", "AES256")
-		req.Header.Set("x-amz-server-side-encryption-customer-key", "Zm9v")
-		req.Header.Set("x-amz-server-side-encryption-customer-key-md5", "YmFy")
 		req.Header.Set("Content-MD5", "1B2M2Y8AsgTpgAmY7PhCfg==")
 		rr := httptest.NewRecorder()
 		gw.handleUploadPart(rr, req, "team2-dst", "object.txt", "u1", 1)
@@ -984,16 +931,6 @@ func TestHandlePutObjectBranchMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid sse headers", func(t *testing.T) {
-		req := newReq("payload")
-		req.Header.Set("x-amz-server-side-encryption", "AES128")
-		rr := httptest.NewRecorder()
-		gwNoUpstream.handlePutObject(rr, req, "team2-dst", "object-put.txt")
-		if rr.Code != http.StatusBadRequest {
-			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
-		}
-	})
-
 	t.Run("invalid checksum headers", func(t *testing.T) {
 		req := newReq("payload")
 		req.Header.Set("x-amz-checksum-crc32", "AAAAAA==")
@@ -1092,9 +1029,6 @@ func TestHandlePutObjectBranchMatrix(t *testing.T) {
 		req.Header.Set("x-amz-expected-bucket-owner", "123456789012")
 		req.Header.Set("x-amz-request-payer", "requester")
 		req.Header.Set("Content-MD5", "1B2M2Y8AsgTpgAmY7PhCfg==")
-		req.Header.Set("x-amz-server-side-encryption", "aws:kms")
-		req.Header.Set("x-amz-server-side-encryption-aws-kms-key-id", "kms-key")
-		req.Header.Set("x-amz-server-side-encryption-context", "eyJhIjoiYiJ9")
 		rr := httptest.NewRecorder()
 		gw.handlePutObject(rr, req, "team2-dst", "object-put.txt")
 		if rr.Code != http.StatusOK {
@@ -1150,14 +1084,6 @@ func TestCreateCompleteAndListPartsBranchMatrix(t *testing.T) {
 			t.Fatalf("invalid expires status mismatch: got=%d body=%s", rrBadExpires.Code, rrBadExpires.Body.String())
 		}
 
-		reqBadSSE := newReq()
-		reqBadSSE.Header.Set("x-amz-server-side-encryption", "AES128")
-		rrBadSSE := httptest.NewRecorder()
-		gwNoUpstream.handleCreateMultipart(rrBadSSE, reqBadSSE, "team2-dst", "object.txt")
-		if rrBadSSE.Code != http.StatusBadRequest {
-			t.Fatalf("invalid sse status mismatch: got=%d body=%s", rrBadSSE.Code, rrBadSSE.Body.String())
-		}
-
 		reqBadChecksum := newReq()
 		reqBadChecksum.Header.Set("x-amz-checksum-crc32", "AAAAAA==")
 		reqBadChecksum.Header.Set("x-amz-checksum-crc32c", "BBBBBB==")
@@ -1197,9 +1123,6 @@ func TestCreateCompleteAndListPartsBranchMatrix(t *testing.T) {
 		reqSuccess := newReq()
 		reqSuccess.Header.Set("x-amz-acl", "bucket-owner-full-control")
 		reqSuccess.Header.Set("Content-Type", "text/plain")
-		reqSuccess.Header.Set("x-amz-server-side-encryption", "aws:kms")
-		reqSuccess.Header.Set("x-amz-server-side-encryption-aws-kms-key-id", "kms-key")
-		reqSuccess.Header.Set("x-amz-server-side-encryption-context", "eyJhIjoiYiJ9")
 		reqSuccess.Header.Set("x-amz-checksum-algorithm", "SHA256")
 		rrSuccess := httptest.NewRecorder()
 		gw.handleCreateMultipart(rrSuccess, reqSuccess, "team2-dst", "object.txt")

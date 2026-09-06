@@ -9,11 +9,14 @@ import (
 )
 
 var completeMultipartRequestHeaders = map[string]string{
+	"x-amz-request-payer":         "requester",
+	"x-amz-expected-bucket-owner": "123456789012",
+}
+
+var customerEncryptionRequestHeaders = map[string]string{
 	"x-amz-server-side-encryption-customer-algorithm": "AES256",
 	"x-amz-server-side-encryption-customer-key":       "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 	"x-amz-server-side-encryption-customer-key-md5":   "cLyPS3KoaSFGi/joRB3OUQ==",
-	"x-amz-request-payer":                             "requester",
-	"x-amz-expected-bucket-owner":                     "123456789012",
 }
 
 func TestCompleteMultipartForwardsRequestHeaders(t *testing.T) {
@@ -21,7 +24,7 @@ func TestCompleteMultipartForwardsRequestHeaders(t *testing.T) {
 		name    string
 		headers map[string]string
 	}{
-		{name: "customer encryption and account headers with checksum", headers: completeMultipartRequestHeaders},
+		{name: "account headers with checksum", headers: completeMultipartRequestHeaders},
 		{name: "optional headers absent"},
 		{name: "payer and owner normalized", headers: map[string]string{
 			"x-amz-request-payer":         " REQUESTER ",
@@ -59,19 +62,16 @@ func TestCompleteMultipartForwardsRequestHeaders(t *testing.T) {
 				!strings.Contains(sent.body, "<ChecksumCRC32>y/Q5Jg==</ChecksumCRC32>") {
 				t.Fatalf("completion checksum lost: headers=%v body=%s", sent.header, sent.body)
 			}
-			if rr.Header().Get("x-amz-server-side-encryption-customer-key") != "" ||
-				strings.Contains(rr.Body.String(), completeMultipartRequestHeaders["x-amz-server-side-encryption-customer-key"]) {
-				t.Error("completion response exposed the customer key")
-			}
 		})
 	}
 }
 
-func TestCompleteMultipartRejectsInvalidRequestHeaders(t *testing.T) {
+func TestCompleteMultipartRejectsCustomerEncryption(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		headers map[string]string
 	}{
+		{name: "complete customer encryption", headers: customerEncryptionRequestHeaders},
 		{name: "algorithm only", headers: map[string]string{"x-amz-server-side-encryption-customer-algorithm": "AES256"}},
 		{name: "key only", headers: map[string]string{"x-amz-server-side-encryption-customer-key": "test-key"}},
 		{name: "digest only", headers: map[string]string{"x-amz-server-side-encryption-customer-key-md5": "test-digest"}},
@@ -87,7 +87,6 @@ func TestCompleteMultipartRejectsInvalidRequestHeaders(t *testing.T) {
 			"x-amz-server-side-encryption-customer-key":     "test-key",
 			"x-amz-server-side-encryption-customer-key-md5": "test-digest",
 		}},
-		{name: "unsupported payer", headers: map[string]string{"x-amz-request-payer": "owner"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gw, requests := multipartChecksumStub(t, nil, `<CompleteMultipartUploadResult/>`)
@@ -98,8 +97,12 @@ func TestCompleteMultipartRejectsInvalidRequestHeaders(t *testing.T) {
 			}
 			rr := httptest.NewRecorder()
 			gw.ServeHTTP(rr, reqWithRules(req, fullTeam2Rule()))
-			if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "<Code>InvalidArgument</Code>") {
-				t.Errorf("invalid headers accepted: %d %s", rr.Code, rr.Body.String())
+			if rr.Code != http.StatusNotImplemented || !strings.Contains(rr.Body.String(), "<Code>NotImplemented</Code>") {
+				t.Errorf("unsupported encryption accepted: %d %s", rr.Code, rr.Body.String())
+			}
+			if key := tc.headers["x-amz-server-side-encryption-customer-key"]; key != "" &&
+				(rr.Header().Get("x-amz-server-side-encryption-customer-key") != "" || strings.Contains(rr.Body.String(), key)) {
+				t.Error("completion response exposed the customer key")
 			}
 			select {
 			case <-requests:
@@ -107,6 +110,23 @@ func TestCompleteMultipartRejectsInvalidRequestHeaders(t *testing.T) {
 			default:
 			}
 		})
+	}
+}
+
+func TestCompleteMultipartRejectsUnsupportedPayer(t *testing.T) {
+	gw, requests := multipartChecksumStub(t, nil, `<CompleteMultipartUploadResult/>`)
+	req := httptest.NewRequest(http.MethodPost, "/team2-bucket/object?uploadId=upload-1",
+		strings.NewReader(completeMultipartDocument(1, "part-etag")))
+	req.Header.Set("x-amz-request-payer", "owner")
+	rr := httptest.NewRecorder()
+	gw.ServeHTTP(rr, reqWithRules(req, fullTeam2Rule()))
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "<Code>InvalidArgument</Code>") {
+		t.Errorf("unsupported payer accepted: %d %s", rr.Code, rr.Body.String())
+	}
+	select {
+	case <-requests:
+		t.Error("invalid completion reached upstream")
+	default:
 	}
 }
 

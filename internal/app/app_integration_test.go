@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	gatewayapp "github.com/define42/s3gateway/internal/app"
 	"github.com/define42/s3gateway/internal/s3credentials"
 	"github.com/define42/s3gateway/internal/testutil"
@@ -349,63 +350,29 @@ func TestBootS3GatewayFullIntegration(t *testing.T) {
 	}
 	assertTagSetMatches("readonly object tagging vs expected", roObjectTaggingOut.TagSet, objectTagging.TagSet)
 
-	newSSEPutInput := func() *s3.PutObjectInput {
-		return &s3.PutObjectInput{
-			Bucket:               aws.String(bucket),
-			Key:                  aws.String(sseKey),
-			Body:                 bytes.NewReader(ssePayload),
-			ContentLength:        aws.Int64(int64(len(ssePayload))),
-			ContentType:          aws.String("text/plain"),
-			ServerSideEncryption: s3types.ServerSideEncryptionAes256,
-		}
+	_, gatewaySSEPutErr := rwClient.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:               aws.String(bucket),
+		Key:                  aws.String(sseKey),
+		Body:                 bytes.NewReader(ssePayload),
+		ContentLength:        aws.Int64(int64(len(ssePayload))),
+		ContentType:          aws.String("text/plain"),
+		ServerSideEncryption: s3types.ServerSideEncryptionAes256,
+	})
+	var encryptionAPIErr smithy.APIError
+	if !errors.As(gatewaySSEPutErr, &encryptionAPIErr) || encryptionAPIErr.ErrorCode() != "NotImplemented" {
+		t.Fatalf("explicit SSE-S3 PUT should fail with NotImplemented, got: %v", gatewaySSEPutErr)
 	}
-	upstreamSSEPutOut, upstreamSSEPutErr := upstreamClient.PutObject(ctx, newSSEPutInput())
-	gatewaySSEPutOut, gatewaySSEPutErr := rwClient.PutObject(ctx, newSSEPutInput())
-	if (upstreamSSEPutErr != nil) != (gatewaySSEPutErr != nil) {
-		t.Fatalf("put object with sse-aes256 error mismatch: gatewayErr=%v upstreamErr=%v", gatewaySSEPutErr, upstreamSSEPutErr)
+	var encryptionResponseErr *smithyhttp.ResponseError
+	if !errors.As(gatewaySSEPutErr, &encryptionResponseErr) || encryptionResponseErr.HTTPStatusCode() != http.StatusNotImplemented {
+		t.Fatalf("explicit SSE-S3 PUT should return HTTP 501, got: %v", gatewaySSEPutErr)
 	}
-	if upstreamSSEPutErr != nil {
-		var upstreamAPIErr smithy.APIError
-		var gatewayAPIErr smithy.APIError
-		if !errors.As(upstreamSSEPutErr, &upstreamAPIErr) || !errors.As(gatewaySSEPutErr, &gatewayAPIErr) {
-			t.Fatalf("put object with sse-aes256 expected smithy errors: gatewayErr=%v upstreamErr=%v", gatewaySSEPutErr, upstreamSSEPutErr)
-		}
-		if gatewayAPIErr.ErrorCode() != upstreamAPIErr.ErrorCode() {
-			t.Fatalf("put object with sse-aes256 error code mismatch: gateway=%q upstream=%q", gatewayAPIErr.ErrorCode(), upstreamAPIErr.ErrorCode())
-		}
-	} else {
-		if gatewaySSEPutOut.ServerSideEncryption != upstreamSSEPutOut.ServerSideEncryption {
-			t.Fatalf("put object with sse-aes256 response encryption mismatch: gateway=%q upstream=%q", gatewaySSEPutOut.ServerSideEncryption, upstreamSSEPutOut.ServerSideEncryption)
-		}
-		if gatewaySSEPutOut.ServerSideEncryption != s3types.ServerSideEncryptionAes256 {
-			t.Fatalf("put object with sse-aes256 response encryption mismatch: got=%q want=%q", gatewaySSEPutOut.ServerSideEncryption, s3types.ServerSideEncryptionAes256)
-		}
-		gatewaySSEHead, err := rwClient.HeadObject(ctx, &s3.HeadObjectInput{
-			Bucket: aws.String(bucket),
-			Key:    aws.String(sseKey),
-		})
-		if err != nil {
-			t.Fatalf("head sse-aes256 object through booted gateway: %v", err)
-		}
-		upstreamSSEHead, err := upstreamClient.HeadObject(ctx, &s3.HeadObjectInput{
-			Bucket: aws.String(bucket),
-			Key:    aws.String(sseKey),
-		})
-		if err != nil {
-			t.Fatalf("head sse-aes256 object from upstream: %v", err)
-		}
-		if aws.ToInt64(gatewaySSEHead.ContentLength) != int64(len(ssePayload)) {
-			t.Fatalf("gateway sse-aes256 head content length mismatch: got=%d want=%d", aws.ToInt64(gatewaySSEHead.ContentLength), len(ssePayload))
-		}
-		if aws.ToInt64(upstreamSSEHead.ContentLength) != int64(len(ssePayload)) {
-			t.Fatalf("upstream sse-aes256 head content length mismatch: got=%d want=%d", aws.ToInt64(upstreamSSEHead.ContentLength), len(ssePayload))
-		}
-		if gatewaySSEHead.ServerSideEncryption != upstreamSSEHead.ServerSideEncryption {
-			t.Fatalf("head sse-aes256 encryption mismatch: gateway=%q upstream=%q", gatewaySSEHead.ServerSideEncryption, upstreamSSEHead.ServerSideEncryption)
-		}
-		if gatewaySSEHead.ServerSideEncryption != s3types.ServerSideEncryptionAes256 {
-			t.Fatalf("head sse-aes256 encryption mismatch: got=%q want=%q", gatewaySSEHead.ServerSideEncryption, s3types.ServerSideEncryptionAes256)
-		}
+	_, upstreamSSEHeadErr := upstreamClient.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(sseKey),
+	})
+	var absentObjectErr *smithyhttp.ResponseError
+	if !errors.As(upstreamSSEHeadErr, &absentObjectErr) || absentObjectErr.HTTPStatusCode() != http.StatusNotFound {
+		t.Fatalf("rejected SSE-S3 PUT must not create an upstream object, got HEAD error: %v", upstreamSSEHeadErr)
 	}
 
 	newListInputWithOptionalAttrs := func() *s3.ListObjectsV2Input {

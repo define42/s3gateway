@@ -199,17 +199,14 @@ func TestGatewayGetAndHeadObjectRichHeaderMatrix(t *testing.T) {
 	responseExpires := url.QueryEscape(lastModified.Add(1 * time.Hour).Format(http.TimeFormat))
 	commonQuery := "versionId=v-rich&partNumber=1&response-cache-control=no-cache&response-content-disposition=attachment&response-content-encoding=gzip&response-content-language=en&response-content-type=text/plain&response-expires=" + responseExpires
 	commonHeaders := map[string]string{
-		"Range":               "bytes=0-10",
-		"If-Match":            "\"etag-rich\"",
-		"If-None-Match":       "\"etag-other\"",
-		"If-Modified-Since":   lastModified.Add(-1 * time.Hour).Format(http.TimeFormat),
-		"If-Unmodified-Since": lastModified.Add(1 * time.Hour).Format(http.TimeFormat),
-		"x-amz-checksum-mode": "ENABLED",
-		"x-amz-server-side-encryption-customer-algorithm": "AES256",
-		"x-amz-server-side-encryption-customer-key":       "Zm9v",
-		"x-amz-server-side-encryption-customer-key-md5":   "YmFy",
-		"x-amz-expected-bucket-owner":                     "123456789012",
-		"x-amz-request-payer":                             "requester",
+		"Range":                       "bytes=0-10",
+		"If-Match":                    "\"etag-rich\"",
+		"If-None-Match":               "\"etag-other\"",
+		"If-Modified-Since":           lastModified.Add(-1 * time.Hour).Format(http.TimeFormat),
+		"If-Unmodified-Since":         lastModified.Add(1 * time.Hour).Format(http.TimeFormat),
+		"x-amz-checksum-mode":         "ENABLED",
+		"x-amz-expected-bucket-owner": "123456789012",
+		"x-amz-request-payer":         "requester",
 	}
 
 	getReq := httptest.NewRequest(http.MethodGet, "/team2-rich/object.txt?"+commonQuery, nil)
@@ -247,6 +244,17 @@ func TestGatewayGetAndHeadObjectRichHeaderMatrix(t *testing.T) {
 	}
 	if headRR.Header().Get("x-amz-checksum-sha256") != "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=" {
 		t.Fatalf("head object checksum mismatch: got=%q", headRR.Header().Get("x-amz-checksum-sha256"))
+	}
+	for _, response := range []*httptest.ResponseRecorder{getRR, headRR} {
+		for header, want := range map[string]string{
+			"x-amz-server-side-encryption":                    "AES256",
+			"x-amz-server-side-encryption-aws-kms-key-id":     "kms-rich",
+			"x-amz-server-side-encryption-bucket-key-enabled": "true",
+		} {
+			if got := response.Header().Get(header); got != want {
+				t.Fatalf("upstream encryption response %s = %q, want %q", header, got, want)
+			}
+		}
 	}
 }
 

@@ -296,7 +296,7 @@ func TestUploadPropertiesPreserveListHeaders(t *testing.T) {
 	}
 }
 
-func TestUploadPropertiesBucketKeyEnabled(t *testing.T) {
+func TestUploadPropertiesRejectBucketKeyEnabled(t *testing.T) {
 	for _, operation := range []struct {
 		name   string
 		method string
@@ -307,38 +307,30 @@ func TestUploadPropertiesBucketKeyEnabled(t *testing.T) {
 	} {
 		t.Run(operation.name, func(t *testing.T) {
 			for _, value := range []struct {
-				name       string
-				value      string
-				wantStatus int
+				name  string
+				value string
 			}{
-				{name: "enabled", value: "true", wantStatus: http.StatusOK},
-				{name: "disabled", value: "false", wantStatus: http.StatusOK},
-				{name: "invalid", value: "invalid", wantStatus: http.StatusBadRequest},
+				{name: "enabled", value: "true"},
+				{name: "disabled", value: "false"},
+				{name: "invalid", value: "invalid"},
+				{name: "empty"},
 			} {
 				t.Run(value.name, func(t *testing.T) {
 					gw, requests := newUploadPropertiesGateway(t)
 					req := httptest.NewRequest(operation.method, "/team2-bucket/object.gz"+operation.query, strings.NewReader("payload"))
-					req.Header.Set("x-amz-server-side-encryption", "aws:kms")
 					req.Header.Set("x-amz-server-side-encryption-bucket-key-enabled", value.value)
 					rr := httptest.NewRecorder()
 					gw.ServeHTTP(rr, reqWithRules(req, fullTeam2Rule()))
-					if rr.Code != value.wantStatus {
-						t.Fatalf("status = %d, want %d; body = %s", rr.Code, value.wantStatus, rr.Body.String())
+					if rr.Code != http.StatusNotImplemented {
+						t.Fatalf("status = %d, want 501; body = %s", rr.Code, rr.Body.String())
 					}
-					if value.wantStatus == http.StatusBadRequest {
-						if !strings.Contains(rr.Body.String(), "<Code>InvalidArgument</Code>") {
-							t.Errorf("body = %s; want InvalidArgument", rr.Body.String())
-						}
-						select {
-						case <-requests:
-							t.Error("invalid bucket key value reached upstream")
-						default:
-						}
-						return
+					if !strings.Contains(rr.Body.String(), "<Code>NotImplemented</Code>") {
+						t.Errorf("body = %s; want NotImplemented", rr.Body.String())
 					}
-					upstream := receiveUploadPropertiesRequest(t, requests)
-					if got := upstream.header.Get("x-amz-server-side-encryption-bucket-key-enabled"); got != value.value {
-						t.Errorf("upstream bucket key enabled = %q, want %q", got, value.value)
+					select {
+					case <-requests:
+						t.Error("unsupported bucket key header reached upstream")
+					default:
 					}
 				})
 			}

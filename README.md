@@ -157,9 +157,6 @@ requests are not.
 | Bucket | `GET /<bucket>?uploads` | ListMultipartUploads | `r` |
 | Bucket | `GET /<bucket>?acl` | Return a canned owner `FULL_CONTROL` ACL | `r` |
 | Bucket | `PUT /<bucket>?acl` | Accept the `private` canned ACL as a no-op | `c` |
-| Bucket | `PUT /<bucket>?encryption` | PutBucketEncryption | `c` |
-| Bucket | `GET /<bucket>?encryption` | GetBucketEncryption | `r` |
-| Bucket | `DELETE /<bucket>?encryption` | DeleteBucketEncryption | `b` |
 | Bucket | `GET /<bucket>?policy`, `?policyStatus` | Return `NoSuchBucketPolicy`; the gateway has no bucket policies | `r` |
 | Bucket | `GET /<bucket>?cors`, `?website`, `?replication` | Return the matching not-configured error | `r` |
 | Bucket | `GET /<bucket>?logging`, `?notification`, `?accelerate` | Return an empty or disabled configuration | `r` |
@@ -331,7 +328,7 @@ HTTP shutdown. Splunk HEC flushing has a separate maximum of ten seconds.
 - X25519-encrypted client credentials.
 - LDAP-group authorization for bucket namespaces and individual operation types.
 - Path-style bucket, object, multipart, versioning, lifecycle, tagging,
-  encryption, and compatibility operations.
+  and compatibility operations.
 - Browser-based administration using the same LDAP groups.
 - Required upload metadata and authenticated-uploader stamping.
 - Structured S3 audit events with pseudonymized identifiers.
@@ -383,8 +380,8 @@ creation tags, return `400 MalformedXML`. Supplied `Content-MD5` and signed
 payload hashes are verified before creation. An empty body retains the upstream
 default region behavior.
 
-Lifecycle and encryption GET, PUT, and DELETE requests forward
-`x-amz-expected-bucket-owner`. Their PUT operations validate supplied
+Lifecycle GET, PUT, and DELETE requests forward
+`x-amz-expected-bucket-owner`. Lifecycle PUT validates supplied
 `Content-MD5` values against the original XML before forwarding a change; the
 SDK calculates new checksums for its serialized upstream body.
 Malformed or oversized configuration XML returns `400 MalformedXML`.
@@ -439,11 +436,10 @@ Settings outside this table are rejected. Both `x-amz-checksum-algorithm` and
 ### Upload properties
 
 `PutObject` and `CreateMultipartUpload` preserve content encoding, cache controls,
-content disposition and language, object tags, storage class, website redirects,
-and S3 Bucket Key settings, in addition to content type, expiry, and user metadata.
+content disposition and language, object tags, storage class, and website redirects,
+in addition to content type, expiry, and user metadata.
 The multipart lifecycle and `GetObjectAttributes` forward expected-owner and
-requester-pays headers. `ListParts` and attribute reads also forward all three SSE-C headers;
-incomplete customer-encryption headers and unsupported payer values are rejected.
+requester-pays headers. Unsupported payer values are rejected.
 When decoding a streaming upload, the gateway removes the `aws-chunked` transport
 encoding and preserves object encodings such as `gzip`.
 
@@ -451,7 +447,25 @@ Object Lock retention and legal-hold request headers are unsupported and return
 `501 NotImplemented` on object uploads, copies, and multipart initiation. The
 gateway also rejects `x-amz-write-offset-bytes`; append writes are unsupported.
 These headers are rejected even when empty, before an upstream write begins.
-Invalid storage classes or bucket-key booleans return `400 InvalidArgument`.
+Invalid storage classes return `400 InvalidArgument`.
+
+### S3 data encryption
+
+The gateway does not expose S3 encryption configuration. Bucket `?encryption`
+operations and requests containing `x-amz-server-side-encryption` or
+`x-amz-copy-source-server-side-encryption` headers, including their suffixed
+options, return `501 NotImplemented`. These headers are rejected even when empty
+or declared as trailers, before an upstream operation begins. This includes
+explicit SSE-S3, SSE-KMS, SSE-C, and S3 Bucket Key settings.
+
+Configure default encryption on the upstream storage service directly. Its
+defaults still apply to ordinary gateway uploads, and encryption metadata returned
+by storage is preserved in gateway responses. Clients must stop sending explicit
+encryption options. Existing SSE-C objects require customer keys and must be
+accessed directly through the upstream service.
+
+This change does not modify existing objects or disable upstream encryption.
+HTTPS/TLS and X25519 credential encryption remain supported.
 
 ### Upload metadata
 
@@ -839,7 +853,7 @@ readinessProbe:
 - Only header-based SigV4 authentication is supported; presigned URLs are not.
 - Only the operations listed above are implemented. Other routes return
   `NotImplemented`.
-- Unimplemented S3 subresources such as `?retention`, `?object-lock`, and
+- Unimplemented S3 subresources such as `?encryption`, `?retention`, `?object-lock`, and
   `?select`, including object annotations, are rejected before bucket or object
   dispatch. Unknown query parameters return `501 NotImplemented`; malformed
   query strings and empty or duplicate `uploadId` values return

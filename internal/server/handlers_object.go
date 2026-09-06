@@ -800,16 +800,6 @@ func (s *Server) handleGetObject(w http.ResponseWriter, r *http.Request, bucket,
 	} else if mode != "" {
 		in.ChecksumMode = mode
 	}
-	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := s3http.ParseSSECustomerHeaders(r.Header)
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
-		return
-	}
-	if hasSSEC {
-		in.SSECustomerAlgorithm = ssecAlgo
-		in.SSECustomerKey = ssecKey
-		in.SSECustomerKeyMD5 = ssecMD5
-	}
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
@@ -1011,16 +1001,6 @@ func (s *Server) handleHeadObject(w http.ResponseWriter, r *http.Request, bucket
 		return
 	} else if mode != "" {
 		in.ChecksumMode = mode
-	}
-	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := s3http.ParseSSECustomerHeaders(r.Header)
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
-		return
-	}
-	if hasSSEC {
-		in.SSECustomerAlgorithm = ssecAlgo
-		in.SSECustomerKey = ssecKey
-		in.SSECustomerKeyMD5 = ssecMD5
 	}
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)
@@ -1230,24 +1210,16 @@ func (s *Server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	ssecAlgo, ssecKey, ssecMD5, _, err := s3http.ParseSSECustomerHeaders(r.Header)
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
-		return
-	}
 	payer, err := s3http.ParseRequestPayerHeader(r.Header)
 	if err != nil {
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
 		return
 	}
 	in := &s3.GetObjectAttributesInput{
-		Bucket:               &bucket,
-		Key:                  &key,
-		ObjectAttributes:     attrs,
-		SSECustomerAlgorithm: ssecAlgo,
-		SSECustomerKey:       ssecKey,
-		SSECustomerKeyMD5:    ssecMD5,
-		RequestPayer:         payer,
+		Bucket:           &bucket,
+		Key:              &key,
+		ObjectAttributes: attrs,
+		RequestPayer:     payer,
 	}
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)
@@ -1428,11 +1400,6 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		return
 	}
 
-	sse, err := s3http.ParseSSEWriteHeaders(r.Header)
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid server-side encryption headers")
-		return
-	}
 	checksum, err := s3http.ParseChecksumWriteHeaders(r.Header)
 	if err != nil {
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
@@ -1468,7 +1435,6 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		Tagging:                 properties.Tagging,
 		StorageClass:            properties.StorageClass,
 		WebsiteRedirectLocation: properties.WebsiteRedirectLocation,
-		BucketKeyEnabled:        sse.BucketKeyEnabled,
 	}
 	if ifMatch != "" {
 		in.IfMatch = aws.String(ifMatch)
@@ -1488,14 +1454,6 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 	if ct != "" {
 		in.ContentType = &ct
 	}
-	if sse.ServerSideEncryption != "" {
-		in.ServerSideEncryption = sse.ServerSideEncryption
-	}
-	in.SSEKMSKeyId = sse.SSEKMSKeyID
-	in.SSEKMSEncryptionContext = sse.SSEKMSEncryptionContext
-	in.SSECustomerAlgorithm = sse.SSECustomerAlgorithm
-	in.SSECustomerKey = sse.SSECustomerKey
-	in.SSECustomerKeyMD5 = sse.SSECustomerKeyMD5
 	if checksum.ChecksumAlgorithm != "" {
 		in.ChecksumAlgorithm = checksum.ChecksumAlgorithm
 	}
@@ -1609,16 +1567,6 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 		return
 	}
 
-	sse, err := s3http.ParseSSEWriteHeaders(r.Header)
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid server-side encryption headers")
-		return
-	}
-	copySSECAlgo, copySSECKey, copySSECMD5, hasCopySSEC, err := s3http.ParseCopySourceSSECustomerHeaders(r.Header)
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source SSE-C headers")
-		return
-	}
 	checksum, err := s3http.ParseChecksumWriteHeaders(r.Header)
 	if err != nil {
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
@@ -1677,12 +1625,11 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 	}
 
 	in := &s3.CopyObjectInput{
-		Bucket:           &bucket,
-		Key:              &key,
-		CopySource:       aws.String(copySource),
-		Metadata:         meta,
-		Expires:          expires,
-		BucketKeyEnabled: sse.BucketKeyEnabled,
+		Bucket:     &bucket,
+		Key:        &key,
+		CopySource: aws.String(copySource),
+		Metadata:   meta,
+		Expires:    expires,
 	}
 	if ifMatch != "" {
 		in.IfMatch = aws.String(ifMatch)
@@ -1701,11 +1648,6 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 	}
 	if copyIfUnmodifiedSince != nil {
 		in.CopySourceIfUnmodifiedSince = copyIfUnmodifiedSince
-	}
-	if hasCopySSEC {
-		in.CopySourceSSECustomerAlgorithm = copySSECAlgo
-		in.CopySourceSSECustomerKey = copySSECKey
-		in.CopySourceSSECustomerKeyMD5 = copySSECMD5
 	}
 	if metadataDirective != "" {
 		in.MetadataDirective = metadataDirective
@@ -1749,14 +1691,6 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 	if payer != "" {
 		in.RequestPayer = payer
 	}
-	if sse.ServerSideEncryption != "" {
-		in.ServerSideEncryption = sse.ServerSideEncryption
-	}
-	in.SSEKMSKeyId = sse.SSEKMSKeyID
-	in.SSEKMSEncryptionContext = sse.SSEKMSEncryptionContext
-	in.SSECustomerAlgorithm = sse.SSECustomerAlgorithm
-	in.SSECustomerKey = sse.SSECustomerKey
-	in.SSECustomerKeyMD5 = sse.SSECustomerKeyMD5
 
 	out, err := s.up.CopyObject(r.Context(), in, upstream.TrackResponseProgress)
 	if err != nil {
@@ -1877,16 +1811,6 @@ func (s *Server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bu
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source conditional header")
 		return
 	}
-	copySSECAlgo, copySSECKey, copySSECMD5, hasCopySSEC, err := s3http.ParseCopySourceSSECustomerHeaders(r.Header)
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid copy-source SSE-C headers")
-		return
-	}
-	ssecAlgo, ssecKey, ssecMD5, hasSSEC, err := s3http.ParseSSECustomerHeaders(r.Header)
-	if err != nil {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
-		return
-	}
 	payer, err := s3http.ParseRequestPayerHeader(r.Header)
 	if err != nil {
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
@@ -1914,16 +1838,6 @@ func (s *Server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bu
 	}
 	if copySourceRange := strings.TrimSpace(r.Header.Get("x-amz-copy-source-range")); copySourceRange != "" {
 		in.CopySourceRange = aws.String(copySourceRange)
-	}
-	if hasCopySSEC {
-		in.CopySourceSSECustomerAlgorithm = copySSECAlgo
-		in.CopySourceSSECustomerKey = copySSECKey
-		in.CopySourceSSECustomerKeyMD5 = copySSECMD5
-	}
-	if hasSSEC {
-		in.SSECustomerAlgorithm = ssecAlgo
-		in.SSECustomerKey = ssecKey
-		in.SSECustomerKeyMD5 = ssecMD5
 	}
 	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
 		in.ExpectedBucketOwner = aws.String(expectedOwner)

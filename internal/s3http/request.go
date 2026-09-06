@@ -149,40 +149,6 @@ func ParseOptionalBool(v string) (bool, bool, error) {
 	}
 }
 
-// ParseSSECustomerHeaders extracts the three SSE-C request headers. The present
-// result is true when any header is set; in that case all three are required.
-// The function does not validate the algorithm, key encoding, or MD5 value.
-func ParseSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string, present bool, err error) {
-	a := strings.TrimSpace(h.Get("x-amz-server-side-encryption-customer-algorithm"))
-	k := strings.TrimSpace(h.Get("x-amz-server-side-encryption-customer-key"))
-	m := strings.TrimSpace(h.Get("x-amz-server-side-encryption-customer-key-md5"))
-	present = a != "" || k != "" || m != ""
-	if !present {
-		return nil, nil, nil, false, nil
-	}
-	if a == "" || k == "" || m == "" {
-		return nil, nil, nil, true, errors.New("incomplete SSE-C headers")
-	}
-	return aws.String(a), aws.String(k), aws.String(m), true, nil
-}
-
-// ParseCopySourceSSECustomerHeaders extracts the three copy-source SSE-C
-// headers. The present result is true when any header is set; in that case all
-// three are required. Header values are not cryptographically validated.
-func ParseCopySourceSSECustomerHeaders(h http.Header) (algo, key, keyMD5 *string, present bool, err error) {
-	a := strings.TrimSpace(h.Get("x-amz-copy-source-server-side-encryption-customer-algorithm"))
-	k := strings.TrimSpace(h.Get("x-amz-copy-source-server-side-encryption-customer-key"))
-	m := strings.TrimSpace(h.Get("x-amz-copy-source-server-side-encryption-customer-key-md5"))
-	present = a != "" || k != "" || m != ""
-	if !present {
-		return nil, nil, nil, false, nil
-	}
-	if a == "" || k == "" || m == "" {
-		return nil, nil, nil, true, errors.New("incomplete copy-source SSE-C headers")
-	}
-	return aws.String(a), aws.String(k), aws.String(m), true, nil
-}
-
 // ParseCopySourceConditionalHeaders extracts copy-source ETag and date
 // preconditions. It returns an error when either non-empty date is invalid.
 func ParseCopySourceConditionalHeaders(h http.Header) (ifMatch, ifNoneMatch *string, ifModifiedSince, ifUnmodifiedSince *time.Time, err error) {
@@ -230,87 +196,6 @@ func SourceBucketFromCopySource(copySource string) (string, error) {
 		return "", errors.New("invalid copy source bucket")
 	}
 	return bucket, nil
-}
-
-// SSEWriteHeaders contains parsed server-side-encryption headers for an S3
-// write request. Nil pointer fields were absent from the request.
-type SSEWriteHeaders struct {
-	ServerSideEncryption    types.ServerSideEncryption
-	BucketKeyEnabled        *bool
-	SSEKMSKeyID             *string
-	SSEKMSEncryptionContext *string
-	SSECustomerAlgorithm    *string
-	SSECustomerKey          *string
-	SSECustomerKeyMD5       *string
-}
-
-// ParseSSEWriteHeaders validates S3 write-encryption header combinations. KMS
-// fields require aws:kms or aws:kms:dsse, and SSE-C cannot be combined with
-// x-amz-server-side-encryption.
-func ParseSSEWriteHeaders(h http.Header) (SSEWriteHeaders, error) {
-	out := SSEWriteHeaders{}
-	sse := strings.TrimSpace(h.Get("x-amz-server-side-encryption"))
-	if sse != "" {
-		switch strings.ToLower(sse) {
-		case "aes256":
-			out.ServerSideEncryption = types.ServerSideEncryptionAes256
-		case "aws:kms":
-			out.ServerSideEncryption = types.ServerSideEncryptionAwsKms
-		case "aws:kms:dsse":
-			out.ServerSideEncryption = types.ServerSideEncryptionAwsKmsDsse
-		default:
-			return out, fmt.Errorf("unsupported server-side encryption %q", sse)
-		}
-	}
-	if values := h.Values("x-amz-server-side-encryption-bucket-key-enabled"); len(values) > 0 {
-		if len(values) != 1 {
-			return out, errors.New("multiple bucket-key-enabled headers are not supported")
-		}
-		enabled, present, err := ParseOptionalBool(values[0])
-		if err != nil || !present {
-			return out, errors.New("invalid bucket-key-enabled header")
-		}
-		if out.ServerSideEncryption != "" && out.ServerSideEncryption != types.ServerSideEncryptionAwsKms {
-			return out, errors.New("bucket-key-enabled requires aws:kms encryption")
-		}
-		out.BucketKeyEnabled = aws.Bool(enabled)
-	}
-
-	kmsKeyID := strings.TrimSpace(h.Get("x-amz-server-side-encryption-aws-kms-key-id"))
-	if kmsKeyID != "" {
-		if out.ServerSideEncryption != types.ServerSideEncryptionAwsKms &&
-			out.ServerSideEncryption != types.ServerSideEncryptionAwsKmsDsse {
-			return out, errors.New("kms key id requires aws:kms or aws:kms:dsse")
-		}
-		out.SSEKMSKeyID = aws.String(kmsKeyID)
-	}
-
-	kmsCtx := strings.TrimSpace(h.Get("x-amz-server-side-encryption-context"))
-	if kmsCtx != "" {
-		if out.ServerSideEncryption != types.ServerSideEncryptionAwsKms &&
-			out.ServerSideEncryption != types.ServerSideEncryptionAwsKmsDsse {
-			return out, errors.New("kms context requires aws:kms or aws:kms:dsse")
-		}
-		out.SSEKMSEncryptionContext = aws.String(kmsCtx)
-	}
-
-	ssecAlgo, ssecKey, ssecMD5, presentSSEC, err := ParseSSECustomerHeaders(h)
-	if err != nil {
-		return out, err
-	}
-	if presentSSEC {
-		if out.ServerSideEncryption != "" {
-			return out, errors.New("SSE-C cannot be combined with x-amz-server-side-encryption")
-		}
-		if out.BucketKeyEnabled != nil {
-			return out, errors.New("SSE-C cannot be combined with bucket-key-enabled")
-		}
-		out.SSECustomerAlgorithm = ssecAlgo
-		out.SSECustomerKey = ssecKey
-		out.SSECustomerKeyMD5 = ssecMD5
-	}
-
-	return out, nil
 }
 
 // ChecksumWriteHeaders contains checksum selection and value headers from an

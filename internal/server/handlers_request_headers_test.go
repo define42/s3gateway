@@ -11,17 +11,16 @@ import (
 var accountHeaderOperations = []struct {
 	name, method, target, body, response string
 	status                               int
-	ssec                                 bool
 }{
 	{name: "upload part", method: http.MethodPut, target: "/team2-bucket/object?partNumber=1&uploadId=upload-1",
-		body: "123456789", status: http.StatusOK, ssec: true},
+		body: "123456789", status: http.StatusOK},
 	{name: "list parts", method: http.MethodGet, target: "/team2-bucket/object?uploadId=upload-1",
-		response: `<ListPartsResult/>`, status: http.StatusOK, ssec: true},
+		response: `<ListPartsResult/>`, status: http.StatusOK},
 	{name: "list uploads", method: http.MethodGet, target: "/team2-bucket?uploads",
 		response: `<ListMultipartUploadsResult/>`, status: http.StatusOK},
 	{name: "abort upload", method: http.MethodDelete, target: "/team2-bucket/object?uploadId=upload-1", status: http.StatusNoContent},
 	{name: "object attributes", method: http.MethodGet, target: "/team2-bucket/object?attributes",
-		response: `<GetObjectAttributesResponse><ETag>"etag"</ETag></GetObjectAttributesResponse>`, status: http.StatusOK, ssec: true},
+		response: `<GetObjectAttributesResponse><ETag>"etag"</ETag></GetObjectAttributesResponse>`, status: http.StatusOK},
 }
 
 func TestMultipartAndAttributesForwardRequestHeaders(t *testing.T) {
@@ -39,13 +38,6 @@ func TestMultipartAndAttributesForwardRequestHeaders(t *testing.T) {
 					if present {
 						req.Header.Set("x-amz-request-payer", " REQUESTER ")
 						req.Header.Set("x-amz-expected-bucket-owner", " 123456789012 ")
-						if operation.ssec {
-							for header, value := range completeMultipartRequestHeaders {
-								if strings.HasPrefix(header, "x-amz-server-side-encryption-customer-") {
-									req.Header.Set(header, " "+value+" ")
-								}
-							}
-						}
 					}
 					rr := httptest.NewRecorder()
 					gw.ServeHTTP(rr, reqWithRules(req, fullTeam2Rule()))
@@ -65,10 +57,6 @@ func TestMultipartAndAttributesForwardRequestHeaders(t *testing.T) {
 					}
 					if sent.body != operation.body {
 						t.Errorf("upstream body=%q, want %q", sent.body, operation.body)
-					}
-					if rr.Header().Get("x-amz-server-side-encryption-customer-key") != "" ||
-						strings.Contains(rr.Body.String(), completeMultipartRequestHeaders["x-amz-server-side-encryption-customer-key"]) {
-						t.Error("response exposed the customer key")
 					}
 				})
 			}
@@ -97,30 +85,36 @@ func TestMultipartAndAttributesRejectUnsupportedPayer(t *testing.T) {
 	}
 }
 
-func TestMultipartAndAttributesRejectIncompleteCustomerEncryption(t *testing.T) {
+func TestMultipartAndAttributesRejectCustomerEncryption(t *testing.T) {
 	for _, operation := range accountHeaderOperations {
-		if !operation.ssec {
-			continue
-		}
 		t.Run(operation.name, func(t *testing.T) {
 			for _, missing := range []string{
+				"",
 				"x-amz-server-side-encryption-customer-algorithm",
 				"x-amz-server-side-encryption-customer-key",
 				"x-amz-server-side-encryption-customer-key-md5",
 			} {
-				t.Run(missing, func(t *testing.T) {
+				name := "complete customer encryption"
+				if missing != "" {
+					name = "missing " + missing
+				}
+				t.Run(name, func(t *testing.T) {
 					gw, requests := multipartChecksumStub(t, nil, operation.response)
 					req := httptest.NewRequest(operation.method, operation.target, strings.NewReader(operation.body))
 					req.Header.Set("x-amz-object-attributes", "ETag")
-					for header, value := range completeMultipartRequestHeaders {
+					for header, value := range customerEncryptionRequestHeaders {
 						if header != missing {
 							req.Header.Set(header, value)
 						}
 					}
 					rr := httptest.NewRecorder()
 					gw.ServeHTTP(rr, reqWithRules(req, fullTeam2Rule()))
-					if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "<Code>InvalidArgument</Code>") {
-						t.Errorf("incomplete encryption accepted: %d %s", rr.Code, rr.Body.String())
+					if rr.Code != http.StatusNotImplemented || !strings.Contains(rr.Body.String(), "<Code>NotImplemented</Code>") {
+						t.Errorf("unsupported encryption accepted: %d %s", rr.Code, rr.Body.String())
+					}
+					if rr.Header().Get("x-amz-server-side-encryption-customer-key") != "" ||
+						strings.Contains(rr.Body.String(), customerEncryptionRequestHeaders["x-amz-server-side-encryption-customer-key"]) {
+						t.Error("response exposed the customer key")
 					}
 					select {
 					case <-requests:

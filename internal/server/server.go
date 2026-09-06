@@ -462,7 +462,6 @@ var supportedS3QueryParameters = map[string]struct{}{
 	"delete":                       {},
 	"delimiter":                    {},
 	"encoding-type":                {},
-	"encryption":                   {},
 	"fetch-owner":                  {},
 	"key-marker":                   {},
 	"lifecycle":                    {},
@@ -510,7 +509,6 @@ var bucketOnlySubresources = map[string]struct{}{
 	"accelerate":        {},
 	"cors":              {},
 	"delete":            {},
-	"encryption":        {},
 	"lifecycle":         {},
 	"location":          {},
 	"logging":           {},
@@ -648,6 +646,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.handleReadyz(w, r)
 		return
 	}
+	if !requireNoEncryptionRequestHeaders(w, r) {
+		return
+	}
 	if isPopAPIPath(p) {
 		s.handlePopAPI(w, r)
 		return
@@ -741,22 +742,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			case http.MethodPut:
 				s.handlePutBucketACL(w, r, bucket)
-				return
-			default:
-				s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")
-				return
-			}
-		}
-		if _, ok := q["encryption"]; ok {
-			switch r.Method {
-			case http.MethodPut:
-				s.handlePutBucketEncryption(w, r, bucket)
-				return
-			case http.MethodGet:
-				s.handleGetBucketEncryption(w, r, bucket)
-				return
-			case http.MethodDelete:
-				s.handleDeleteBucketEncryption(w, r, bucket)
 				return
 			default:
 				s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Operation not implemented")

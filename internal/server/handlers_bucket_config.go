@@ -3,13 +3,11 @@ package server
 import (
 	"encoding/xml"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	authz "github.com/define42/s3gateway/internal/authz"
 	"github.com/define42/s3gateway/internal/s3http"
@@ -22,10 +20,6 @@ import (
 const (
 	gatewayOwnerID          = "s3gateway"
 	gatewayOwnerDisplayName = "s3gateway"
-
-	// maxBucketConfigBodyBytes bounds XML request bodies for bucket
-	// configuration operations (far above any legitimate payload).
-	maxBucketConfigBodyBytes = 1 << 20
 )
 
 func isUpstreamNotFound(err error) bool {
@@ -272,135 +266,4 @@ func writeEmptyConfigElement(w http.ResponseWriter, name string) {
 	defer s3xml.FlushResponse(xw)
 	s3xml.EncodeRootStart(xw, name)
 	xw.End(name)
-}
-
-// ---------- Bucket encryption (proxied) ----------
-
-type sseConfigXML struct {
-	XMLName xml.Name     `xml:"ServerSideEncryptionConfiguration"`
-	Rules   []sseRuleXML `xml:"Rule"`
-}
-
-type sseRuleXML struct {
-	Apply            *sseByDefaultXML `xml:"ApplyServerSideEncryptionByDefault,omitempty"`
-	BucketKeyEnabled *bool            `xml:"BucketKeyEnabled,omitempty"`
-}
-
-type sseByDefaultXML struct {
-	SSEAlgorithm   string `xml:"SSEAlgorithm"`
-	KMSMasterKeyID string `xml:"KMSMasterKeyID,omitempty"`
-}
-
-func decodeSSEConfigXML(r io.Reader) (sseConfigXML, error) {
-	var doc sseConfigXML
-	if err := s3xml.DecodeLimited(r, &doc, s3xml.DecodeLimits{MaxBodyBytes: maxBucketConfigBodyBytes}); err != nil {
-		return doc, err
-	}
-	if len(doc.Rules) == 0 {
-		return doc, errors.New("server-side encryption configuration requires a rule")
-	}
-	return doc, nil
-}
-
-func (s *Server) handlePutBucketEncryption(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := authz.RulesFromRequest(r)
-	if !authz.CanConfigure(rules, bucket) {
-		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
-		return
-	}
-
-	doc, ok := decodeXMLWithContentMD5(w, r, decodeSSEConfigXML, "Invalid server-side encryption configuration")
-	if !ok {
-		return
-	}
-
-	sseRules := make([]types.ServerSideEncryptionRule, 0, len(doc.Rules))
-	for _, rule := range doc.Rules {
-		var out types.ServerSideEncryptionRule
-		if rule.Apply != nil {
-			out.ApplyServerSideEncryptionByDefault = &types.ServerSideEncryptionByDefault{
-				SSEAlgorithm: types.ServerSideEncryption(rule.Apply.SSEAlgorithm),
-			}
-			if rule.Apply.KMSMasterKeyID != "" {
-				out.ApplyServerSideEncryptionByDefault.KMSMasterKeyID = aws.String(rule.Apply.KMSMasterKeyID)
-			}
-		}
-		out.BucketKeyEnabled = rule.BucketKeyEnabled
-		sseRules = append(sseRules, out)
-	}
-
-	in := &s3.PutBucketEncryptionInput{
-		Bucket: &bucket,
-		ServerSideEncryptionConfiguration: &types.ServerSideEncryptionConfiguration{
-			Rules: sseRules,
-		},
-	}
-	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
-		in.ExpectedBucketOwner = aws.String(expectedOwner)
-	}
-	_, err := s.up.PutBucketEncryption(r.Context(), in)
-	if err != nil {
-		s3http.WriteUpstreamError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *Server) handleGetBucketEncryption(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := authz.RulesFromRequest(r)
-	if !authz.CanRead(rules, bucket) {
-		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
-		return
-	}
-
-	in := &s3.GetBucketEncryptionInput{Bucket: &bucket}
-	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
-		in.ExpectedBucketOwner = aws.String(expectedOwner)
-	}
-	out, err := s.up.GetBucketEncryption(r.Context(), in)
-	if err != nil {
-		s3http.WriteUpstreamError(w, err)
-		return
-	}
-
-	xw := s3xml.BeginResponse(w, http.StatusOK)
-	defer s3xml.FlushResponse(xw)
-	s3xml.EncodeRootStart(xw, "ServerSideEncryptionConfiguration")
-	if out.ServerSideEncryptionConfiguration != nil {
-		for _, rule := range out.ServerSideEncryptionConfiguration.Rules {
-			xw.Start("Rule")
-			if def := rule.ApplyServerSideEncryptionByDefault; def != nil {
-				xw.Start("ApplyServerSideEncryptionByDefault")
-				xw.Elem("SSEAlgorithm", string(def.SSEAlgorithm))
-				if def.KMSMasterKeyID != nil {
-					xw.Elem("KMSMasterKeyID", *def.KMSMasterKeyID)
-				}
-				xw.End("ApplyServerSideEncryptionByDefault")
-			}
-			if rule.BucketKeyEnabled != nil {
-				xw.ElemBool("BucketKeyEnabled", *rule.BucketKeyEnabled)
-			}
-			xw.End("Rule")
-		}
-	}
-	xw.End("ServerSideEncryptionConfiguration")
-}
-
-func (s *Server) handleDeleteBucketEncryption(w http.ResponseWriter, r *http.Request, bucket string) {
-	rules := authz.RulesFromRequest(r)
-	if !authz.CanDeleteBucket(rules, bucket) {
-		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
-		return
-	}
-
-	in := &s3.DeleteBucketEncryptionInput{Bucket: &bucket}
-	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
-		in.ExpectedBucketOwner = aws.String(expectedOwner)
-	}
-	_, err := s.up.DeleteBucketEncryption(r.Context(), in)
-	if err != nil {
-		s3http.WriteUpstreamError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
