@@ -812,7 +812,8 @@ in-memory limit, and pending logs are flushed during graceful shutdown. When
 the buffer is full, stdout logging continues and dropped-event counts are
 reported on stderr. A response lost after successful ingestion can cause a
 retry, so duplicate HEC events are possible. Use HTTPS for the HEC endpoint in
-production.
+production. Configure the final collector URL: HEC redirects are rejected, and
+redirected batches remain buffered for retry within the same memory limit.
 
 ### S3 audit logs
 

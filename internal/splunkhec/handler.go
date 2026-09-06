@@ -88,7 +88,8 @@ type hecResponse struct {
 
 // NewHandler validates the HEC endpoint and required options, then starts the
 // periodic flush worker. A nil HTTPClient uses a client with a 10-second
-// timeout; a nil ErrorWriter sends diagnostics to standard error.
+// timeout; a supplied client is copied. HEC requests never follow redirects.
+// A nil ErrorWriter sends diagnostics to standard error.
 func NewHandler(options Options) (*Handler, error) {
 	endpoint := strings.TrimSpace(options.Endpoint)
 	token := strings.TrimSpace(options.Token)
@@ -97,9 +98,13 @@ func NewHandler(options Options) (*Handler, error) {
 		return nil, err
 	}
 
-	httpClient := options.HTTPClient
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: defaultHTTPTimeout}
+	httpClient := &http.Client{Timeout: defaultHTTPTimeout}
+	if options.HTTPClient != nil {
+		*httpClient = *options.HTTPClient
+	}
+	// Keep the token and log batches at the configured collector endpoint.
+	httpClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
 	}
 	errorWriter := options.ErrorWriter
 	if errorWriter == nil {

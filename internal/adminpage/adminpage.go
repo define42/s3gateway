@@ -1523,6 +1523,12 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 	metaValues := map[string]string{}
 
 	redirectUploadPayloadError := func(pageErr string) {
+		// Skip net/http's pre-response drain and interrupt any body cleanup
+		// after the rejection. HTTP/2 closes the individual request stream.
+		if r.ProtoMajor == 1 {
+			w.Header().Set("Connection", "close")
+			_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+		}
 		if strings.TrimSpace(bucket) == "" {
 			http.Redirect(w, r, "/admin", http.StatusSeeOther)
 			return
@@ -1546,8 +1552,10 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 
 	rules := authz.RulesFromGroups(session.Groups)
 
+	// Part.Close drains to the next boundary. On rejection, leave unread data
+	// to the HTTP server; only advance after consuming a field within limits.
 	for {
-		part, partErr := reader.NextPart()
+		part, partErr := reader.NextRawPart()
 		if partErr == io.EOF {
 			break
 		}
@@ -1557,7 +1565,12 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 		}
 		partCount++
 		if partCount > maxAdminUploadParts {
-			_ = part.Close()
+			redirectUploadPayloadError("Could not process upload payload.")
+			return
+		}
+		// Browser forms send raw parts. Reject transfer encodings so decoded
+		// size limits cannot conceal unbounded raw input (e.g. soft line breaks).
+		if len(part.Header.Values("Content-Transfer-Encoding")) > 0 {
 			redirectUploadPayloadError("Could not process upload payload.")
 			return
 		}
@@ -1567,13 +1580,11 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 			metadataCount++
 			if !bucketWriteAuthorized || metadataCount > maxAdminUploadMetadataFields ||
 				len(rawKey) == 0 || len(rawKey) > maxAdminUploadMetadataKeyBytes {
-				_ = part.Close()
 				redirectUploadPayloadError("Could not process upload payload.")
 				return
 			}
 
 			valueBytes, readErr := io.ReadAll(io.LimitReader(part, maxAdminUploadMetadataValueBytes+1))
-			_ = part.Close()
 			if readErr != nil || int64(len(valueBytes)) > maxAdminUploadMetadataValueBytes {
 				redirectUploadPayloadError("Could not process upload payload.")
 				return
@@ -1592,7 +1603,6 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 		switch partName {
 		case "name", "key", "cursor", "history", "size":
 			valueBytes, readErr := io.ReadAll(io.LimitReader(part, maxAdminUploadFieldBytes+1))
-			_ = part.Close()
 			if readErr != nil || int64(len(valueBytes)) > maxAdminUploadFieldBytes {
 				redirectUploadPayloadError("Could not process upload payload.")
 				return
@@ -1605,7 +1615,7 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 					bucket = value
 					if bucket != "" {
 						if !authz.CanWrite(rules, bucket) {
-							http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, cursor, history, "", "Write permission is required for uploads."), http.StatusSeeOther)
+							redirectUploadPayloadError("Write permission is required for uploads.")
 							return
 						}
 						bucketWriteAuthorized = true
@@ -1639,16 +1649,18 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 			fileContentType := strings.TrimSpace(part.Header.Get("Content-Type"))
 
 			if bucket == "" {
-				_ = part.Close()
 				redirectUploadPayloadError("Bucket name is required.")
 				return
 			}
 
 			redirectToBucket := func(notice, pageErr string) {
+				if pageErr != "" {
+					redirectUploadPayloadError(pageErr)
+					return
+				}
 				http.Redirect(w, r, adminBucketPageURLWithStatus(bucket, cursor, history, notice, pageErr), http.StatusSeeOther)
 			}
 			if !bucketWriteAuthorized {
-				_ = part.Close()
 				redirectToBucket("", "Write permission is required for uploads.")
 				return
 			}
@@ -1659,7 +1671,6 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 			}
 			finalKey = strings.TrimSpace(strings.TrimPrefix(finalKey, "/"))
 			if finalKey == "" {
-				_ = part.Close()
 				redirectToBucket("", "Object key is required.")
 				return
 			}
@@ -1667,7 +1678,6 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 			// Guard against S3's maximum object size (5 TiB) when the browser provided file size.
 			const maxMultipartObjectSize = int64(5 * 1024 * 1024 * 1024 * 1024)
 			if size > maxMultipartObjectSize {
-				_ = part.Close()
 				redirectToBucket("", "File is too large. Maximum supported object size is 5 TiB.")
 				return
 			}
@@ -1680,7 +1690,6 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 			maps.Copy(meta, metaValues)
 			meta["uploaded-by"] = strings.TrimSpace(session.Username)
 			if missing := missingRequiredMetadata(meta, h.requiredUploadMetadataKeys); len(missing) > 0 {
-				_ = part.Close()
 				redirectToBucket("", "Missing required metadata: "+strings.Join(missing, ", "))
 				return
 			}
@@ -1696,13 +1705,11 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 
 			createOut, err := h.s3.CreateMultipartUpload(r.Context(), createIn)
 			if err != nil {
-				_ = part.Close()
 				redirectToBucket("", "Could not upload object.")
 				return
 			}
 			uploadID := strings.TrimSpace(aws.ToString(createOut.UploadId))
 			if uploadID == "" {
-				_ = part.Close()
 				redirectToBucket("", "Could not upload object.")
 				return
 			}
@@ -1734,7 +1741,6 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 					break
 				}
 				if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) {
-					_ = part.Close()
 					redirectToBucket("", "Could not upload object.")
 					return
 				}
@@ -1747,7 +1753,6 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 					return
 				}
 				if partNumber > 10000 {
-					_ = part.Close()
 					redirectToBucket("", "File is too large. Maximum multipart part count exceeded.")
 					return
 				}
@@ -1762,14 +1767,12 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 					ContentLength: aws.Int64(int64(n)),
 				})
 				if uploadErr != nil {
-					_ = part.Close()
 					redirectToBucket("", "Could not upload object.")
 					return
 				}
 
 				etag := strings.TrimSpace(aws.ToString(uploadOut.ETag))
 				if etag == "" {
-					_ = part.Close()
 					redirectToBucket("", "Could not upload object.")
 					return
 				}
@@ -1783,7 +1786,6 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 					break
 				}
 			}
-			_ = part.Close()
 
 			if size >= 0 && receivedSize != size {
 				redirectToBucket("", "Uploaded file size does not match the declared size.")
@@ -1792,7 +1794,7 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 			// The browser sends the file last. Only bare EOF proves that the
 			// multipart parser saw the closing boundary; wrapped EOF can mean
 			// truncated input, even after ReadFull returned a short final part.
-			if _, err := reader.NextPart(); err != io.EOF {
+			if _, err := reader.NextRawPart(); err != io.EOF {
 				redirectToBucket("", "Could not process upload payload.")
 				return
 			}
@@ -1849,8 +1851,11 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 			redirectToBucket("Uploaded object: "+finalKey, "")
 			return
 		default:
-			_, _ = io.Copy(io.Discard, part)
-			_ = part.Close()
+			n, readErr := io.Copy(io.Discard, io.LimitReader(part, maxAdminUploadFieldBytes+1))
+			if readErr != nil || n > maxAdminUploadFieldBytes {
+				redirectUploadPayloadError("Could not process upload payload.")
+				return
+			}
 		}
 	}
 
