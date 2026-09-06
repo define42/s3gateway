@@ -478,17 +478,6 @@ func TestHandleUploadPartValidationAndBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("content-md5 with checksum algorithm", func(t *testing.T) {
-		req := newReq("part")
-		req.Header.Set("Content-MD5", "abc")
-		req.Header.Set("x-amz-checksum-algorithm", "SHA256")
-		rr := httptest.NewRecorder()
-		gwNoUpstream.handleUploadPart(rr, req, "team2-dst", "object.txt", "u1", 1)
-		if rr.Code != http.StatusBadRequest {
-			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
-		}
-	})
-
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("partNumber") == "9" {
 			w.Header().Set("Content-Type", "application/xml")
@@ -935,17 +924,6 @@ func TestHandlePutObjectBranchMatrix(t *testing.T) {
 		req := newReq("payload")
 		req.Header.Set("x-amz-checksum-crc32", "AAAAAA==")
 		req.Header.Set("x-amz-checksum-crc32c", "BBBBBB==")
-		rr := httptest.NewRecorder()
-		gwNoUpstream.handlePutObject(rr, req, "team2-dst", "object-put.txt")
-		if rr.Code != http.StatusBadRequest {
-			t.Fatalf("status mismatch: got=%d body=%s", rr.Code, rr.Body.String())
-		}
-	})
-
-	t.Run("content md5 with checksum algorithm", func(t *testing.T) {
-		req := newReq("payload")
-		req.Header.Set("Content-MD5", "1B2M2Y8AsgTpgAmY7PhCfg==")
-		req.Header.Set("x-amz-checksum-algorithm", "SHA256")
 		rr := httptest.NewRecorder()
 		gwNoUpstream.handlePutObject(rr, req, "team2-dst", "object-put.txt")
 		if rr.Code != http.StatusBadRequest {

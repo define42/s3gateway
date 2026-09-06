@@ -8,8 +8,148 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
+
+func TestCannedACLAndBucketConfigurationExpectedOwner(t *testing.T) {
+	routes := []struct {
+		name, method, target string
+		status               int
+	}{
+		{name: "get bucket ACL", method: http.MethodGet, target: "/team2-bucket?acl", status: http.StatusOK},
+		{name: "put bucket ACL", method: http.MethodPut, target: "/team2-bucket?acl", status: http.StatusOK},
+		{name: "get object ACL", method: http.MethodGet, target: "/team2-bucket/key?acl", status: http.StatusOK},
+		{name: "put object ACL", method: http.MethodPut, target: "/team2-bucket/key?acl", status: http.StatusOK},
+	}
+	for _, key := range bucketConfigReadKeys {
+		status := http.StatusOK
+		switch key {
+		case "policy", "policyStatus", "cors", "website", "replication":
+			status = http.StatusNotFound
+		}
+		routes = append(routes, struct {
+			name, method, target string
+			status               int
+		}{name: "get " + key, method: http.MethodGet, target: "/team2-bucket?" + key, status: status})
+	}
+	for _, route := range routes {
+		t.Run(route.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, owner string
+				wrongOwner  bool
+			}{
+				{name: "absent"},
+				{name: "matching and normalized", owner: " 111111111111 "},
+				{name: "wrong owner", owner: "222222222222", wrongOwner: true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					var upstreamCalls atomic.Int32
+					gateway, cleanup := newGatewayWithRawStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+						upstreamCalls.Add(1)
+						if r.Method != http.MethodHead {
+							t.Errorf("canned response issued upstream %s, want HEAD", r.Method)
+						}
+						owner := r.Header.Get("x-amz-expected-bucket-owner")
+						if owner != strings.TrimSpace(tc.owner) {
+							t.Errorf("upstream owner=%q, want %q", owner, strings.TrimSpace(tc.owner))
+						}
+						if tc.owner == "" && len(r.Header.Values("x-amz-expected-bucket-owner")) != 0 {
+							t.Error("absent expected owner was added upstream")
+						}
+						if owner != "" && owner != "111111111111" {
+							w.WriteHeader(http.StatusForbidden)
+							return
+						}
+						w.WriteHeader(http.StatusOK)
+					})
+					t.Cleanup(cleanup)
+					request := httptest.NewRequest(route.method, route.target, nil)
+					if tc.owner != "" {
+						request.Header.Set("x-amz-expected-bucket-owner", tc.owner)
+					}
+					if route.method == http.MethodPut {
+						request.Header.Set("x-amz-acl", "private")
+					}
+					response := httptest.NewRecorder()
+					gateway.ServeHTTP(response, reqWithRules(request, fullTeam2Rule()))
+					wantStatus := route.status
+					if tc.wrongOwner {
+						wantStatus = http.StatusForbidden
+					}
+					if response.Code != wantStatus {
+						t.Errorf("status=%d body=%s, want %d", response.Code, response.Body.String(), wantStatus)
+					}
+					if got := upstreamCalls.Load(); got != 1 {
+						t.Errorf("upstream calls=%d, want 1", got)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestCannedObjectACLRequestPayer(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		t.Run(method, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, payer string
+				status      int
+				calls       int32
+			}{
+				{name: "requester", payer: "requester", status: http.StatusOK, calls: 1},
+				{name: "normalized requester", payer: " REQUESTER ", status: http.StatusOK, calls: 1},
+				{name: "absent payer on requester pays bucket", status: http.StatusForbidden, calls: 1},
+				{name: "unsupported owner", payer: "owner", status: http.StatusBadRequest},
+				{name: "invalid value", payer: "requester,owner", status: http.StatusBadRequest},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					var upstreamCalls atomic.Int32
+					gateway, cleanup := newGatewayWithRawStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+						upstreamCalls.Add(1)
+						if r.Method != http.MethodHead || r.URL.Path != "/team2-bucket/key" {
+							t.Errorf("upstream request=%s %s, want HEAD /team2-bucket/key", r.Method, r.URL.Path)
+						}
+						if r.URL.Query().Get("versionId") != "version-1" || r.Header.Get("x-amz-expected-bucket-owner") != "111111111111" {
+							t.Error("object existence check lost version ID or expected owner")
+						}
+						if r.Header.Get("x-amz-acl") != "" {
+							t.Error("canned ACL was forwarded upstream")
+						}
+						if r.Header.Get("x-amz-request-payer") != "requester" {
+							w.WriteHeader(http.StatusForbidden)
+							return
+						}
+						w.WriteHeader(http.StatusOK)
+					})
+					t.Cleanup(cleanup)
+					request := httptest.NewRequest(method, "/team2-bucket/key?acl&versionId=version-1", nil)
+					request.Header.Set("x-amz-expected-bucket-owner", "111111111111")
+					if tc.payer != "" {
+						request.Header.Set("x-amz-request-payer", tc.payer)
+					}
+					if method == http.MethodPut {
+						request.Header.Set("x-amz-acl", "private")
+					}
+					response := httptest.NewRecorder()
+					gateway.ServeHTTP(response, reqWithRules(request, fullTeam2Rule()))
+					if response.Code != tc.status {
+						t.Fatalf("status=%d body=%s, want %d", response.Code, response.Body.String(), tc.status)
+					}
+					if got := upstreamCalls.Load(); got != tc.calls {
+						t.Errorf("upstream calls=%d, want %d", got, tc.calls)
+					}
+					if tc.status == http.StatusBadRequest && !strings.Contains(response.Body.String(), "<Code>InvalidArgument</Code>") {
+						t.Errorf("invalid payer error=%s, want InvalidArgument", response.Body.String())
+					}
+					if tc.status == http.StatusOK && method == http.MethodGet && !strings.Contains(response.Body.String(), "<Permission>FULL_CONTROL</Permission>") {
+						t.Error("successful ACL read lost its synthetic FULL_CONTROL response")
+					}
+				})
+			}
+		})
+	}
+}
 
 var bucketConfigurationRoutes = []struct {
 	name, target, body, content string

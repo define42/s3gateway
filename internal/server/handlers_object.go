@@ -1401,10 +1401,6 @@ func (s *Server) handlePutObject(w http.ResponseWriter, r *http.Request, bucket,
 		return
 	}
 	contentMD5 := strings.TrimSpace(r.Header.Get("Content-MD5"))
-	if contentMD5 != "" && checksum.ChecksumAlgorithm != "" {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Content-MD5 cannot be combined with x-amz-checksum-algorithm")
-		return
-	}
 	expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner"))
 	payer, err := s3http.ParseRequestPayerHeader(r.Header)
 	if err != nil {
@@ -1658,16 +1654,16 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 	if ct := strings.TrimSpace(r.Header.Get("Content-Type")); ct != "" {
 		in.ContentType = aws.String(ct)
 	}
-	if cc := strings.TrimSpace(r.Header.Get("Cache-Control")); cc != "" {
+	if cc := strings.TrimSpace(strings.Join(r.Header.Values("Cache-Control"), ",")); cc != "" {
 		in.CacheControl = aws.String(cc)
 	}
 	if cd := strings.TrimSpace(r.Header.Get("Content-Disposition")); cd != "" {
 		in.ContentDisposition = aws.String(cd)
 	}
-	if ce := strings.TrimSpace(r.Header.Get("Content-Encoding")); ce != "" {
+	if ce := strings.TrimSpace(strings.Join(r.Header.Values("Content-Encoding"), ",")); ce != "" {
 		in.ContentEncoding = aws.String(ce)
 	}
-	if cl := strings.TrimSpace(r.Header.Get("Content-Language")); cl != "" {
+	if cl := strings.TrimSpace(strings.Join(r.Header.Values("Content-Language"), ",")); cl != "" {
 		in.ContentLanguage = aws.String(cl)
 	}
 	if redirect := strings.TrimSpace(r.Header.Get("x-amz-website-redirect-location")); redirect != "" {

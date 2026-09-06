@@ -349,8 +349,7 @@ func TestGatewayWriteCopyAndDeleteHandlerMatrix(t *testing.T) {
 
 	uploadPartInvalidReq := httptest.NewRequest(http.MethodPut, "/team2-rich/object-put.txt?partNumber=1&uploadId=u1", bytes.NewReader([]byte("part-body")))
 	uploadPartInvalidReq = uploadPartInvalidReq.WithContext(permCtx)
-	uploadPartInvalidReq.Header.Set("Content-MD5", "abc")
-	uploadPartInvalidReq.Header.Set("x-amz-checksum-algorithm", "SHA256")
+	uploadPartInvalidReq.Header.Set("x-amz-checksum-algorithm", "unsupported")
 	uploadPartInvalidRR := httptest.NewRecorder()
 	gw.ServeHTTP(uploadPartInvalidRR, uploadPartInvalidReq)
 	if uploadPartInvalidRR.Code != http.StatusBadRequest {

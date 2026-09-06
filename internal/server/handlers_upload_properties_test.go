@@ -38,6 +38,11 @@ func newUploadPropertiesGateway(t *testing.T) (*Server, <-chan uploadPropertiesR
 		}
 		switch r.Method {
 		case http.MethodPut:
+			if r.Header.Get("x-amz-copy-source") != "" {
+				w.Header().Set("Content-Type", "application/xml")
+				_, _ = io.WriteString(w, `<CopyObjectResult><ETag>"copied-etag"</ETag></CopyObjectResult>`)
+				return
+			}
 			w.Header().Set("ETag", `"uploaded-etag"`)
 		case http.MethodPost:
 			if !r.URL.Query().Has("uploads") {
@@ -261,19 +266,31 @@ func TestUploadPropertiesRejectInvalidHeaders(t *testing.T) {
 
 func TestUploadPropertiesPreserveListHeaders(t *testing.T) {
 	for _, operation := range []struct {
-		name   string
-		method string
-		query  string
+		name       string
+		method     string
+		query      string
+		copySource string
 	}{
 		{name: "put object", method: http.MethodPut},
 		{name: "create multipart upload", method: http.MethodPost, query: "?uploads"},
+		{name: "copy object", method: http.MethodPut, copySource: "/team2-bucket/source.gz"},
 	} {
 		t.Run(operation.name, func(t *testing.T) {
 			gw, requests := newUploadPropertiesGateway(t)
-			req := httptest.NewRequest(operation.method, "/team2-bucket/object.gz"+operation.query, strings.NewReader("encoded payload"))
+			payload := "encoded payload"
+			if operation.copySource != "" {
+				payload = ""
+			}
+			req := httptest.NewRequest(
+				operation.method, "/team2-bucket/object.gz"+operation.query, strings.NewReader(payload),
+			)
+			if operation.copySource != "" {
+				req.Header.Set("x-amz-copy-source", operation.copySource)
+				req.Header.Set("x-amz-metadata-directive", "REPLACE")
+			}
 			properties := map[string][]string{
 				"Content-Encoding": {"gzip", "br"},
-				"Cache-Control":    {"private", "max-age=3600"},
+				"Cache-Control":    {"no-cache", "no-store"},
 				"Content-Language": {"en-US", "da"},
 			}
 			for name, values := range properties {

@@ -31,7 +31,11 @@ func isUpstreamNotFound(err error) bool {
 // S3's NoSuchBucket semantics. It writes the error response and returns false
 // when the bucket is not available.
 func (s *Server) requireBucketExists(w http.ResponseWriter, r *http.Request, bucket string) bool {
-	if _, err := s.up.HeadBucket(r.Context(), &s3.HeadBucketInput{Bucket: &bucket}); err != nil {
+	in := &s3.HeadBucketInput{Bucket: &bucket}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if _, err := s.up.HeadBucket(r.Context(), in); err != nil {
 		if isUpstreamNotFound(err) {
 			s3xml.WriteError(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
 		} else {
@@ -45,9 +49,20 @@ func (s *Server) requireBucketExists(w http.ResponseWriter, r *http.Request, buc
 // requireObjectExists heads the object upstream so canned per-object answers
 // keep S3's NoSuchKey semantics.
 func (s *Server) requireObjectExists(w http.ResponseWriter, r *http.Request, bucket, key string) bool {
+	payer, err := s3http.ParseRequestPayerHeader(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid x-amz-request-payer header")
+		return false
+	}
 	in := &s3.HeadObjectInput{Bucket: &bucket, Key: &key}
 	if versionID := strings.TrimSpace(r.URL.Query().Get("versionId")); versionID != "" {
 		in.VersionId = aws.String(versionID)
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	if payer != "" {
+		in.RequestPayer = payer
 	}
 	if _, err := s.up.HeadObject(r.Context(), in); err != nil {
 		if isUpstreamNotFound(err) {

@@ -108,6 +108,9 @@ func (s *Server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 
 	s3xml.EncodeRootStart(xw, "ListMultipartUploadsResult")
 	xw.Elem("Bucket", bucket)
+	if out.EncodingType != "" {
+		xw.Elem("EncodingType", string(out.EncodingType))
+	}
 	if out.KeyMarker != nil {
 		xw.Elem("KeyMarker", *out.KeyMarker)
 	}
@@ -316,10 +319,6 @@ func (s *Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 		return
 	}
 	contentMD5 := strings.TrimSpace(r.Header.Get("Content-MD5"))
-	if contentMD5 != "" && checksum.ChecksumAlgorithm != "" {
-		s3xml.WriteError(w, http.StatusBadRequest, "InvalidRequest", "Content-MD5 cannot be combined with x-amz-checksum-algorithm")
-		return
-	}
 
 	in := &s3.UploadPartInput{
 		Bucket:        &bucket,
