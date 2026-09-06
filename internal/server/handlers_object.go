@@ -20,6 +20,7 @@ import (
 	"github.com/define42/s3gateway/internal/s3xml"
 	sigv4 "github.com/define42/s3gateway/internal/sigv4"
 	"github.com/define42/s3gateway/internal/uploadnotify"
+	"github.com/define42/s3gateway/internal/upstream"
 )
 
 const (
@@ -1229,10 +1230,27 @@ func (s *Server) handleGetObjectAttributes(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	ssecAlgo, ssecKey, ssecMD5, _, err := s3http.ParseSSECustomerHeaders(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
+		return
+	}
+	payer, err := s3http.ParseRequestPayerHeader(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
+		return
+	}
 	in := &s3.GetObjectAttributesInput{
-		Bucket:           &bucket,
-		Key:              &key,
-		ObjectAttributes: attrs,
+		Bucket:               &bucket,
+		Key:                  &key,
+		ObjectAttributes:     attrs,
+		SSECustomerAlgorithm: ssecAlgo,
+		SSECustomerKey:       ssecKey,
+		SSECustomerKeyMD5:    ssecMD5,
+		RequestPayer:         payer,
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
 	if versionID := r.URL.Query().Get("versionId"); versionID != "" {
 		in.VersionId = &versionID
@@ -1740,7 +1758,7 @@ func (s *Server) handleCopyObject(w http.ResponseWriter, r *http.Request, bucket
 	in.SSECustomerKey = sse.SSECustomerKey
 	in.SSECustomerKeyMD5 = sse.SSECustomerKeyMD5
 
-	out, err := s.up.CopyObject(r.Context(), in)
+	out, err := s.up.CopyObject(r.Context(), in, upstream.TrackResponseProgress)
 	if err != nil {
 		s3http.WriteUpstreamError(w, err)
 		return
@@ -1917,7 +1935,7 @@ func (s *Server) handleUploadPartCopy(w http.ResponseWriter, r *http.Request, bu
 		in.RequestPayer = payer
 	}
 
-	out, err := s.up.UploadPartCopy(r.Context(), in)
+	out, err := s.up.UploadPartCopy(r.Context(), in, upstream.TrackResponseProgress)
 	if err != nil {
 		s3http.WriteUpstreamError(w, err)
 		return
@@ -2032,7 +2050,7 @@ func extractAmzMeta(h http.Header) map[string]string {
 			if mk == "" {
 				continue
 			}
-			meta[mk] = vs[0]
+			meta[mk] = strings.Join(vs, ",")
 		}
 	}
 	if len(meta) == 0 {

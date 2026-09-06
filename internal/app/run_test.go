@@ -63,8 +63,8 @@ func baseRunDependencies(signalCtx context.Context) runDependencies {
 			return config.Config{}
 		},
 		configureLogging: configureSplunkLogging,
-		boot: func(config.Config) (*http.Server, func(), error) {
-			return &http.Server{}, func() {}, nil
+		boot: func(config.Config) (*http.Server, contextCleanup, error) {
+			return &http.Server{}, func(context.Context) error { return nil }, nil
 		},
 		listen: func(*http.Server, config.Config) (net.Listener, bool, error) {
 			return &listenerError{err: errors.New("serve failed")}, false, nil
@@ -105,8 +105,8 @@ func TestRunReturnsFailureForInitializationErrors(t *testing.T) {
 		{
 			name: "application boot",
 			mutate: func(dependencies *runDependencies) {
-				dependencies.boot = func(config.Config) (*http.Server, func(), error) {
-					return nil, func() {}, errors.New("boot failed")
+				dependencies.boot = func(config.Config) (*http.Server, contextCleanup, error) {
+					return nil, func(context.Context) error { return nil }, errors.New("boot failed")
 				}
 			},
 		},
@@ -152,8 +152,8 @@ func TestRunShutsDownAndCleansUpOnSignal(t *testing.T) {
 	dependencies := baseRunDependencies(signalCtx)
 	serverAccepting := make(chan struct{})
 	var cleanupCalls atomic.Int32
-	dependencies.boot = func(config.Config) (*http.Server, func(), error) {
-		return &http.Server{}, func() { cleanupCalls.Add(1) }, nil
+	dependencies.boot = func(config.Config) (*http.Server, contextCleanup, error) {
+		return &http.Server{}, func(context.Context) error { cleanupCalls.Add(1); return nil }, nil
 	}
 	dependencies.listen = func(*http.Server, config.Config) (net.Listener, bool, error) {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")

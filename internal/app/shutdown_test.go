@@ -131,12 +131,13 @@ func TestRunDrainsUploadNotificationsBeforeCleanup(t *testing.T) {
 				})}
 				httpServer.RegisterOnShutdown(sync.OnceFunc(func() { close(shutdownStarted) }))
 				dependencies := baseRunDependencies(signalCtx)
-				dependencies.boot = func(config.Config) (*http.Server, func(), error) {
-					return httpServer, func() {
+				dependencies.boot = func(config.Config) (*http.Server, contextCleanup, error) {
+					return httpServer, func(context.Context) error {
 						if notifications.Load() != 1 {
 							prematureCleanup.Store(true)
 						}
 						cleanupCalls.Add(1)
+						return nil
 					}, nil
 				}
 				dependencies.listen = func(*http.Server, config.Config) (net.Listener, bool, error) {
@@ -207,12 +208,13 @@ func TestRunClosesActiveConnectionsBeforeCleanupOnShutdownTimeout(t *testing.T) 
 		dependencies.loadConfig = func() config.Config {
 			return config.Config{ShutdownTimeout: shutdownTimeout}
 		}
-		dependencies.boot = func(config.Config) (*http.Server, func(), error) {
-			return httpServer, func() {
+		dependencies.boot = func(config.Config) (*http.Server, contextCleanup, error) {
+			return httpServer, func(context.Context) error {
 				if !serverConn.closed.Load() {
 					prematureCleanup.Store(true)
 				}
 				cleanupCalls.Add(1)
+				return nil
 			}, nil
 		}
 		dependencies.listen = func(*http.Server, config.Config) (net.Listener, bool, error) {

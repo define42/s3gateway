@@ -24,7 +24,7 @@ coverage:
 	go test -shuffle=on -count=1 ./... -coverprofile=coverage-unit.out -covermode=atomic -coverpkg="$$cover_packages"
 
 integration:
-	go test -race -tags=integration -shuffle=on -count=1 ./internal/app ./internal/server ./internal/ldap
+	go test -race -tags=integration -shuffle=on -count=1 ./internal/app ./internal/server ./internal/ldap ./internal/kafkapop
 
 race:
 	go test -race -shuffle=on -count=1 ./...

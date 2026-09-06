@@ -271,8 +271,16 @@ func TestTransferLimitsStalledResponseReleasesSlot(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = response.Body.Close() }()
-			if err := awaitTransferNetworkResult(t, writeResult); err != nil {
-				t.Fatal(err)
+			select {
+			case err := <-writeResult:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(7 * time.Second):
+				// On HTTP/1.1, net/http closes TLS after the stalled write.
+				// TLS close_notify can take another five seconds after the
+				// 750ms idle deadline. Stay below the client's 10s timeout.
+				t.Fatal("stalled response did not release its slot after TLS cleanup")
 			}
 			assertTransferNetworkSlotAvailable(t, front)
 		})

@@ -18,8 +18,9 @@ func WithResponseProgress(ctx context.Context, progress func()) context.Context 
 }
 
 // TrackResponseProgress observes response headers and body reads before the SDK
-// consumes them. Use it for CompleteMultipartUpload, whose whitespace keepalives
-// would otherwise be invisible while the SDK waits for the final XML result.
+// consumes them. Use it for multipart completion and server-side copies, whose
+// whitespace keepalives would otherwise be invisible while the SDK waits for
+// the final XML result.
 // This changes only the operation's client copy, retaining its transport,
 // cancellation, retries, and response parsing.
 func TrackResponseProgress(options *s3.Options) {

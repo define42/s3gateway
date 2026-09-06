@@ -141,6 +141,10 @@ func (s *Server) handlePopAPI(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bucket pop topics are disabled", http.StatusServiceUnavailable)
 			return
 		}
+		if scope == strings.TrimSpace(s.cfg.KafkaGlobalTopic) {
+			http.Error(w, "bucket topic conflicts with the global topic; use /api/pop/_all", http.StatusServiceUnavailable)
+			return
+		}
 		if !authz.CanRead(rules, scope) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return

@@ -13,18 +13,19 @@ import (
 )
 
 type fakeConsumerClient struct {
-	mu             sync.Mutex
-	poll           func(context.Context) kgo.Fetches
-	commitErr      error
-	sequence       []string
-	committed      []*kgo.Record
-	setOffsets     []map[string]map[int32]kgo.EpochOffset
-	onSetOffsets   func(map[string]map[int32]kgo.EpochOffset)
-	allowCount     int
-	closeCount     int
-	commitCtxError error
-	beforeCommit   func()
-	beforeClose    func()
+	mu                 sync.Mutex
+	poll               func(context.Context) kgo.Fetches
+	commitErr          error
+	sequence           []string
+	committed          []*kgo.Record
+	setOffsets         []map[string]map[int32]kgo.EpochOffset
+	onSetOffsets       func(map[string]map[int32]kgo.EpochOffset)
+	allowCount         int
+	closeCount         int
+	commitCtxError     error
+	beforeCommit       func()
+	beforeClose        func()
+	beforeCloseContext func(context.Context) error
 }
 
 func (c *fakeConsumerClient) PollRecords(ctx context.Context, _ int) kgo.Fetches {
@@ -67,7 +68,12 @@ func (c *fakeConsumerClient) AllowRebalance() {
 	c.allowCount++
 }
 
-func (c *fakeConsumerClient) CloseAllowingRebalance() {
+func (c *fakeConsumerClient) CloseContext(ctx context.Context) error {
+	if c.beforeCloseContext != nil {
+		if err := c.beforeCloseContext(ctx); err != nil {
+			return err
+		}
+	}
 	if c.beforeClose != nil {
 		c.beforeClose()
 	}
@@ -75,6 +81,7 @@ func (c *fakeConsumerClient) CloseAllowingRebalance() {
 	defer c.mu.Unlock()
 	c.sequence = append(c.sequence, "close")
 	c.closeCount++
+	return nil
 }
 
 func fetchWithRecord(record *kgo.Record) kgo.Fetches {

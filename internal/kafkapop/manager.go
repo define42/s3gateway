@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/define42/s3gateway/internal/kafkaclient"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -37,10 +38,10 @@ type consumerClient interface {
 	CommitRecords(context.Context, ...*kgo.Record) error
 	SetOffsets(map[string]map[int32]kgo.EpochOffset)
 	AllowRebalance()
-	CloseAllowingRebalance()
+	CloseContext(context.Context) error
 }
 
-var _ consumerClient = (*kgo.Client)(nil)
+var _ consumerClient = (*kafkaclient.Client)(nil)
 
 type clientFactory func(topic, group string) (consumerClient, error)
 
@@ -74,6 +75,9 @@ type Manager struct {
 	closed       chan struct{}
 	closeDone    chan struct{}
 	closers      sync.WaitGroup // Timers and detached clients; additions require mu.
+	forceCtx     context.Context
+	forceCancel  context.CancelFunc
+	closeErr     error
 }
 
 // New constructs a Kafka pop manager. Kafka connections and group joins are
@@ -102,7 +106,7 @@ func New(options Options) (*Manager, error) {
 
 	fetchMaxWait := min(options.Timeout, 5*time.Second)
 	factory := func(topic, group string) (consumerClient, error) {
-		client, err := kgo.NewClient(
+		client, err := kafkaclient.New(
 			kgo.SeedBrokers(options.Brokers...),
 			kgo.ClientID("s3gateway-pop"),
 			kgo.ConsumerGroup(group),
@@ -125,6 +129,7 @@ func New(options Options) (*Manager, error) {
 }
 
 func newManager(timeout, idleTimeout time.Duration, maxConsumers int, factory clientFactory) *Manager {
+	forceCtx, forceCancel := context.WithCancel(context.Background())
 	return &Manager{
 		consumers:    make(map[consumerKey]*groupConsumer),
 		newClient:    factory,
@@ -133,6 +138,8 @@ func newManager(timeout, idleTimeout time.Duration, maxConsumers int, factory cl
 		maxConsumers: maxConsumers,
 		closed:       make(chan struct{}),
 		closeDone:    make(chan struct{}),
+		forceCtx:     forceCtx,
+		forceCancel:  forceCancel,
 	}
 }
 
@@ -170,12 +177,17 @@ func (m *Manager) Consume(
 	}()
 
 	pollCtx, cancelPoll := context.WithTimeout(ctx, m.timeout)
+	stopPoll := context.AfterFunc(m.forceCtx, cancelPoll)
+	defer stopPoll()
 	fetches := consumer.client.PollRecords(pollCtx, 1)
 	// Polling can block rebalances even when it returns no records or an error.
 	defer consumer.client.AllowRebalance()
 	cancelPoll()
 
 	records := fetches.Records()
+	if m.forceCtx.Err() != nil {
+		return ErrClosed
+	}
 	if err := fetches.Err(); err != nil {
 		// PollRecords can advance one record even when another partition fails.
 		// Rewind it before returning the error and allowing a rebalance.
@@ -200,11 +212,20 @@ func (m *Manager) Consume(
 		return fmt.Errorf("kafkapop: handle record: %w", err)
 	}
 
+	if m.forceCtx.Err() != nil {
+		return ErrClosed
+	}
+
 	commitCtx, cancelCommit := context.WithTimeout(
 		context.WithoutCancel(ctx),
 		m.timeout,
 	)
 	defer cancelCommit()
+	stopCommit := context.AfterFunc(m.forceCtx, cancelCommit)
+	defer stopCommit()
+	if m.forceCtx.Err() != nil {
+		cancelCommit()
+	}
 	if err := consumer.client.CommitRecords(commitCtx, record); err != nil {
 		rewindRecord(consumer.client, record)
 		return fmt.Errorf("kafkapop: commit record: %w", err)
@@ -282,7 +303,7 @@ func (m *Manager) acquire(ctx context.Context, topic, group string) (*groupConsu
 	m.mu.Unlock()
 
 	if evicted != nil {
-		evicted.client.CloseAllowingRebalance()
+		_ = m.closeConsumer(evicted)
 		m.closers.Done()
 	}
 	return m.waitForConsumer(ctx, consumer)
@@ -359,17 +380,40 @@ func (m *Manager) expireConsumer(consumer *groupConsumer, generation uint64) {
 
 	// No users can acquire the detached client. Closing outside mu lets other
 	// groups and idle timers progress while Kafka processes the leave request.
-	consumer.client.CloseAllowingRebalance()
+	_ = m.closeConsumer(consumer)
 }
 
-// Close rejects queued calls and closes every cached Kafka client. It waits
-// for in-progress callbacks and any idle eviction already closing a client.
+// closeConsumer also bounds idle evictions and connects detached clients to the
+// manager's forced-shutdown cancellation.
+func (m *Manager) closeConsumer(consumer *groupConsumer) error {
+	ctx, cancel := context.WithTimeout(m.forceCtx, m.timeout)
+	defer cancel()
+	return consumer.client.CloseContext(ctx)
+}
+
+// Close closes the manager within one operation timeout.
 func (m *Manager) Close() {
+	ctx, cancel := context.WithTimeout(context.Background(), m.timeout)
+	defer cancel()
+	_ = m.CloseContext(ctx)
+}
+
+// CloseContext rejects queued calls, waits for active callbacks during the
+// grace period, and closes consumers concurrently. Cancellation interrupts all
+// Kafka clients, including idle evictions already closing detached consumers.
+// After cancellation, callers' callbacks may still unwind; no new client work
+// is accepted, and the underlying Kafka clients are fully closed before return.
+func (m *Manager) CloseContext(ctx context.Context) error {
+	stop := context.AfterFunc(ctx, m.forceCancel)
+	defer stop()
+	if ctx.Err() != nil {
+		m.forceCancel()
+	}
 	m.mu.Lock()
 	if m.isClosed {
 		m.mu.Unlock()
 		<-m.closeDone
-		return
+		return errors.Join(m.closeErr, ctx.Err())
 	}
 	m.isClosed = true
 	close(m.closed)
@@ -381,11 +425,40 @@ func (m *Manager) Close() {
 	m.consumers = nil
 	m.mu.Unlock()
 
+	const maxCloseWorkers = 8
+	var pending sync.WaitGroup
+	results := make(chan error, len(consumers))
+	queue := make(chan *groupConsumer, len(consumers))
 	for _, consumer := range consumers {
-		consumer.gate <- struct{}{}
-		consumer.client.CloseAllowingRebalance()
-		<-consumer.gate
+		queue <- consumer
+	}
+	close(queue)
+	for range min(maxCloseWorkers, len(consumers)) {
+		pending.Go(func() {
+			for consumer := range queue {
+				results <- m.closeAfterCallback(consumer)
+			}
+		})
+	}
+	pending.Wait()
+	close(results)
+	for err := range results {
+		m.closeErr = errors.Join(m.closeErr, err)
 	}
 	m.closers.Wait()
+	m.closeErr = errors.Join(m.closeErr, m.forceCtx.Err())
+	m.forceCancel()
 	close(m.closeDone)
+	return errors.Join(m.closeErr, ctx.Err())
+}
+
+// closeAfterCallback preserves callback/commit ordering until the shared
+// deadline expires. Kafka clients support concurrent closure when canceled.
+func (m *Manager) closeAfterCallback(consumer *groupConsumer) error {
+	select {
+	case consumer.gate <- struct{}{}:
+		defer func() { <-consumer.gate }()
+	case <-m.forceCtx.Done():
+	}
+	return m.closeConsumer(consumer)
 }

@@ -141,6 +141,9 @@ func TestExtractAmzMetaPreservesDistinctNames(t *testing.T) {
 		{name: "case insensitive names and unchanged values", headers: http.Header{
 			"X-AmZ-MeTa-Case-ID": {" Case-123 "},
 		}, want: map[string]string{"case-id": " Case-123 "}},
+		{name: "repeated values preserve order and contents", headers: http.Header{
+			"X-Amz-Meta-Tags": {"alpha", "beta,gamma", "", " delta "},
+		}, want: map[string]string{"tags": "alpha,beta,gamma,, delta "}},
 		{name: "repeated prefix is part of the name", headers: http.Header{
 			"X-Amz-Meta-Id":                       {"plain"},
 			"X-Amz-Meta-X-Amz-Meta-Id":            {"prefixed"},
@@ -160,7 +163,7 @@ func TestExtractAmzMetaPreservesDistinctNames(t *testing.T) {
 	}
 }
 
-func TestUploadPreservesDistinctMetadataNames(t *testing.T) {
+func TestUploadPreservesMetadataNamesAndValues(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, target, response string
 		copy                           bool
@@ -182,7 +185,9 @@ func TestUploadPreservesDistinctMetadataNames(t *testing.T) {
 			t.Cleanup(cleanup)
 			req := httptest.NewRequest(tc.method, tc.target, strings.NewReader(""))
 			req.Header.Set("x-amz-meta-id", "plain")
+			req.Header.Add("X-AmZ-MeTa-ID", "second")
 			req.Header.Set("x-amz-meta-x-amz-meta-id", "prefixed")
+			req.Header.Add("x-amz-meta-x-amz-meta-id", "another")
 			if tc.copy {
 				req.Header.Set("x-amz-copy-source", "/team2-src/source")
 				req.Header.Set("x-amz-metadata-directive", "REPLACE")
@@ -194,7 +199,7 @@ func TestUploadPreservesDistinctMetadataNames(t *testing.T) {
 			}
 			select {
 			case headers := <-requests:
-				if headers.Get("x-amz-meta-id") != "plain" || headers.Get("x-amz-meta-x-amz-meta-id") != "prefixed" {
+				if headers.Get("x-amz-meta-id") != "plain,second" || headers.Get("x-amz-meta-x-amz-meta-id") != "prefixed,another" {
 					t.Fatalf("upstream metadata lost: %v", headers)
 				}
 			default:

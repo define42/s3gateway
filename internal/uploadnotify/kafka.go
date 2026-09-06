@@ -9,6 +9,8 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/define42/s3gateway/internal/config"
+	"github.com/define42/s3gateway/internal/kafkaclient"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
@@ -43,8 +45,11 @@ func NewKafkaPublisher(
 	if !bucketTopicEnabled && strings.TrimSpace(globalTopic) == "" {
 		return nil, errors.New("uploadnotify: at least one kafka topic must be enabled")
 	}
+	if err := config.ValidateKafkaGlobalTopic(bucketTopicEnabled, globalTopic); err != nil {
+		return nil, fmt.Errorf("uploadnotify: %w", err)
+	}
 
-	client, err := kgo.NewClient(
+	client, err := kafkaclient.New(
 		kgo.SeedBrokers(brokers...),
 		kgo.ClientID("s3gateway-upload-notifier"),
 		kgo.AllowAutoTopicCreation(),
@@ -79,6 +84,9 @@ func newKafkaPublisher(
 func (p *KafkaPublisher) Notify(ctx context.Context, event Event) error {
 	if strings.TrimSpace(event.Bucket) == "" {
 		return errors.New("uploadnotify: event bucket is required")
+	}
+	if p.bucketTopicEnabled && event.Bucket == p.globalTopic {
+		return errors.New("uploadnotify: bucket topic conflicts with the reserved global topic")
 	}
 	// Whitespace is significant in S3 object keys, including whitespace-only keys.
 	if event.Key == "" {
@@ -171,7 +179,18 @@ func (p *KafkaPublisher) topicsFor(bucket string) []string {
 	return topics
 }
 
-// Close releases the Kafka client's connections and goroutines.
-func (p *KafkaPublisher) Close() {
+// CloseContext releases the Kafka client within the shared shutdown budget.
+func (p *KafkaPublisher) CloseContext(ctx context.Context) error {
+	if client, ok := p.producer.(interface{ CloseContext(context.Context) error }); ok {
+		return client.CloseContext(ctx)
+	}
 	p.producer.Close()
+	return nil
+}
+
+// Close releases the Kafka client within the notification timeout.
+func (p *KafkaPublisher) Close() {
+	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	defer cancel()
+	_ = p.CloseContext(ctx)
 }

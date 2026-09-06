@@ -63,7 +63,15 @@ func (s *Server) handleListMultipartUploads(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	in := &s3.ListMultipartUploadsInput{Bucket: &bucket}
+	payer, err := s3http.ParseRequestPayerHeader(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
+		return
+	}
+	in := &s3.ListMultipartUploadsInput{Bucket: &bucket, RequestPayer: payer}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
 	q := r.URL.Query()
 	if v := q.Get("prefix"); v != "" {
 		in.Prefix = &v
@@ -312,6 +320,11 @@ func (s *Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
 		return
 	}
+	payer, err := s3http.ParseRequestPayerHeader(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
+		return
+	}
 	checksum, err := s3http.ParseChecksumWriteHeaders(r.Header)
 	if err != nil {
 		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
@@ -334,6 +347,10 @@ func (s *Server) handleUploadPart(w http.ResponseWriter, r *http.Request, bucket
 		PartNumber:    aws.Int32(partNumber),
 		Body:          body,
 		ContentLength: aws.Int64(cl),
+		RequestPayer:  payer,
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
 	if hasSSEC {
 		in.SSECustomerAlgorithm = ssecAlgo
@@ -392,10 +409,27 @@ func (s *Server) handleListParts(w http.ResponseWriter, r *http.Request, bucket,
 		return
 	}
 
+	ssecAlgo, ssecKey, ssecMD5, _, err := s3http.ParseSSECustomerHeaders(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", "invalid SSE-C headers")
+		return
+	}
+	payer, err := s3http.ParseRequestPayerHeader(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
+		return
+	}
 	in := &s3.ListPartsInput{
-		Bucket:   &bucket,
-		Key:      &key,
-		UploadId: &uploadID,
+		Bucket:               &bucket,
+		Key:                  &key,
+		UploadId:             &uploadID,
+		SSECustomerAlgorithm: ssecAlgo,
+		SSECustomerKey:       ssecKey,
+		SSECustomerKeyMD5:    ssecMD5,
+		RequestPayer:         payer,
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
 	}
 
 	if pnmStr := r.URL.Query().Get("part-number-marker"); pnmStr != "" {
@@ -652,11 +686,21 @@ func (s *Server) handleAbortMultipart(w http.ResponseWriter, r *http.Request, bu
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
 		return
 	}
-	_, err := s.up.AbortMultipartUpload(r.Context(), &s3.AbortMultipartUploadInput{
-		Bucket:   &bucket,
-		Key:      &key,
-		UploadId: &uploadID,
-	})
+	payer, err := s3http.ParseRequestPayerHeader(r.Header)
+	if err != nil {
+		s3xml.WriteError(w, http.StatusBadRequest, "InvalidArgument", err.Error())
+		return
+	}
+	in := &s3.AbortMultipartUploadInput{
+		Bucket:       &bucket,
+		Key:          &key,
+		UploadId:     &uploadID,
+		RequestPayer: payer,
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	_, err = s.up.AbortMultipartUpload(r.Context(), in)
 	if err != nil {
 		s3http.WriteUpstreamError(w, err)
 		return

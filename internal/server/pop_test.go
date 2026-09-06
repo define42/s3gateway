@@ -489,6 +489,17 @@ func TestHandlePopAPIValidation(t *testing.T) {
 			wantCallCount: 0,
 		},
 		{
+			name:   "reserved global topic cannot be consumed as a bucket",
+			method: http.MethodPost,
+			path:   "/api/pop/_events/scanner",
+			configure: func(gateway *Server, consumer *fakePopConsumer) {
+				configurePopGateway(gateway, consumer)
+				gateway.cfg.KafkaGlobalTopic = "_events"
+			},
+			rules:      allBucketsReadRules(),
+			wantStatus: http.StatusServiceUnavailable,
+		},
+		{
 			name:   "global topic disabled",
 			method: http.MethodPost,
 			path:   "/api/pop/_all/archive",

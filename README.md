@@ -321,7 +321,9 @@ s3gateway
 The process emits structured JSON logs and shuts down gracefully on `SIGINT`
 or `SIGTERM`. Active HTTP requests can finish and publish Kafka notifications
 during the `HTTP_SHUTDOWN_TIMEOUT` grace period. Kafka clients close after
-the requests drain or HTTP shutdown is forced when that period expires.
+the requests drain, using the remainder of that same shutdown budget. Consumer
+clients close concurrently; expiry cancels outstanding Kafka work and forces
+HTTP shutdown. Splunk HEC flushing has a separate maximum of ten seconds.
 
 ## Features and reference
 
@@ -355,6 +357,16 @@ Admin sessions expire 30 minutes after login and are stored in process memory.
 They are invalidated on restart and are not shared between gateway replicas.
 Set `COOKIE_SECRET` to the same strong value on persistent deployments so the
 cookie encryption keys do not change on every restart.
+
+When HTTPS terminates at a reverse proxy and the gateway receives HTTP, set
+`ADMIN_PUBLIC_ORIGIN=https://gateway.example` to the origin users visit (scheme,
+host, and optional port, without a path or trailing slash). Admin form checks
+use that configured origin, and an HTTPS origin makes session cookies Secure.
+`Origin` or `Referer` must still match; `X-Forwarded-Proto` and
+`X-Forwarded-Host` do not determine trust. Keep the backend private to the proxy.
+With the setting empty, administration uses the request's Host and TLS state.
+This setting applies only to administration; S3 unsigned-payload requests still
+require TLS on the connection to the gateway.
 
 ### Bucket creation
 
@@ -417,7 +429,9 @@ Settings outside this table are rejected. Both `x-amz-checksum-algorithm` and
 `PutObject` and `CreateMultipartUpload` preserve content encoding, cache controls,
 content disposition and language, object tags, storage class, website redirects,
 and S3 Bucket Key settings, in addition to content type, expiry, and user metadata.
-Multipart initiation also forwards the expected bucket owner and request payer.
+The multipart lifecycle and `GetObjectAttributes` forward expected-owner and
+requester-pays headers. `ListParts` and attribute reads also forward all three SSE-C headers;
+incomplete customer-encryption headers and unsupported payer values are rejected.
 When decoding a streaming upload, the gateway removes the `aws-chunked` transport
 encoding and preserves object encodings such as `gzip`.
 
@@ -432,6 +446,10 @@ Invalid storage classes or bucket-key booleans return `400 InvalidArgument`.
 `PutObject`, `CreateMultipartUpload`, admin-console uploads, and `CopyObject`
 with `x-amz-metadata-directive: REPLACE` stamp the authenticated LDAP username
 as `x-amz-meta-uploaded-by`, replacing any client-supplied value.
+
+Metadata extraction removes the `x-amz-meta-` header prefix once. Repeated values
+for a metadata header are combined in arrival order with commas, preserving
+each value when forwarding PUT, copy, and multipart-initiation requests.
 
 Set `REQUIRED_UPLOAD_METADATA_KEYS` to a comma-separated list to require
 additional `x-amz-meta-*` keys on those creation paths. A `CopyObject` request
@@ -480,6 +498,7 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 | `S3GATEWAY_PRIVATE_X25519_KEY` | Yes | — | 64-character hex X25519 private key used to decrypt `X1...` access key IDs |
 | `REQUIRED_UPLOAD_METADATA_KEYS` | No | Empty | Comma-separated metadata keys, with or without the `x-amz-meta-` prefix |
 | `COOKIE_SECRET` | No | Ephemeral | Admin-cookie key seed; when set, it must contain at least 32 characters |
+| `ADMIN_PUBLIC_ORIGIN` | No | Empty | Explicit external HTTP(S) origin for admin forms behind a reverse proxy; HTTPS requires Secure cookies |
 | `KAFKA_BROKERS` | No | Empty | Comma-separated Kafka bootstrap brokers; empty disables notifications |
 | `ENABLE_KAFKA_BUCKET_TOPIC` | No | `false` | Publish each upload event to a topic whose name matches its bucket |
 | `KAFKA_GLOBAL_TOPIC` | No | Empty | Optional global upload-event topic |
@@ -498,7 +517,7 @@ use Go duration syntax such as `500ms`, `30s`, or `2m`.
 | `HTTP_TRANSFER_IDLE_TIMEOUT` | No | `60s` | Maximum active-request interval without request-body read or response-write progress; must be positive |
 | `HTTP_MAX_CONCURRENT_REQUESTS` | No | `32` | Maximum active HTTP requests per instance, excluding `/healthz` and `/readyz`; must be positive |
 | `HTTP_IDLE_TIMEOUT` | No | `120s` | HTTP keep-alive idle timeout |
-| `HTTP_SHUTDOWN_TIMEOUT` | No | `20s` | Graceful-shutdown timeout |
+| `HTTP_SHUTDOWN_TIMEOUT` | No | `20s` | Shared deadline for HTTP draining and Kafka cleanup |
 | `HTTP_MAX_HEADER_BYTES` | No | `1048576` | Maximum request-header size in bytes |
 | `ADMIN_LOGIN_READ_TIMEOUT` | No | `10s` | Route-specific deadline for reading browser login POST bodies |
 | `READINESS_CHECK_TIMEOUT` | No | `2s` | Maximum duration of a live LDAP and S3 readiness check |
@@ -539,8 +558,9 @@ slots are occupied. Excess requests receive an immediate `503 SlowDown` with
 request-body read or response-write progress for that interval, the gateway
 cancels its context and upstream work and interrupts blocked client reads and
 writes. Transfers can run longer while they keep making progress. Multipart
-completion also counts upstream response headers and body bytes as progress,
-including S3's whitespace keepalives while assembling the object.
+completion and server-side copy operations also count upstream response headers
+and body bytes as progress, including S3's whitespace keepalives while assembling
+or copying the object.
 If those keepalives stop, the same idle timeout still cancels the operation.
 The separate absolute `HTTP_READ_TIMEOUT` and `HTTP_WRITE_TIMEOUT` remain disabled
 by default; setting them limits total read and write duration even for transfers
@@ -588,6 +608,15 @@ An upload to bucket `images` is then published to topics `images` and `_all`.
 Both records contain the same payload and generated UUIDv7 `event_id`. When
 `KAFKA_BROKERS` is set, at least one of `ENABLE_KAFKA_BUCKET_TOPIC` or
 `KAFKA_GLOBAL_TOPIC` must enable a destination.
+
+When bucket topics are enabled, `KAFKA_GLOBAL_TOPIC` must start with `_`, for
+example `_all` or `_events`. Startup rejects global names in the bucket topic
+namespace, preventing events from other buckets from blocking a bucket's Pop
+queue. Existing dual-topic deployments using a name such as `events` must
+configure a reserved name such as `_events` and update their consumers before
+upgrading. Existing records are not moved automatically. Global-only deployments
+can keep their current topic names. Access the configured global stream through
+`/api/pop/_all/<group>`, regardless of the Kafka topic name.
 
 The producer requests automatic topic creation; the Kafka cluster must permit
 it, or the topics must already exist. Records use `<bucket>/<key>` as the key

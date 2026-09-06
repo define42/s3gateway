@@ -54,8 +54,9 @@ type Config struct {
 	UpstreamForcePathStyle            bool
 	UpstreamSkipCertificateValidation bool
 
-	CookieSecret string        // admin web-session secret seed; when empty, ephemeral random keys are used (sessions lost on restart)
-	SigV4MaxSkew time.Duration // max absolute request age/skew based on x-amz-date
+	CookieSecret      string        // admin web-session secret seed; when empty, ephemeral random keys are used (sessions lost on restart)
+	AdminPublicOrigin string        // optional external browser origin when HTTPS terminates at a reverse proxy
+	SigV4MaxSkew      time.Duration // max absolute request age/skew based on x-amz-date
 
 	RequiredUploadMetadataKeys []string // metadata keys required for upload requests (without x-amz-meta- prefix, lowercase)
 
@@ -411,6 +412,9 @@ func (cfg Config) Validate() error {
 	if cfg.CookieSecret != "" && len(cfg.CookieSecret) < 32 {
 		return errors.New("COOKIE_SECRET must be at least 32 characters when set")
 	}
+	if _, err := NormalizeAdminPublicOrigin(cfg.AdminPublicOrigin); err != nil {
+		return err
+	}
 	if len(cfg.KafkaBrokers) == 0 && cfg.EnableKafkaBucketTopic {
 		return errors.New("ENABLE_KAFKA_BUCKET_TOPIC requires KAFKA_BROKERS")
 	}
@@ -418,6 +422,9 @@ func (cfg Config) Validate() error {
 		return errors.New("KAFKA_GLOBAL_TOPIC requires KAFKA_BROKERS")
 	}
 	if len(cfg.KafkaBrokers) > 0 {
+		if err := ValidateKafkaGlobalTopic(cfg.EnableKafkaBucketTopic, cfg.KafkaGlobalTopic); err != nil {
+			return err
+		}
 		if !cfg.EnableKafkaBucketTopic && strings.TrimSpace(cfg.KafkaGlobalTopic) == "" {
 			return errors.New("KAFKA_BROKERS requires ENABLE_KAFKA_BUCKET_TOPIC or KAFKA_GLOBAL_TOPIC")
 		}
@@ -657,8 +664,9 @@ func LoadConfig() Config {
 		UpstreamForcePathStyle:            strings.EqualFold(env("S3_FORCE_PATH_STYLE", "true"), "true"),
 		UpstreamSkipCertificateValidation: envBool("S3_UPSTREAM_TLS_SKIP_VERIFY", false),
 
-		CookieSecret: env("COOKIE_SECRET", ""),
-		SigV4MaxSkew: envDuration("SIGV4_MAX_SKEW", defaultSigV4MaxSkew),
+		CookieSecret:      env("COOKIE_SECRET", ""),
+		AdminPublicOrigin: env("ADMIN_PUBLIC_ORIGIN", ""),
+		SigV4MaxSkew:      envDuration("SIGV4_MAX_SKEW", defaultSigV4MaxSkew),
 
 		RequiredUploadMetadataKeys: envCSVMetadataKeys("REQUIRED_UPLOAD_METADATA_KEYS"),
 

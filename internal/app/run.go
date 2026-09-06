@@ -26,7 +26,7 @@ const splunkHECCloseTimeout = 10 * time.Second
 type runDependencies struct {
 	loadConfig       func() config.Config
 	configureLogging func(config.Config, slog.Handler) (*splunkhec.Handler, error)
-	boot             func(config.Config) (*http.Server, func(), error)
+	boot             func(config.Config) (*http.Server, contextCleanup, error)
 	listen           func(*http.Server, config.Config) (net.Listener, bool, error)
 	notifyContext    func(context.Context, ...os.Signal) (context.Context, context.CancelFunc)
 }
@@ -35,7 +35,7 @@ func defaultRunDependencies() runDependencies {
 	return runDependencies{
 		loadConfig:       config.LoadConfig,
 		configureLogging: configureSplunkLogging,
-		boot:             boot,
+		boot:             bootWithContextCleanup,
 		listen:           listenForGateway,
 		notifyContext:    signal.NotifyContext,
 	}
@@ -68,8 +68,23 @@ func run(dependencies runDependencies) int {
 		slog.Error("failed to boot s3 gateway", "error", err)
 		return 1
 	}
-	// Keep shared clients available until HTTP shutdown has finished.
-	defer cleanup()
+	// Shared clients remain available while HTTP requests drain. Startup
+	// failures use a fresh cleanup budget; normal shutdown shares the HTTP one.
+	cleanupDone := false
+	closeDependencies := func(ctx context.Context) {
+		cleanupDone = true
+		if err := cleanup(ctx); err != nil {
+			slog.Warn("Kafka cleanup did not complete gracefully", "error", err)
+		}
+	}
+	defer func() {
+		if cleanupDone {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), server.EffectiveShutdownTimeout(cfg))
+		defer cancel()
+		closeDependencies(ctx)
+	}()
 
 	shutdownSignalsCtx, stop := dependencies.notifyContext(
 		context.Background(),
@@ -120,7 +135,9 @@ func run(dependencies runDependencies) int {
 		context.Background(),
 		server.EffectiveShutdownTimeout(cfg),
 	)
+
 	defer cancel()
+	defer func() { closeDependencies(shutdownCtx) }()
 
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		slog.Warn("graceful shutdown failed", "error", err)

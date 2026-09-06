@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/define42/s3gateway/internal/kafkaclient"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -54,9 +55,10 @@ var _ adminClient = (*kadm.Client)(nil)
 // Lister owns a Kafka admin client and calculates retained topic elements from
 // partition start and end offsets.
 type Lister struct {
-	admin   adminClient
-	close   func()
-	timeout time.Duration
+	admin        adminClient
+	close        func()
+	closeContext func(context.Context) error
+	timeout      time.Duration
 }
 
 // New creates a topic lister. Kafka connections are established lazily when
@@ -77,7 +79,7 @@ func New(brokers []string, timeout time.Duration) (*Lister, error) {
 		return nil, errors.New("kafkatopic: timeout must be positive")
 	}
 
-	admin, err := kadm.NewOptClient(
+	client, err := kafkaclient.New(
 		kgo.SeedBrokers(seedBrokers...),
 		kgo.ClientID("s3gateway-admin-topics"),
 		kgo.RequestTimeoutOverhead(timeout),
@@ -85,7 +87,9 @@ func New(brokers []string, timeout time.Duration) (*Lister, error) {
 	if err != nil {
 		return nil, fmt.Errorf("kafkatopic: create kafka admin client: %w", err)
 	}
-	return newLister(admin, admin.Close, timeout), nil
+	lister := newLister(kadm.NewClient(client.Client), client.Close, timeout)
+	lister.closeContext = client.CloseContext
+	return lister, nil
 }
 
 func newLister(admin adminClient, closeClient func(), timeout time.Duration) *Lister {
@@ -96,11 +100,28 @@ func newLister(admin adminClient, closeClient func(), timeout time.Duration) *Li
 	}
 }
 
-// Close closes the underlying Kafka client.
-func (l *Lister) Close() {
-	if l != nil && l.close != nil {
+// CloseContext closes the underlying Kafka client within the shared budget.
+func (l *Lister) CloseContext(ctx context.Context) error {
+	if l == nil {
+		return nil
+	}
+	if l.closeContext != nil {
+		return l.closeContext(ctx)
+	}
+	if l.close != nil {
 		l.close()
 	}
+	return nil
+}
+
+// Close closes the underlying Kafka client within the operation timeout.
+func (l *Lister) Close() {
+	if l == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), l.timeout)
+	defer cancel()
+	_ = l.CloseContext(ctx)
 }
 
 // List returns every Kafka topic, including internal topics, ordered by name.

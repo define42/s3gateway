@@ -79,6 +79,13 @@ func TestNewKafkaPublisherValidation(t *testing.T) {
 			brokers: []string{"kafka:9092"},
 			timeout: time.Second,
 		},
+		{
+			name:               "global topic in bucket namespace",
+			brokers:            []string{"kafka:9092"},
+			bucketTopicEnabled: true,
+			globalTopic:        "team2-images",
+			timeout:            time.Second,
+		},
 	}
 
 	for _, tt := range tests {
@@ -120,12 +127,6 @@ func TestKafkaPublisherNotifyTopicModes(t *testing.T) {
 			bucketTopicEnabled: true,
 			globalTopic:        "_all",
 			expectedTopics:     []string{"evidence-bucket", "_all"},
-		},
-		{
-			name:               "matching bucket and global topics",
-			bucketTopicEnabled: true,
-			globalTopic:        "evidence-bucket",
-			expectedTopics:     []string{"evidence-bucket"},
 		},
 	}
 
@@ -186,6 +187,17 @@ func TestKafkaPublisherNotifyTopicModes(t *testing.T) {
 				t.Fatal("bucket and global records must contain identical payloads")
 			}
 		})
+	}
+}
+
+func TestKafkaPublisherRejectsBucketGlobalCollision(t *testing.T) {
+	producer := &fakeRecordProducer{}
+	publisher := newKafkaPublisher(producer, true, "_events", time.Second)
+	if err := publisher.Notify(t.Context(), Event{Bucket: "_events", Key: "object"}); err == nil {
+		t.Fatal("expected collision with reserved global topic to be rejected")
+	}
+	if len(producer.records) != 0 {
+		t.Fatalf("published %d records despite topic collision", len(producer.records))
 	}
 }
 

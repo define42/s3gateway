@@ -115,7 +115,11 @@ func requestOrigin(r *http.Request) string {
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	return strings.ToLower(scheme + "://" + host)
+	origin, err := config.NormalizeAdminPublicOrigin(scheme + "://" + host)
+	if err != nil {
+		return ""
+	}
+	return origin
 }
 
 func isSameOrigin(rawURL, expectedOrigin string) bool {
@@ -124,25 +128,33 @@ func isSameOrigin(rawURL, expectedOrigin string) bool {
 		return false
 	}
 	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed == nil || parsed.Scheme == "" || parsed.Host == "" {
+	if err != nil || parsed == nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil {
 		return false
 	}
-	return strings.EqualFold(parsed.Scheme+"://"+parsed.Host, expectedOrigin)
+	origin, err := config.NormalizeAdminPublicOrigin(parsed.Scheme + "://" + parsed.Host)
+	return err == nil && origin == expectedOrigin
 }
 
-func hasTrustedAdminOrigin(r *http.Request) bool {
+func (h *handler) hasTrustedAdminOrigin(r *http.Request) bool {
 	// Non-browser requests cannot reach admin routes in production because withAuth
 	// dispatches admin handlers only for browser traffic.
 	if !IsBrowser(r) {
 		return true
 	}
+	if h != nil && h.publicOriginInvalid {
+		return false
+	}
 	expectedOrigin := requestOrigin(r)
+	if h != nil && h.publicOrigin != "" {
+		expectedOrigin = h.publicOrigin
+	}
 	if expectedOrigin == "" {
 		return false
 	}
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin != "" {
-		return isSameOrigin(origin, expectedOrigin)
+		normalized, err := config.NormalizeAdminPublicOrigin(origin)
+		return err == nil && normalized == expectedOrigin
 	}
 	referer := strings.TrimSpace(r.Header.Get("Referer"))
 	if referer != "" {
@@ -537,7 +549,7 @@ func adminSessionFromValues(values map[any]any) (string, map[string]struct{}, er
 func (s *AdminGorillaStore) New(r *http.Request, name string) (*sessions.Session, error) {
 	session := sessions.NewSession(s, name)
 	opts := *s.Options
-	opts.Secure = r.TLS != nil
+	opts.Secure = opts.Secure || r.TLS != nil
 	session.Options = &opts
 	session.IsNew = true
 
@@ -566,7 +578,7 @@ func (s *AdminGorillaStore) Save(r *http.Request, w http.ResponseWriter, session
 		opts := *s.Options
 		session.Options = &opts
 	}
-	session.Options.Secure = r.TLS != nil
+	session.Options.Secure = session.Options.Secure || s.Options.Secure || r.TLS != nil
 
 	if session.Options.MaxAge <= 0 {
 		if s.backend != nil && session.ID != "" {
@@ -1060,7 +1072,7 @@ func (h *handler) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method == http.MethodPost && !hasTrustedAdminOrigin(r) {
+	if r.Method == http.MethodPost && !h.hasTrustedAdminOrigin(r) {
 		writeAdminLoginPage(w, r, http.StatusForbidden, adminLoginPageData{
 			Error: "Invalid form origin.",
 		})
@@ -1126,7 +1138,7 @@ func (h *handler) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	if webSession == nil {
 		webSession = sessions.NewSession(h.webSessions, adminSessionCookieName)
 		opts := *h.webSessions.Options
-		opts.Secure = r.TLS != nil
+		opts.Secure = opts.Secure || r.TLS != nil
 		webSession.Options = &opts
 	}
 	if err != nil {
@@ -1223,7 +1235,7 @@ func (h *handler) handleAdminCreateBucket(w http.ResponseWriter, r *http.Request
 		http.Redirect(w, r, adminDashboardURL("", "Admin backend is not configured.", "", ""), http.StatusSeeOther)
 		return
 	}
-	if !hasTrustedAdminOrigin(r) {
+	if !h.hasTrustedAdminOrigin(r) {
 		http.Redirect(w, r, adminDashboardURL("", "Invalid form origin.", "", ""), http.StatusSeeOther)
 		return
 	}
@@ -1492,7 +1504,7 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
-	if !hasTrustedAdminOrigin(r) {
+	if !h.hasTrustedAdminOrigin(r) {
 		http.Redirect(w, r, adminDashboardURL("", "Invalid form origin.", "", ""), http.StatusSeeOther)
 		return
 	}
@@ -1872,7 +1884,7 @@ func (h *handler) handleAdminBucketDelete(w http.ResponseWriter, r *http.Request
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
-	if !hasTrustedAdminOrigin(r) {
+	if !h.hasTrustedAdminOrigin(r) {
 		http.Redirect(w, r, adminDashboardURL("", "Invalid form origin.", "", ""), http.StatusSeeOther)
 		return
 	}
@@ -1919,7 +1931,7 @@ func (h *handler) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if !hasTrustedAdminOrigin(r) {
+	if !h.hasTrustedAdminOrigin(r) {
 		http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
 		return
 	}
@@ -1970,6 +1982,22 @@ type handler struct {
 	uploadNotifier             UploadNotifier
 	kafkaTopicLister           KafkaTopicLister
 	kafkaGlobalTopic           string
+	publicOrigin               string
+	publicOriginInvalid        bool
+}
+
+// WithPublicOrigin fixes the expected browser origin for admin form requests,
+// independently of proxy-supplied headers. An HTTPS origin also requires Secure
+// session cookies. Invalid origins reject browser form submissions.
+func WithPublicOrigin(origin string) Option {
+	return func(h *handler) {
+		var err error
+		h.publicOrigin, err = config.NormalizeAdminPublicOrigin(origin)
+		h.publicOriginInvalid = err != nil
+		if strings.HasPrefix(h.publicOrigin, "https://") && h.webSessions != nil && h.webSessions.Options != nil {
+			h.webSessions.Options.Secure = true
+		}
+	}
 }
 
 func (h *handler) notifyUpload(r *http.Request, event uploadnotify.Event) {
