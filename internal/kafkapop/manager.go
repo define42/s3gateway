@@ -303,7 +303,7 @@ func (m *Manager) acquire(ctx context.Context, topic, group string) (*groupConsu
 	m.mu.Unlock()
 
 	if evicted != nil {
-		_ = m.closeConsumer(evicted)
+		_ = m.closeConsumer(ctx, evicted)
 		m.closers.Done()
 	}
 	return m.waitForConsumer(ctx, consumer)
@@ -380,14 +380,20 @@ func (m *Manager) expireConsumer(consumer *groupConsumer, generation uint64) {
 
 	// No users can acquire the detached client. Closing outside mu lets other
 	// groups and idle timers progress while Kafka processes the leave request.
-	_ = m.closeConsumer(consumer)
+	_ = m.closeConsumer(m.forceCtx, consumer)
 }
 
-// closeConsumer also bounds idle evictions and connects detached clients to the
-// manager's forced-shutdown cancellation.
-func (m *Manager) closeConsumer(consumer *groupConsumer) error {
-	ctx, cancel := context.WithTimeout(m.forceCtx, m.timeout)
+// closeConsumer bounds eviction by the initiating request and the operation
+// timeout, while preserving forced-shutdown cancellation for detached clients.
+// CloseContext joins client cleanup even when either context is canceled.
+func (m *Manager) closeConsumer(ctx context.Context, consumer *groupConsumer) error {
+	ctx, cancel := context.WithTimeout(ctx, m.timeout)
 	defer cancel()
+	stop := context.AfterFunc(m.forceCtx, cancel)
+	defer stop()
+	if m.forceCtx.Err() != nil {
+		cancel()
+	}
 	return consumer.client.CloseContext(ctx)
 }
 
@@ -460,5 +466,5 @@ func (m *Manager) closeAfterCallback(consumer *groupConsumer) error {
 		defer func() { <-consumer.gate }()
 	case <-m.forceCtx.Done():
 	}
-	return m.closeConsumer(consumer)
+	return m.closeConsumer(m.forceCtx, consumer)
 }

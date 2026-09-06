@@ -383,6 +383,18 @@ creation tags, return `400 MalformedXML`. Supplied `Content-MD5` and signed
 payload hashes are verified before creation. An empty body retains the upstream
 default region behavior.
 
+Lifecycle and encryption GET, PUT, and DELETE requests forward
+`x-amz-expected-bucket-owner`. Their PUT operations validate supplied
+`Content-MD5` values against the original XML before forwarding a change; the
+SDK calculates new checksums for its serialized upstream body.
+Malformed or oversized configuration XML returns `400 MalformedXML`.
+
+Lifecycle PUT accepts `x-amz-transition-default-minimum-object-size` values
+`all_storage_classes_128K` and `varies_by_storage_class`; invalid or repeated
+values return `400 InvalidArgument`. Lifecycle GET and PUT responses preserve
+the upstream value. Version deletion forwards `x-amz-mfa`, including for
+single-object deletes from buckets with MFA Delete enabled.
+
 ### Multi-object delete checksums
 
 `DeleteObjects` validates supplied `Content-MD5` and CRC32, CRC32C, CRC64NVME,

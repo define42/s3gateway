@@ -39,7 +39,10 @@ func extractUpstreamErrorInfo(err error) upstreamErrorInfo {
 	}
 
 	if respErr, ok := errors.AsType[*smithyhttp.ResponseError](err); ok {
-		if sc := respErr.HTTPStatusCode(); sc > 0 {
+		// A successful HTTP status can still wrap an SDK deserialization error
+		// or an embedded S3 API error. Keep the failure classification above
+		// unless the upstream supplied a final redirect or error status.
+		if sc := respErr.HTTPStatusCode(); sc >= http.StatusMultipleChoices && sc < 600 {
 			info.status = sc
 		}
 		if hr := respErr.HTTPResponse(); hr != nil {
@@ -57,14 +60,19 @@ func extractUpstreamErrorInfo(err error) upstreamErrorInfo {
 }
 
 // WriteUpstreamError translates an AWS SDK error into an S3 XML error response.
-// It preserves the upstream status, API code and message, x-amz-* headers, and
-// Retry-After when available; otherwise it writes a BadGateway response.
+// It preserves upstream 3xx–5xx statuses, API codes and messages, x-amz-* headers,
+// and Retry-After. Errors attached to successful upstream statuses retain a
+// failure status: BadRequest for client API faults and BadGateway otherwise.
 func WriteUpstreamError(w http.ResponseWriter, err error) {
 	info := extractUpstreamErrorInfo(err)
 	for k, vals := range info.headers {
 		for _, v := range vals {
 			w.Header().Add(k, v)
 		}
+	}
+	if info.status == http.StatusNotModified {
+		w.WriteHeader(info.status)
+		return
 	}
 	s3xml.WriteError(w, info.status, info.code, info.message)
 }

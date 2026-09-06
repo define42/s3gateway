@@ -2007,6 +2007,9 @@ func (s *Server) handleDeleteObject(w http.ResponseWriter, r *http.Request, buck
 		Bucket: &bucket,
 		Key:    &key,
 	}
+	if mfa := strings.TrimSpace(r.Header.Get("x-amz-mfa")); mfa != "" {
+		in.MFA = aws.String(mfa)
+	}
 	if versionID := r.URL.Query().Get("versionId"); versionID != "" {
 		in.VersionId = &versionID
 	}

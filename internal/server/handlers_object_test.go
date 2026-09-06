@@ -128,6 +128,58 @@ func TestHandleDeleteObjectsPreservesKeys(t *testing.T) {
 	}
 }
 
+func TestDeleteObjectForwardsMFA(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		mfa        string
+		wantStatus int
+	}{
+		{name: "MFA permits version deletion", mfa: "device 123456", wantStatus: http.StatusNoContent},
+		{name: "missing MFA preserves upstream rejection", wantStatus: http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := make(chan http.Header, 1)
+			gw, cleanup := newGatewayWithRawStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+				requests <- r.Header.Clone()
+				if r.Method != http.MethodDelete || r.URL.Query().Get("versionId") != "version-1" {
+					t.Errorf("unexpected upstream deletion: %s %s", r.Method, r.URL)
+				}
+				if r.Header.Get("x-amz-mfa") != "device 123456" {
+					w.Header().Set("Content-Type", "application/xml")
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = io.WriteString(w, `<Error><Code>AccessDenied</Code><Message>MFA required</Message></Error>`)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+			})
+			t.Cleanup(cleanup)
+
+			req := httptest.NewRequest(http.MethodDelete, "/team2-bucket/object?versionId=version-1", nil)
+			if tc.mfa != "" {
+				req.Header.Set("x-amz-mfa", tc.mfa)
+			}
+			req.Header.Set("x-amz-expected-bucket-owner", "123456789012")
+			req.Header.Set("x-amz-request-payer", "requester")
+			req.Header.Set("If-Match", `"revision-1"`)
+			rr := httptest.NewRecorder()
+			gw.ServeHTTP(rr, reqWithRules(req, fullTeam2Rule()))
+			if rr.Code != tc.wantStatus {
+				t.Fatalf("version deletion status = %d, want %d; body = %s", rr.Code, tc.wantStatus, rr.Body.String())
+			}
+			select {
+			case headers := <-requests:
+				for key, values := range req.Header {
+					if got := headers.Get(key); got != values[0] {
+						t.Errorf("upstream %s = %q, want %q", key, got, values[0])
+					}
+				}
+			default:
+				t.Fatal("version deletion did not reach upstream")
+			}
+		})
+	}
+}
+
 func TestExtractAmzMetaPreservesDistinctNames(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

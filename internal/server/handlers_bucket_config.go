@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/xml"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 
@@ -290,6 +291,17 @@ type sseByDefaultXML struct {
 	KMSMasterKeyID string `xml:"KMSMasterKeyID,omitempty"`
 }
 
+func decodeSSEConfigXML(r io.Reader) (sseConfigXML, error) {
+	var doc sseConfigXML
+	if err := s3xml.DecodeLimited(r, &doc, s3xml.DecodeLimits{MaxBodyBytes: maxBucketConfigBodyBytes}); err != nil {
+		return doc, err
+	}
+	if len(doc.Rules) == 0 {
+		return doc, errors.New("server-side encryption configuration requires a rule")
+	}
+	return doc, nil
+}
+
 func (s *Server) handlePutBucketEncryption(w http.ResponseWriter, r *http.Request, bucket string) {
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanConfigure(rules, bucket) {
@@ -297,9 +309,8 @@ func (s *Server) handlePutBucketEncryption(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	var doc sseConfigXML
-	if err := s3xml.DecodeLimited(r.Body, &doc, s3xml.DecodeLimits{MaxBodyBytes: maxBucketConfigBodyBytes}); err != nil || len(doc.Rules) == 0 {
-		s3xml.WriteError(w, http.StatusBadRequest, "MalformedXML", "Invalid server-side encryption configuration")
+	doc, ok := decodeXMLWithContentMD5(w, r, decodeSSEConfigXML, "Invalid server-side encryption configuration")
+	if !ok {
 		return
 	}
 
@@ -318,12 +329,16 @@ func (s *Server) handlePutBucketEncryption(w http.ResponseWriter, r *http.Reques
 		sseRules = append(sseRules, out)
 	}
 
-	_, err := s.up.PutBucketEncryption(r.Context(), &s3.PutBucketEncryptionInput{
+	in := &s3.PutBucketEncryptionInput{
 		Bucket: &bucket,
 		ServerSideEncryptionConfiguration: &types.ServerSideEncryptionConfiguration{
 			Rules: sseRules,
 		},
-	})
+	}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	_, err := s.up.PutBucketEncryption(r.Context(), in)
 	if err != nil {
 		s3http.WriteUpstreamError(w, err)
 		return
@@ -338,7 +353,11 @@ func (s *Server) handleGetBucketEncryption(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	out, err := s.up.GetBucketEncryption(r.Context(), &s3.GetBucketEncryptionInput{Bucket: &bucket})
+	in := &s3.GetBucketEncryptionInput{Bucket: &bucket}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	out, err := s.up.GetBucketEncryption(r.Context(), in)
 	if err != nil {
 		s3http.WriteUpstreamError(w, err)
 		return
@@ -374,7 +393,11 @@ func (s *Server) handleDeleteBucketEncryption(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	_, err := s.up.DeleteBucketEncryption(r.Context(), &s3.DeleteBucketEncryptionInput{Bucket: &bucket})
+	in := &s3.DeleteBucketEncryptionInput{Bucket: &bucket}
+	if expectedOwner := strings.TrimSpace(r.Header.Get("x-amz-expected-bucket-owner")); expectedOwner != "" {
+		in.ExpectedBucketOwner = aws.String(expectedOwner)
+	}
+	_, err := s.up.DeleteBucketEncryption(r.Context(), in)
 	if err != nil {
 		s3http.WriteUpstreamError(w, err)
 		return
