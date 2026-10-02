@@ -68,7 +68,7 @@ func TestManagerIdleReplicaHandoffIntegration(t *testing.T) {
 		started := time.Now()
 		var got *kgo.Record
 		for {
-			consumeErr := replica.Consume(pollCtx, topic, group, func(record *kgo.Record) error {
+			consumeErr := replica.Consume(pollCtx, topic, group, func(_ context.Context, record *kgo.Record) error {
 				got = record
 				return handlerErr
 			})
@@ -94,7 +94,7 @@ func TestManagerIdleReplicaHandoffIntegration(t *testing.T) {
 	// A owns the topic's only partition and commits the first event. B joins
 	// the same group while there is nothing left to consume.
 	consume(replicaA, produce("committed-on-a"), nil)
-	if err := replicaB.Consume(ctx, topic, group, func(record *kgo.Record) error {
+	if err := replicaB.Consume(ctx, topic, group, func(_ context.Context, record *kgo.Record) error {
 		t.Errorf("B redelivered the committed event at offset %d", record.Offset)
 		return nil
 	}); !errors.Is(err, kafkapop.ErrNoEvent) {
@@ -111,7 +111,7 @@ func TestManagerIdleReplicaHandoffIntegration(t *testing.T) {
 	handlerErr := errors.New("response delivery failed")
 	consume(replicaB, failedRecord, handlerErr)
 	consume(replicaA, failedRecord, nil)
-	if err := replicaA.Consume(ctx, topic, group, func(record *kgo.Record) error {
+	if err := replicaA.Consume(ctx, topic, group, func(_ context.Context, record *kgo.Record) error {
 		t.Errorf("A redelivered committed offset %d", record.Offset)
 		return nil
 	}); !errors.Is(err, kafkapop.ErrNoEvent) {

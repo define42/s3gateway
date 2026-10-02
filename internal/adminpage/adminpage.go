@@ -1928,13 +1928,13 @@ func (h *handler) handleAdminBucketDelete(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if key == "" {
-		http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "", "Object key is required."), http.StatusSeeOther)
+		http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "", "Object key is required."), http.StatusSeeOther) // #nosec G710 -- Helper returns a fixed local path with URL-encoded query values.
 		return
 	}
 
 	rules := authz.RulesFromGroups(session.Groups)
 	if !authz.CanDeleteObject(rules, bucket) {
-		http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "", "Delete permission is required for this bucket."), http.StatusSeeOther)
+		http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "", "Delete permission is required for this bucket."), http.StatusSeeOther) // #nosec G710 -- Helper returns a fixed local path with URL-encoded query values.
 		return
 	}
 
@@ -1942,11 +1942,11 @@ func (h *handler) handleAdminBucketDelete(w http.ResponseWriter, r *http.Request
 		Bucket: &bucket,
 		Key:    &key,
 	}); err != nil {
-		http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "", "Could not delete object."), http.StatusSeeOther)
+		http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "", "Could not delete object."), http.StatusSeeOther) // #nosec G710 -- Helper returns a fixed local path with URL-encoded query values.
 		return
 	}
 
-	http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "Deleted object: "+key, ""), http.StatusSeeOther)
+	http.Redirect(w, r, adminBucketFileActionRedirectURL(r, bucket, "Deleted object: "+key, ""), http.StatusSeeOther) // #nosec G710 -- Helper returns a fixed local path with URL-encoded query values.
 }
 
 func (h *handler) handleAdminLogout(w http.ResponseWriter, r *http.Request) {

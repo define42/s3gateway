@@ -18,7 +18,7 @@ func TestManagerShutdownClosesConsumersConcurrently(t *testing.T) {
 		const count = 4
 		started := make(chan struct{}, count)
 		release := make(chan struct{})
-		manager := newManager(time.Minute, time.Hour, count, func(_, _ string) (consumerClient, error) {
+		manager := newManager(time.Minute, time.Hour, count, func(_, _ string, _ func()) (consumerClient, error) {
 			return &fakeConsumerClient{beforeCloseContext: func(ctx context.Context) error {
 				started <- struct{}{}
 				select {
@@ -30,7 +30,7 @@ func TestManagerShutdownClosesConsumersConcurrently(t *testing.T) {
 			}}, nil
 		})
 		for i := range count {
-			_ = manager.Consume(t.Context(), "images", fmt.Sprint(i), func(*kgo.Record) error { return nil })
+			_ = manager.Consume(t.Context(), "images", fmt.Sprint(i), func(context.Context, *kgo.Record) error { return nil })
 		}
 		done := make(chan error, 1)
 		go func() { done <- manager.CloseContext(t.Context()) }()
@@ -57,8 +57,8 @@ func TestManagerShutdownCancelsActiveAndDetachedConsumers(t *testing.T) {
 					close(finished)
 					return ctx.Err()
 				}}
-				manager := newManager(time.Minute, time.Second, 1, func(_, _ string) (consumerClient, error) { return client, nil })
-				_ = manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error { return nil })
+				manager := newManager(time.Minute, time.Second, 1, func(_, _ string, _ func()) (consumerClient, error) { return client, nil })
+				_ = manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error { return nil })
 				if detached {
 					time.Sleep(time.Second)
 					<-started
@@ -93,10 +93,10 @@ func TestManagerShutdownCancellationInterruptsPoll(t *testing.T) {
 			close(pollDone)
 			return nil
 		}}
-		manager := newManager(time.Minute, time.Hour, 1, func(_, _ string) (consumerClient, error) { return client, nil })
+		manager := newManager(time.Minute, time.Hour, 1, func(_, _ string, _ func()) (consumerClient, error) { return client, nil })
 		consumeDone := make(chan error, 1)
 		go func() {
-			consumeDone <- manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error { return nil })
+			consumeDone <- manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error { return nil })
 		}()
 		<-polling
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
@@ -114,8 +114,8 @@ func TestManagerConcurrentCloseCancellationInterruptsExistingClose(t *testing.T)
 	synctest.Test(t, func(t *testing.T) {
 		started := make(chan struct{})
 		client := &fakeConsumerClient{beforeCloseContext: func(ctx context.Context) error { close(started); <-ctx.Done(); return ctx.Err() }}
-		manager := newManager(time.Minute, time.Hour, 1, func(_, _ string) (consumerClient, error) { return client, nil })
-		_ = manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error { return nil })
+		manager := newManager(time.Minute, time.Hour, 1, func(_, _ string, _ func()) (consumerClient, error) { return client, nil })
+		_ = manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error { return nil })
 		var callers sync.WaitGroup
 		callers.Go(func() { _ = manager.CloseContext(t.Context()) })
 		<-started
@@ -132,7 +132,7 @@ func TestManagerShutdownBoundsWorkersAndClosesQueuedConsumers(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const count = 20
 		var started, finished atomic.Int32
-		manager := newManager(time.Minute, time.Hour, count, func(_, _ string) (consumerClient, error) {
+		manager := newManager(time.Minute, time.Hour, count, func(_, _ string, _ func()) (consumerClient, error) {
 			return &fakeConsumerClient{beforeCloseContext: func(ctx context.Context) error {
 				started.Add(1)
 				<-ctx.Done()
@@ -141,7 +141,7 @@ func TestManagerShutdownBoundsWorkersAndClosesQueuedConsumers(t *testing.T) {
 			}}, nil
 		})
 		for i := range count {
-			_ = manager.Consume(t.Context(), "images", fmt.Sprint(i), func(*kgo.Record) error { return nil })
+			_ = manager.Consume(t.Context(), "images", fmt.Sprint(i), func(context.Context, *kgo.Record) error { return nil })
 		}
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
@@ -165,10 +165,10 @@ func TestManagerShutdownDeadlineDoesNotWaitForCallback(t *testing.T) {
 		handling := make(chan struct{})
 		release := make(chan struct{})
 		client := &fakeConsumerClient{poll: func(context.Context) kgo.Fetches { return fetchWithRecord(&kgo.Record{Topic: "images"}) }}
-		manager := newManager(time.Minute, time.Hour, 1, func(_, _ string) (consumerClient, error) { return client, nil })
+		manager := newManager(time.Minute, time.Hour, 1, func(_, _ string, _ func()) (consumerClient, error) { return client, nil })
 		consumed := make(chan error, 1)
 		go func() {
-			consumed <- manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error { close(handling); <-release; return nil })
+			consumed <- manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error { close(handling); <-release; return nil })
 		}()
 		<-handling
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)

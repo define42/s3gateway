@@ -21,6 +21,9 @@ var (
 	ErrConsumerLimit = errors.New("kafkapop: consumer limit reached")
 	// ErrClosed indicates that the manager has begun shutting down.
 	ErrClosed = errors.New("kafkapop: manager closed")
+	// ErrRebalance means delivery was interrupted so Kafka can move partitions.
+	// The record remains unacknowledged and can be retried by any group member.
+	ErrRebalance = errors.New("kafkapop: consumer group is rebalancing")
 )
 
 // Options configures a Manager.
@@ -43,7 +46,7 @@ type consumerClient interface {
 
 var _ consumerClient = (*kafkaclient.Client)(nil)
 
-type clientFactory func(topic, group string) (consumerClient, error)
+type clientFactory func(topic, group string, onRebalance func()) (consumerClient, error)
 
 type consumerKey struct {
 	topic string
@@ -58,6 +61,35 @@ type groupConsumer struct {
 	users          int
 	idleTimer      *time.Timer // Protected by Manager.mu, like users and lastUsed.
 	idleGeneration uint64
+	processing     rebalanceCancellation
+}
+
+// rebalanceCancellation lets Kafka's asynchronous notification interrupt the
+// active operation without taking the manager lock or the consumer's gate.
+type rebalanceCancellation struct {
+	mu     sync.Mutex
+	cancel context.CancelCauseFunc
+}
+
+func (r *rebalanceCancellation) begin(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancelCause(context.WithoutCancel(ctx))
+	r.mu.Lock()
+	r.cancel = cancel
+	r.mu.Unlock()
+	return ctx, func() {
+		r.mu.Lock()
+		r.cancel = nil
+		r.mu.Unlock()
+		cancel(nil)
+	}
+}
+
+func (r *rebalanceCancellation) interrupt() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cancel != nil {
+		r.cancel(ErrRebalance)
+	}
 }
 
 // Manager owns a bounded cache of Kafka group consumers. Calls for the same
@@ -105,7 +137,7 @@ func New(options Options) (*Manager, error) {
 	}
 
 	fetchMaxWait := min(options.Timeout, 5*time.Second)
-	factory := func(topic, group string) (consumerClient, error) {
+	factory := func(topic, group string, onRebalance func()) (consumerClient, error) {
 		client, err := kafkaclient.New(
 			kgo.SeedBrokers(options.Brokers...),
 			kgo.ClientID("s3gateway-pop"),
@@ -113,6 +145,9 @@ func New(options Options) (*Manager, error) {
 			kgo.ConsumeTopics(topic),
 			kgo.DisableAutoCommit(),
 			kgo.BlockRebalanceOnPoll(),
+			kgo.OnPartitionsCallbackBlocked(func(context.Context, *kgo.Client) {
+				onRebalance()
+			}),
 			kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 			kgo.FetchMaxWait(fetchMaxWait),
 			kgo.FetchMaxBytes(1<<20),
@@ -147,12 +182,13 @@ func newManager(timeout, idleTimeout time.Duration, maxConsumers int, factory cl
 // only when handle succeeds. A failed poll, handler, or commit rewinds any
 // returned record's local partition position so it remains eligible for
 // redelivery. Waiting for another call on the same topic and group respects
-// ctx cancellation.
+// ctx cancellation. The handler must honor its context: a pending rebalance
+// cancels delivery so the group can hand off partitions before its deadline.
 func (m *Manager) Consume(
 	ctx context.Context,
 	topic string,
 	group string,
-	handle func(*kgo.Record) error,
+	handle func(context.Context, *kgo.Record) error,
 ) error {
 	if ctx == nil {
 		return errors.New("kafkapop: context is required")
@@ -176,17 +212,35 @@ func (m *Manager) Consume(
 		m.release(consumer)
 	}()
 
-	pollCtx, cancelPoll := context.WithTimeout(ctx, m.timeout)
-	stopPoll := context.AfterFunc(m.forceCtx, cancelPoll)
-	defer stopPoll()
+	rebalanceCtx, finish := consumer.processing.begin(ctx)
+	defer func() {
+		finish()
+		// Polling can block rebalances even with no records or an error.
+		consumer.client.AllowRebalance()
+	}()
+	handleCtx, cancelHandle := context.WithCancelCause(ctx)
+	defer cancelHandle(nil)
+	stopRebalance := context.AfterFunc(rebalanceCtx, func() { cancelHandle(ErrRebalance) })
+	defer stopRebalance()
+	stopForce := context.AfterFunc(m.forceCtx, func() { cancelHandle(ErrClosed) })
+	defer stopForce()
+	pollCtx, cancelPoll := context.WithTimeout(handleCtx, m.timeout)
 	fetches := consumer.client.PollRecords(pollCtx, 1)
-	// Polling can block rebalances even when it returns no records or an error.
-	defer consumer.client.AllowRebalance()
 	cancelPoll()
 
 	records := fetches.Records()
 	if m.forceCtx.Err() != nil {
 		return ErrClosed
+	}
+	if rebalanceCtx.Err() != nil {
+		if len(records) > 0 {
+			rewindRecord(consumer.client, records[0])
+			return ErrRebalance
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return ErrNoEvent
 	}
 	if err := fetches.Err(); err != nil {
 		// PollRecords can advance one record even when another partition fails.
@@ -207,13 +261,17 @@ func (m *Manager) Consume(
 	}
 
 	record := records[0]
-	if err := handle(record); err != nil {
+	if err := handle(handleCtx, record); err != nil {
 		rewindRecord(consumer.client, record)
-		return fmt.Errorf("kafkapop: handle record: %w", err)
+		return fmt.Errorf("kafkapop: handle record: %w", errors.Join(err, context.Cause(handleCtx)))
 	}
 
 	if m.forceCtx.Err() != nil {
 		return ErrClosed
+	}
+	if rebalanceCtx.Err() != nil {
+		rewindRecord(consumer.client, record)
+		return ErrRebalance
 	}
 
 	commitCtx, cancelCommit := context.WithTimeout(
@@ -223,12 +281,14 @@ func (m *Manager) Consume(
 	defer cancelCommit()
 	stopCommit := context.AfterFunc(m.forceCtx, cancelCommit)
 	defer stopCommit()
-	if m.forceCtx.Err() != nil {
+	stopCommitRebalance := context.AfterFunc(rebalanceCtx, cancelCommit)
+	defer stopCommitRebalance()
+	if m.forceCtx.Err() != nil || rebalanceCtx.Err() != nil {
 		cancelCommit()
 	}
 	if err := consumer.client.CommitRecords(commitCtx, record); err != nil {
 		rewindRecord(consumer.client, record)
-		return fmt.Errorf("kafkapop: commit record: %w", err)
+		return fmt.Errorf("kafkapop: commit record: %w", errors.Join(err, context.Cause(rebalanceCtx)))
 	}
 	return nil
 }
@@ -282,18 +342,18 @@ func (m *Manager) acquire(ctx context.Context, topic, group string) (*groupConsu
 		}
 	}
 
-	client, err := m.newClient(topic, group)
+	consumer := &groupConsumer{
+		key:      key,
+		gate:     make(chan struct{}, 1),
+		lastUsed: now,
+		users:    1,
+	}
+	client, err := m.newClient(topic, group, consumer.processing.interrupt)
 	if err != nil {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("kafkapop: initialize consumer: %w", err)
 	}
-	consumer := &groupConsumer{
-		key:      key,
-		gate:     make(chan struct{}, 1),
-		client:   client,
-		lastUsed: now,
-		users:    1,
-	}
+	consumer.client = client
 	if evicted != nil {
 		m.stopIdleTimer(evicted)
 		m.closers.Add(1)

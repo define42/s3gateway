@@ -584,15 +584,15 @@ func TestAdminDashboardShowsCreateBucketForm(t *testing.T) {
 }
 
 func TestAdminCreateBucketSuccess(t *testing.T) {
-	var createdBucket string
+	var createdBucketPath string
 
 	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {
 			t.Fatalf("unexpected upstream method: %s", r.Method)
 		}
-		createdBucket = strings.TrimPrefix(r.URL.Path, "/")
-		if createdBucket != "team2-newname" {
-			t.Fatalf("unexpected created bucket: %q", createdBucket)
+		createdBucketPath = r.URL.Path
+		if !isBucketRequestPath(createdBucketPath, "team2-newname") {
+			t.Fatalf("unexpected created bucket: %q", createdBucketPath)
 		}
 		w.WriteHeader(http.StatusOK)
 	})
@@ -627,8 +627,8 @@ func TestAdminCreateBucketSuccess(t *testing.T) {
 	if loc.Query().Get("msg") != "Created bucket: team2-newname" {
 		t.Fatalf("create success message mismatch: got=%q", loc.Query().Get("msg"))
 	}
-	if createdBucket != "team2-newname" {
-		t.Fatalf("expected bucket to be created, got=%q", createdBucket)
+	if !isBucketRequestPath(createdBucketPath, "team2-newname") {
+		t.Fatalf("expected bucket to be created, got=%q", createdBucketPath)
 	}
 }
 
@@ -703,7 +703,7 @@ func TestAdminCreateBucketRejectsInvalidSpace(t *testing.T) {
 func TestAdminBucketPagePagination(t *testing.T) {
 	gw, creds, cleanup := newTestHandler(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/team2-logs" && r.URL.Query().Get("list-type") == "2":
+		case r.Method == http.MethodGet && isBucketRequestPath(r.URL.Path, "team2-logs") && r.URL.Query().Get("list-type") == "2":
 			if r.URL.Query().Get("max-keys") != "25" {
 				t.Fatalf("expected max-keys=25, got %q", r.URL.Query().Get("max-keys"))
 			}

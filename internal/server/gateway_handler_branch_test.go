@@ -2427,7 +2427,7 @@ func TestBucketTaggingHandlersBranches(t *testing.T) {
 
 	t.Run("put success with optional headers", func(t *testing.T) {
 		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPut || r.URL.Path != "/team2-bucket" {
+			if r.Method != http.MethodPut || !isBucketRequestPath(r.URL.Path, "team2-bucket") {
 				t.Fatalf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 			}
 			if _, ok := r.URL.Query()["tagging"]; !ok {
@@ -2495,7 +2495,7 @@ func TestBucketTaggingHandlersBranches(t *testing.T) {
 
 	t.Run("get success", func(t *testing.T) {
 		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet || r.URL.Path != "/team2-bucket" {
+			if r.Method != http.MethodGet || !isBucketRequestPath(r.URL.Path, "team2-bucket") {
 				t.Fatalf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 			}
 			if _, ok := r.URL.Query()["tagging"]; !ok {
@@ -2593,7 +2593,7 @@ func TestBucketTaggingHandlersBranches(t *testing.T) {
 
 	t.Run("delete success", func(t *testing.T) {
 		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodDelete || r.URL.Path != "/team2-bucket" {
+			if r.Method != http.MethodDelete || !isBucketRequestPath(r.URL.Path, "team2-bucket") {
 				t.Fatalf("unexpected request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 			}
 			if _, ok := r.URL.Query()["tagging"]; !ok {

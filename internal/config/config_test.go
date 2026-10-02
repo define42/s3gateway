@@ -812,6 +812,50 @@ func TestLoadConfigControlPlaneLimits(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAuthReserves(t *testing.T) {
+	setRequiredX25519PrivateKeyEnv(t)
+	t.Setenv("LDAP_URL", "ldap://ldap.example:389")
+	t.Setenv("LDAP_BASE_DN", "dc=example,dc=com")
+	t.Setenv("LDAP_GROUP_BASE_DN", "ou=groups,dc=example,dc=com")
+	t.Setenv("S3_ENDPOINT", "https://s3.example")
+	t.Setenv("S3_ACCESS_KEY", "access-key")
+	t.Setenv("S3_SECRET_KEY", "secret-key")
+	t.Setenv("AUTH_MAX_CONCURRENT", "32")
+	t.Setenv("AUTH_RATE_PER_SECOND", "20")
+	t.Setenv("AUTH_RATE_BURST", "40")
+
+	for _, tc := range []struct {
+		name   string
+		values [3]string
+		want   [3]int
+	}{
+		{name: "omitted uses defaults", want: [3]int{8, 5, 10}},
+		{name: "explicit zeros disable reserve", values: [3]string{"0", "0", "0"}},
+		{name: "custom limits", values: [3]string{"2", "3", "4"}, want: [3]int{2, 3, 4}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AUTH_RESERVED_MAX_CONCURRENT", tc.values[0])
+			t.Setenv("AUTH_RESERVED_RATE_PER_SECOND", tc.values[1])
+			t.Setenv("AUTH_RESERVED_BURST", tc.values[2])
+			cfg := LoadConfig()
+			// Application and server constructors each apply defaults to a
+			// copy of the configuration returned by LoadConfig.
+			for pass := range 3 {
+				copied := cfg
+				copied.ApplyDefaults()
+				got := [3]int{copied.AuthReservedConcurrent, copied.AuthReservedRatePerSecond, copied.AuthReservedBurst}
+				if got != tc.want {
+					t.Fatalf("default pass %d: reserves = %v, want %v", pass, got, tc.want)
+				}
+				if err := copied.Validate(); err != nil {
+					t.Fatalf("validate loaded config: %v", err)
+				}
+				cfg = copied
+			}
+		})
+	}
+}
+
 func TestLoadConfigUpstreamSkipCertificateValidation(t *testing.T) {
 	setRequiredX25519PrivateKeyEnv(t)
 	t.Setenv("LDAP_URL", "ldap://ldap.example:389")

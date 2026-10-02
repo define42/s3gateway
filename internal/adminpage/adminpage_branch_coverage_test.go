@@ -605,7 +605,7 @@ func TestHandleAdminCreateBucketAdditionalBranches(t *testing.T) {
 
 	t.Run("upstream create bucket failure", func(t *testing.T) {
 		handler, cookie, cleanup := newLoggedInAdminHandlerWithStub(t, map[string]struct{}{"team2-c": {}}, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPut || r.URL.Path != "/team2-demo" {
+			if r.Method != http.MethodPut || !isBucketRequestPath(r.URL.Path, "team2-demo") {
 				t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
 			}
 			w.WriteHeader(http.StatusInternalServerError)
@@ -664,7 +664,7 @@ func TestHandleAdminBucketPageAdditionalBranches(t *testing.T) {
 
 	t.Run("head request suppresses body", func(t *testing.T) {
 		handler, cookie, cleanup := newLoggedInAdminHandlerWithStub(t, map[string]struct{}{"team2-r": {}}, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet || r.URL.Path != "/team2-logs" {
+			if r.Method != http.MethodGet || !isBucketRequestPath(r.URL.Path, "team2-logs") {
 				t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 			}
 			w.Header().Set("Content-Type", "application/xml")
@@ -722,7 +722,7 @@ func TestHandleAdminBucketPageAdditionalBranches(t *testing.T) {
 
 	t.Run("list objects upstream failure", func(t *testing.T) {
 		handler, cookie, cleanup := newLoggedInAdminHandlerWithStub(t, map[string]struct{}{"team2-r": {}}, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet || r.URL.Path != "/team2-logs" {
+			if r.Method != http.MethodGet || !isBucketRequestPath(r.URL.Path, "team2-logs") {
 				t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
 			}
 			w.WriteHeader(http.StatusInternalServerError)

@@ -47,6 +47,10 @@ type Config struct {
 	AuthTrustedCredentialTTL      time.Duration
 	TrustedProxyCIDRs             []string
 
+	// Environment loading resolves omitted reserve limits before applying
+	// defaults. Keep explicit zeros intact through later copies/default passes.
+	authReservedLimitsConfigured bool
+
 	UpstreamEndpoint                  string
 	UpstreamRegion                    string
 	UpstreamAccessKey                 string
@@ -160,14 +164,17 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.AuthRateBurst == 0 {
 		cfg.AuthRateBurst = defaultAuthRateBurst
 	}
-	if cfg.AuthReservedConcurrent == 0 {
-		cfg.AuthReservedConcurrent = defaultReservedLimit(cfg.AuthMaxConcurrent, defaultAuthReservedConcurrent)
-	}
-	if cfg.AuthReservedRatePerSecond == 0 {
-		cfg.AuthReservedRatePerSecond = defaultReservedLimit(cfg.AuthRatePerSecond, defaultAuthReservedRatePerSecond)
-	}
-	if cfg.AuthReservedBurst == 0 {
-		cfg.AuthReservedBurst = defaultReservedLimit(cfg.AuthRateBurst, defaultAuthReservedBurst)
+	if !cfg.authReservedLimitsConfigured {
+		if cfg.AuthReservedConcurrent == 0 {
+			cfg.AuthReservedConcurrent = defaultReservedLimit(cfg.AuthMaxConcurrent, defaultAuthReservedConcurrent)
+		}
+		if cfg.AuthReservedRatePerSecond == 0 {
+			cfg.AuthReservedRatePerSecond = defaultReservedLimit(cfg.AuthRatePerSecond, defaultAuthReservedRatePerSecond)
+		}
+		if cfg.AuthReservedBurst == 0 {
+			cfg.AuthReservedBurst = defaultReservedLimit(cfg.AuthRateBurst, defaultAuthReservedBurst)
+		}
+		cfg.authReservedLimitsConfigured = true
 	}
 	if cfg.AuthPerIPMaxConcurrent == 0 {
 		cfg.AuthPerIPMaxConcurrent = defaultAuthPerIPMaxConcurrent
@@ -646,6 +653,7 @@ func LoadConfig() Config {
 		AuthReservedConcurrent:        envInt("AUTH_RESERVED_MAX_CONCURRENT", defaultReservedLimit(authMaxConcurrent, defaultAuthReservedConcurrent)),
 		AuthReservedRatePerSecond:     envInt("AUTH_RESERVED_RATE_PER_SECOND", defaultReservedLimit(authRatePerSecond, defaultAuthReservedRatePerSecond)),
 		AuthReservedBurst:             envInt("AUTH_RESERVED_BURST", defaultReservedLimit(authRateBurst, defaultAuthReservedBurst)),
+		authReservedLimitsConfigured:  true,
 		AuthPerIPMaxConcurrent:        envInt("AUTH_PER_IP_MAX_CONCURRENT", defaultAuthPerIPMaxConcurrent),
 		AuthPerIPRatePerSecond:        envInt("AUTH_PER_IP_RATE_PER_SECOND", defaultAuthPerIPRatePerSecond),
 		AuthPerIPBurst:                envInt("AUTH_PER_IP_BURST", defaultAuthPerIPBurst),

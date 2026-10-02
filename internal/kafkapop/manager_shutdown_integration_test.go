@@ -41,7 +41,7 @@ func TestManagerShutdownInterruptsUnavailableBrokerIntegration(t *testing.T) {
 	}
 	defer manager.Close()
 	for i := range 3 {
-		if err := manager.Consume(ctx, topic, fmt.Sprintf("shutdown-%d", i), func(*kgo.Record) error { return nil }); err != nil {
+		if err := manager.Consume(ctx, topic, fmt.Sprintf("shutdown-%d", i), func(context.Context, *kgo.Record) error { return nil }); err != nil {
 			t.Fatal(err)
 		}
 	}

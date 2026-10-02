@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -93,6 +94,46 @@ func TestListBucketsLegacyAggregatesAuthorizedPages(t *testing.T) {
 	}
 	if !slices.Equal(names, []string{"team2-first", "team2-last"}) || output.ContinuationToken != nil || calls.Load() != 3 {
 		t.Fatalf("legacy listing names=%v token=%v calls=%d", names, output.ContinuationToken, calls.Load())
+	}
+}
+
+func TestListBucketsPreservesCreationDates(t *testing.T) {
+	const response = `<ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Buckets>` +
+		`<Bucket><Name>team2-data</Name><CreationDate>2026-01-02T03:04:05.678Z</CreationDate></Bucket>` +
+		`<Bucket><Name>team2-undated</Name></Bucket>` +
+		`<Bucket><Name>hidden-data</Name><CreationDate>2025-01-02T03:04:05.678Z</CreationDate></Bucket>` +
+		`</Buckets></ListAllMyBucketsResult>`
+	wantDate := time.Date(2026, time.January, 2, 3, 4, 5, 678_000_000, time.UTC)
+	for _, tc := range []struct {
+		name  string
+		input s3.ListBucketsInput
+	}{
+		{name: "legacy"},
+		{name: "paginated", input: s3.ListBucketsInput{MaxBuckets: aws.Int32(10)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw, cleanup := newGatewayWithRawStubUpstream(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/xml")
+				_, _ = io.WriteString(w, response)
+			})
+			t.Cleanup(cleanup)
+			client := newBucketPaginationClient(t, gw, fullTeam2Rule())
+			output, err := client.ListBuckets(t.Context(), &tc.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(output.Buckets) != 2 {
+				t.Fatalf("returned %d buckets, want two authorized buckets", len(output.Buckets))
+			}
+			dated := output.Buckets[0]
+			if aws.ToString(dated.Name) != "team2-data" || dated.CreationDate == nil || !dated.CreationDate.Equal(wantDate) {
+				t.Errorf("dated bucket = %+v, want team2-data created at %s", dated, wantDate)
+			}
+			undated := output.Buckets[1]
+			if aws.ToString(undated.Name) != "team2-undated" || undated.CreationDate != nil {
+				t.Errorf("undated bucket = %+v, want team2-undated without an invented date", undated)
+			}
+		})
 	}
 }
 

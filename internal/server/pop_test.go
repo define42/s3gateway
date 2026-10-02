@@ -31,10 +31,10 @@ type fakePopConsumer struct {
 }
 
 func (c *fakePopConsumer) Consume(
-	_ context.Context,
+	ctx context.Context,
 	topic string,
 	group string,
-	handle func(*kgo.Record) error,
+	handle func(context.Context, *kgo.Record) error,
 ) error {
 	c.mu.Lock()
 	c.topic = topic
@@ -51,7 +51,7 @@ func (c *fakePopConsumer) Consume(
 	if record == nil {
 		return errors.New("fake pop consumer: missing record")
 	}
-	if err := handle(record); err != nil {
+	if err := handle(ctx, record); err != nil {
 		c.mu.Lock()
 		c.handleErr = err
 		c.mu.Unlock()

@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	maxSinglePutObjectSize          = int64(5 * 1024 * 1024 * 1024) // 5 GiB
-	bypassGovernanceRetentionHeader = "x-amz-bypass-governance-retention"
+	maxSinglePutObjectSize          = int64(5 * 1024 * 1024 * 1024)       // 5 GiB
+	bypassGovernanceRetentionHeader = "x-amz-bypass-governance-retention" // #nosec G101 -- Public S3 header name, not a credential.
 
 	maxDeleteObjectsBodyBytes = int64(4 * 1024 * 1024)
 	maxDeleteObjects          = 1000
@@ -76,25 +76,68 @@ func (r *deleteObjectsReqXML) UnmarshalXML(decoder *xml.Decoder, start xml.Start
 }
 
 type deleteObjectsTokenReader struct {
-	decoder *xml.Decoder
-	start   *xml.StartElement
+	decoder  *xml.Decoder
+	start    *xml.StartElement
+	elements []deleteObjectsXMLElement
+	done     bool
+}
+
+type deleteObjectsXMLElement struct {
+	name     string
+	seen     map[string]bool
+	hasValue bool
 }
 
 func (r *deleteObjectsTokenReader) Token() (xml.Token, error) {
+	if r.done {
+		return nil, io.EOF
+	}
+	var token xml.Token
 	if r.start != nil {
-		start := *r.start
+		token = *r.start
 		r.start = nil
-		return start, nil
-	}
-	token, err := r.decoder.Token()
-	if err != nil {
-		return nil, err
-	}
-	if start, ok := token.(xml.StartElement); ok {
-		switch start.Name.Local {
-		case "Size", "LastModifiedTime":
-			return nil, fmt.Errorf("unsupported DeleteObjects condition %q", start.Name.Local)
+	} else {
+		var err error
+		token, err = r.decoder.Token()
+		if err != nil {
+			return nil, err
 		}
+	}
+	switch token := token.(type) {
+	case xml.StartElement:
+		name := token.Name.Local
+		switch name {
+		case "Size", "LastModifiedTime":
+			return nil, fmt.Errorf("unsupported DeleteObjects condition %q", name)
+		}
+		if len(r.elements) > 0 {
+			parent := &r.elements[len(r.elements)-1]
+			allowed := (parent.name == "Delete" && (name == "Object" || name == "Quiet")) ||
+				(parent.name == "Object" && (name == "Key" || name == "ETag" || name == "VersionId"))
+			if !allowed {
+				return nil, fmt.Errorf("unsupported DeleteObjects element %q in %q", name, parent.name)
+			}
+			if parent.seen[name] && name != "Object" {
+				return nil, fmt.Errorf("duplicate DeleteObjects element %q", name)
+			}
+			parent.seen[name] = true
+		}
+		r.elements = append(r.elements, deleteObjectsXMLElement{name: name, seen: make(map[string]bool)})
+	case xml.CharData:
+		current := &r.elements[len(r.elements)-1]
+		if strings.TrimSpace(string(token)) != "" {
+			if current.name == "Delete" || current.name == "Object" {
+				return nil, fmt.Errorf("unexpected text in DeleteObjects element %q", current.name)
+			}
+			current.hasValue = true
+		}
+	case xml.EndElement:
+		current := r.elements[len(r.elements)-1]
+		if (current.name == "ETag" || current.name == "VersionId") && !current.hasValue {
+			return nil, fmt.Errorf("DeleteObjects %s must not be empty", current.name)
+		}
+		r.elements = r.elements[:len(r.elements)-1]
+		r.done = len(r.elements) == 0
 	}
 	return token, nil
 }
@@ -281,16 +324,10 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 		}
 		item := types.ObjectIdentifier{Key: aws.String(key)}
 		if obj.VersionID != nil {
-			v := strings.TrimSpace(*obj.VersionID)
-			if v != "" {
-				item.VersionId = aws.String(v)
-			}
+			item.VersionId = aws.String(strings.TrimSpace(*obj.VersionID))
 		}
 		if obj.ETag != nil {
-			e := strings.TrimSpace(*obj.ETag)
-			if e != "" {
-				item.ETag = aws.String(e)
-			}
+			item.ETag = aws.String(strings.TrimSpace(*obj.ETag))
 		}
 		objects = append(objects, item)
 	}

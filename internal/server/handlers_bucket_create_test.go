@@ -25,7 +25,7 @@ func TestCreateBucketForwardsConfiguration(t *testing.T) {
 		if err != nil {
 			t.Errorf("read upstream body: %v", err)
 		}
-		if r.Method != http.MethodPut || r.URL.Path != "/team2-bucket" {
+		if r.Method != http.MethodPut || !isBucketRequestPath(r.URL.Path, "team2-bucket") {
 			t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
 		}
 		if md5 := r.Header.Get("Content-MD5"); md5 != "" && md5 != xmlBodyMD5(string(body)) {

@@ -630,6 +630,9 @@ per-client-IP and per-principal limits before it can use the shared global
 pool. The reserved portion of the global totals is available only to an exact
 credential pair that authenticated successfully during
 `AUTH_TRUSTED_CREDENTIAL_TTL`; a claimed username alone never unlocks it.
+To disable reserved capacity, set `AUTH_RESERVED_MAX_CONCURRENT`,
+`AUTH_RESERVED_RATE_PER_SECOND`, and `AUTH_RESERVED_BURST` all to `0`.
+Setting only some of these limits to zero is invalid.
 Limiter state is bounded by `LDAP_GROUP_CACHE_MAX_ENTRIES` and is process-local.
 
 By default, client-IP attribution uses the direct TCP peer and ignores all
@@ -819,9 +822,17 @@ When no Pop calls are active or queued for a `{topic, group}` consumer for
 leaves its Kafka group. This lets another replica receive its partitions after
 traffic moves between instances. Handoff takes the idle timeout plus the
 broker's rebalance time; clients may receive `204 No Content` during this period
-and should keep polling. Active object downloads and offset commits retain
-the consumer until they finish. A shorter idle timeout reduces handoff delay
-but causes more group rejoins for sporadic traffic.
+and should keep polling. Active object downloads and offset commits prevent
+idle eviction. A shorter idle timeout reduces handoff delay but causes more
+group rejoins for sporadic traffic.
+
+If Kafka requests a rebalance during delivery, for example when another replica
+joins the group, the gateway cancels the active S3 transfer or pending commit
+and releases the partitions. This avoids holding a rebalance open until Kafka
+evicts the consumer. A request interrupted before its object response starts
+returns `503 Service Unavailable` with `Retry-After: 1`; an active response body
+is aborted. Clients must discard incomplete objects and retry. An unacknowledged
+event remains eligible for delivery by another group member.
 
 Automatic acknowledgement occurs only after the complete object body has been
 written and flushed successfully. The gateway then synchronously commits the
@@ -902,9 +913,18 @@ Health endpoints do not require SigV4 or LDAP authentication:
 | `GET /healthz` | Returns `200 OK` while the process is serving requests |
 | `GET /readyz` | Returns `200 OK` when LDAP can be reached and upstream `ListBuckets` succeeds; otherwise `503 Service Unavailable` |
 
-Example Kubernetes probes for the default plain HTTP listener:
+Kubernetes HTTP probes reach the gateway from the kubelet rather than loopback.
+Set `READINESS_ALLOWED_CIDRS` to the node source CIDRs observed by the pod;
+otherwise `/readyz` returns `404` and the pod stays unready. Forwarded headers
+do not affect this check. Restrict the allowlist to your probe sources.
+
+Example container settings for the default plain HTTP listener, with example
+node CIDRs that must be replaced for your cluster:
 
 ```yaml
+env:
+  - name: READINESS_ALLOWED_CIDRS
+    value: "127.0.0.0/8,::1/128,10.20.0.0/24,fd00:20::/64"
 livenessProbe:
   httpGet:
     path: /healthz
@@ -914,7 +934,10 @@ readinessProbe:
   httpGet:
     path: /readyz
     port: 8080
+  timeoutSeconds: 3
 ```
+
+Keep the probe timeout longer than `READINESS_CHECK_TIMEOUT` (default `2s`).
 
 ### Limits and non-goals
 
@@ -936,6 +959,9 @@ readinessProbe:
 - LDAP `d` permission grants ordinary object deletion only. Requests to bypass
   governance retention are rejected and never forwarded upstream. The shared
   upstream identity should not be granted governance-retention bypass authority.
+- `DeleteObjects` rejects malformed XML, including empty, nested, or duplicate
+  `ETag` and `VersionId` fields, before forwarding any deletion. Conditions are
+  never silently dropped.
 - For non-streaming signed payloads, the gateway verifies the declared
   `x-amz-content-sha256` digest while streaming and withholds the final byte
   until verification succeeds, so an invalid body cannot complete an upstream

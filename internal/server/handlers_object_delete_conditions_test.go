@@ -110,6 +110,50 @@ func TestDeleteObjectsRejectsUnsupportedXMLConditions(t *testing.T) {
 	}
 }
 
+func TestDeleteObjectsRejectsMalformedConditions(t *testing.T) {
+	var upstreamCalls atomic.Int32
+	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		_, _ = io.WriteString(w, `<DeleteResult/>`)
+	})
+	t.Cleanup(cleanup)
+
+	for _, field := range []string{"ETag", "VersionId"} {
+		t.Run(field, func(t *testing.T) {
+			for _, shape := range []struct {
+				name string
+				xml  string
+			}{
+				{name: "empty", xml: `<%[1]s/>`},
+				{name: "whitespace", xml: "<%[1]s> \t\r\n </%[1]s>"},
+				{name: "nested value", xml: `<%[1]s><Value>condition</Value></%[1]s>`},
+				{name: "nested after text", xml: `<%[1]s>condition<Value>extra</Value></%[1]s>`},
+				{name: "duplicate", xml: `<%[1]s>first</%[1]s><%[1]s>second</%[1]s>`},
+				{name: "duplicate empty", xml: `<%[1]s>condition</%[1]s><%[1]s/>`},
+				{name: "unknown wrapper", xml: `<Condition><%[1]s>condition</%[1]s></Condition>`},
+			} {
+				t.Run(shape.name, func(t *testing.T) {
+					// A valid first object must not be deleted when a later
+					// object's condition cannot be preserved.
+					body := `<Delete><Object><Key>first</Key><ETag>first-etag</ETag><VersionId>v1</VersionId></Object>` +
+						`<Object><Key>important</Key>` + fmt.Sprintf(shape.xml, field) + `</Object></Delete>`
+					req := httptest.NewRequest(http.MethodPost, "/team2-bucket?delete", strings.NewReader(body))
+					req.Header.Set("Content-MD5", xmlBodyMD5(body))
+					recorder := httptest.NewRecorder()
+					gw.ServeHTTP(recorder, reqWithRules(req, fullTeam2Rule()))
+					if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "<Code>MalformedXML</Code>") {
+						t.Errorf("status=%d body=%s, want 400 MalformedXML", recorder.Code, recorder.Body.String())
+					}
+					if calls := upstreamCalls.Load(); calls != 0 {
+						t.Fatalf("malformed condition reached upstream %d times", calls)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestDeletePreservesSupportedConditions(t *testing.T) {
 	for _, operation := range []struct {
 		name   string

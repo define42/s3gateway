@@ -24,6 +24,7 @@ type fakeConsumerClient struct {
 	closeCount         int
 	commitCtxError     error
 	beforeCommit       func()
+	commit             func(context.Context) error
 	beforeClose        func()
 	beforeCloseContext func(context.Context) error
 }
@@ -40,6 +41,9 @@ func (c *fakeConsumerClient) PollRecords(ctx context.Context, _ int) kgo.Fetches
 }
 
 func (c *fakeConsumerClient) CommitRecords(ctx context.Context, records ...*kgo.Record) error {
+	if c.commit != nil {
+		return c.commit(ctx)
+	}
 	if c.beforeCommit != nil {
 		c.beforeCommit()
 	}
@@ -165,13 +169,13 @@ func TestManagerConsumeCommitsAfterHandler(t *testing.T) {
 			return fetchWithRecord(record)
 		},
 	}
-	manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string) (consumerClient, error) {
+	manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string, _ func()) (consumerClient, error) {
 		return client, nil
 	})
 	defer manager.Close()
 
 	ctx, cancel := context.WithCancel(t.Context())
-	err := manager.Consume(ctx, "images", "scanner", func(got *kgo.Record) error {
+	err := manager.Consume(ctx, "images", "scanner", func(_ context.Context, got *kgo.Record) error {
 		client.mu.Lock()
 		client.sequence = append(client.sequence, "handle")
 		client.mu.Unlock()
@@ -233,12 +237,12 @@ func TestManagerConsumeRewindsUnacknowledgedRecord(t *testing.T) {
 					return fetchWithRecord(record)
 				},
 			}
-			manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string) (consumerClient, error) {
+			manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string, _ func()) (consumerClient, error) {
 				return client, nil
 			})
 			defer manager.Close()
 
-			err := manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error {
+			err := manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error {
 				return tt.handleErr
 			})
 			if err == nil {
@@ -333,12 +337,12 @@ func TestManagerConsumeRewindsRecordReturnedWithPollError(t *testing.T) {
 						nextOffset = offset.Offset
 					},
 				}
-				manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string) (consumerClient, error) {
+				manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string, _ func()) (consumerClient, error) {
 					return client, nil
 				})
 				defer manager.Close()
 
-				err := manager.Consume(ctx, "images", "scanner", func(*kgo.Record) error {
+				err := manager.Consume(ctx, "images", "scanner", func(context.Context, *kgo.Record) error {
 					t.Error("handler must not run when polling fails")
 					return nil
 				})
@@ -355,7 +359,7 @@ func TestManagerConsumeRewindsRecordReturnedWithPollError(t *testing.T) {
 
 				var delivered []*kgo.Record
 				for range records {
-					if err := manager.Consume(t.Context(), "images", "scanner", func(record *kgo.Record) error {
+					if err := manager.Consume(t.Context(), "images", "scanner", func(_ context.Context, record *kgo.Record) error {
 						delivered = append(delivered, record)
 						return nil
 					}); err != nil {
@@ -430,12 +434,12 @@ func TestManagerConsumeReleasesRebalanceAfterPoll(t *testing.T) {
 						return tt.poll(pollCtx, cancel)
 					},
 				}
-				manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string) (consumerClient, error) {
+				manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string, _ func()) (consumerClient, error) {
 					return client, nil
 				})
 				defer manager.Close()
 
-				err := manager.Consume(ctx, "images", "scanner", func(*kgo.Record) error {
+				err := manager.Consume(ctx, "images", "scanner", func(context.Context, *kgo.Record) error {
 					t.Fatal("handler must not run without an event")
 					return nil
 				})
@@ -455,7 +459,7 @@ func TestManagerConsumeReleasesRebalanceAfterPoll(t *testing.T) {
 
 func TestManagerEvictsIdleConsumer(t *testing.T) {
 	clients := make(map[string]*fakeConsumerClient)
-	manager := newManager(time.Second, 30*time.Second, 1, func(topic, _ string) (consumerClient, error) {
+	manager := newManager(time.Second, 30*time.Second, 1, func(topic, _ string, _ func()) (consumerClient, error) {
 		record := &kgo.Record{Topic: topic}
 		client := &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
 			return fetchWithRecord(record)
@@ -466,7 +470,7 @@ func TestManagerEvictsIdleConsumer(t *testing.T) {
 	defer manager.Close()
 
 	for _, topic := range []string{"images", "documents"} {
-		if err := manager.Consume(t.Context(), topic, "scanner", func(*kgo.Record) error {
+		if err := manager.Consume(t.Context(), topic, "scanner", func(context.Context, *kgo.Record) error {
 			return nil
 		}); err != nil {
 			t.Fatalf("Consume(%q) error = %v", topic, err)
@@ -489,14 +493,14 @@ func TestManagerRejectsNewConsumerAtActiveLimit(t *testing.T) {
 	client := &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
 		return fetchWithRecord(&kgo.Record{Topic: "images"})
 	}}
-	manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string) (consumerClient, error) {
+	manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string, _ func()) (consumerClient, error) {
 		return client, nil
 	})
 	defer manager.Close()
 
 	done := make(chan error, 1)
 	go func() {
-		done <- manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error {
+		done <- manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error {
 			close(handling)
 			<-release
 			return nil
@@ -504,7 +508,7 @@ func TestManagerRejectsNewConsumerAtActiveLimit(t *testing.T) {
 	}()
 	<-handling
 
-	err := manager.Consume(t.Context(), "documents", "scanner", func(*kgo.Record) error {
+	err := manager.Consume(t.Context(), "documents", "scanner", func(context.Context, *kgo.Record) error {
 		return nil
 	})
 	if !errors.Is(err, ErrConsumerLimit) {
@@ -524,13 +528,13 @@ func TestManagerCloseWaitsForInProgressConsume(t *testing.T) {
 	client := &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
 		return fetchWithRecord(&kgo.Record{Topic: "images"})
 	}}
-	manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string) (consumerClient, error) {
+	manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string, _ func()) (consumerClient, error) {
 		return client, nil
 	})
 
 	consumeDone := make(chan error, 1)
 	go func() {
-		consumeDone <- manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error {
+		consumeDone <- manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error {
 			close(handling)
 			<-release
 			return nil
@@ -573,14 +577,14 @@ func TestManagerSerializesConsumersWithSameKey(t *testing.T) {
 	client := &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
 		return fetchWithRecord(&kgo.Record{Topic: "images"})
 	}}
-	manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string) (consumerClient, error) {
+	manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string, _ func()) (consumerClient, error) {
 		return client, nil
 	})
 	defer manager.Close()
 
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error {
+		firstDone <- manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error {
 			close(firstHandling)
 			<-releaseFirst
 			return nil
@@ -591,7 +595,7 @@ func TestManagerSerializesConsumersWithSameKey(t *testing.T) {
 	secondHandling := make(chan struct{})
 	secondDone := make(chan error, 1)
 	go func() {
-		secondDone <- manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error {
+		secondDone <- manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error {
 			close(secondHandling)
 			return nil
 		})
@@ -618,7 +622,7 @@ func TestManagerSerializesConsumersWithSameKey(t *testing.T) {
 
 func TestManagerQueuedConsumeDoesNotBlockOtherGroups(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		manager := newManager(time.Second, 30*time.Second, 2, func(topic, _ string) (consumerClient, error) {
+		manager := newManager(time.Second, 30*time.Second, 2, func(topic, _ string, _ func()) (consumerClient, error) {
 			return &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
 				return fetchWithRecord(&kgo.Record{Topic: topic})
 			}}, nil
@@ -629,7 +633,7 @@ func TestManagerQueuedConsumeDoesNotBlockOtherGroups(t *testing.T) {
 		defer releaseHandler()
 		firstDone := make(chan error, 1)
 		go func() {
-			firstDone <- manager.Consume(t.Context(), "images", "slow", func(*kgo.Record) error {
+			firstDone <- manager.Consume(t.Context(), "images", "slow", func(context.Context, *kgo.Record) error {
 				<-release
 				return nil
 			})
@@ -638,13 +642,13 @@ func TestManagerQueuedConsumeDoesNotBlockOtherGroups(t *testing.T) {
 
 		queuedDone := make(chan error, 1)
 		go func() {
-			queuedDone <- manager.Consume(t.Context(), "images", "slow", func(*kgo.Record) error {
+			queuedDone <- manager.Consume(t.Context(), "images", "slow", func(context.Context, *kgo.Record) error {
 				return nil
 			})
 		}()
 		synctest.Wait()
 
-		if err := manager.Consume(t.Context(), "images", "independent", func(*kgo.Record) error {
+		if err := manager.Consume(t.Context(), "images", "independent", func(context.Context, *kgo.Record) error {
 			return nil
 		}); err != nil {
 			t.Fatalf("unrelated group Consume() error = %v", err)
@@ -674,7 +678,7 @@ func TestManagerQueuedConsumeCancellationReleasesCapacity(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				manager := newManager(time.Second, 30*time.Second, 1, func(topic, _ string) (consumerClient, error) {
+				manager := newManager(time.Second, 30*time.Second, 1, func(topic, _ string, _ func()) (consumerClient, error) {
 					return &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
 						return fetchWithRecord(&kgo.Record{Topic: topic})
 					}}, nil
@@ -685,7 +689,7 @@ func TestManagerQueuedConsumeCancellationReleasesCapacity(t *testing.T) {
 				defer releaseHandler()
 				firstDone := make(chan error, 1)
 				go func() {
-					firstDone <- manager.Consume(t.Context(), "images", "slow", func(*kgo.Record) error {
+					firstDone <- manager.Consume(t.Context(), "images", "slow", func(context.Context, *kgo.Record) error {
 						<-release
 						return nil
 					})
@@ -696,7 +700,7 @@ func TestManagerQueuedConsumeCancellationReleasesCapacity(t *testing.T) {
 				defer cancel()
 				queuedDone := make(chan error, 1)
 				go func() {
-					queuedDone <- manager.Consume(ctx, "images", "slow", func(*kgo.Record) error {
+					queuedDone <- manager.Consume(ctx, "images", "slow", func(context.Context, *kgo.Record) error {
 						return errors.New("canceled handler must not run")
 					})
 				}()
@@ -715,7 +719,7 @@ func TestManagerQueuedConsumeCancellationReleasesCapacity(t *testing.T) {
 					t.Fatalf("first Consume() error = %v", err)
 				}
 				// The canceled waiter must not keep the sole cache entry pinned.
-				if err := manager.Consume(t.Context(), "documents", "other", func(*kgo.Record) error {
+				if err := manager.Consume(t.Context(), "documents", "other", func(context.Context, *kgo.Record) error {
 					return nil
 				}); err != nil {
 					t.Fatalf("Consume() after cancellation and eviction = %v", err)
@@ -730,7 +734,7 @@ func TestManagerCloseRejectsQueuedConsume(t *testing.T) {
 		client := &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
 			return fetchWithRecord(&kgo.Record{Topic: "images"})
 		}}
-		manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string) (consumerClient, error) {
+		manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string, _ func()) (consumerClient, error) {
 			return client, nil
 		})
 		defer manager.Close()
@@ -739,7 +743,7 @@ func TestManagerCloseRejectsQueuedConsume(t *testing.T) {
 		defer releaseHandler()
 		firstDone := make(chan error, 1)
 		go func() {
-			firstDone <- manager.Consume(t.Context(), "images", "slow", func(*kgo.Record) error {
+			firstDone <- manager.Consume(t.Context(), "images", "slow", func(context.Context, *kgo.Record) error {
 				<-release
 				return nil
 			})
@@ -748,7 +752,7 @@ func TestManagerCloseRejectsQueuedConsume(t *testing.T) {
 
 		queuedDone := make(chan error, 1)
 		go func() {
-			queuedDone <- manager.Consume(t.Context(), "images", "slow", func(*kgo.Record) error {
+			queuedDone <- manager.Consume(t.Context(), "images", "slow", func(context.Context, *kgo.Record) error {
 				return errors.New("queued handler must not run after Close")
 			})
 		}()
@@ -783,10 +787,10 @@ func TestManagerClose(t *testing.T) {
 	client := &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
 		return fetchWithRecord(&kgo.Record{Topic: "images"})
 	}}
-	manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string) (consumerClient, error) {
+	manager := newManager(time.Second, 30*time.Second, 1, func(_, _ string, _ func()) (consumerClient, error) {
 		return client, nil
 	})
-	if err := manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error {
+	if err := manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error {
 		return nil
 	}); err != nil {
 		t.Fatalf("Consume() error = %v", err)
@@ -800,7 +804,7 @@ func TestManagerClose(t *testing.T) {
 	if closeCount != 1 {
 		t.Fatalf("client close count = %d, want 1", closeCount)
 	}
-	if err := manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error {
+	if err := manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error {
 		return nil
 	}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Consume() after Close error = %v, want ErrClosed", err)

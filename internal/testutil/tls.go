@@ -26,7 +26,7 @@ func TrustTLSCertificate(tb testing.TB, certificate *x509.Certificate) {
 	var bundle []byte
 	if existing := os.Getenv("AWS_CA_BUNDLE"); existing != "" {
 		var err error
-		bundle, err = os.ReadFile(existing)
+		bundle, err = os.ReadFile(existing) // #nosec G304 G703 -- AWS_CA_BUNDLE is a trusted test-runner path.
 		if err != nil {
 			tb.Fatalf("read existing AWS CA bundle: %v", err)
 		}
@@ -34,7 +34,7 @@ func TrustTLSCertificate(tb testing.TB, certificate *x509.Certificate) {
 	}
 	bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw})...)
 	filename := filepath.Join(tb.TempDir(), "aws-test-ca.pem")
-	if err := os.WriteFile(filename, bundle, 0o600); err != nil {
+	if err := os.WriteFile(filename, bundle, 0o600); err != nil { // #nosec G703 -- Constant filename under testing.TB.TempDir.
 		tb.Fatalf("write AWS test CA bundle: %v", err)
 	}
 	tb.Setenv("AWS_CA_BUNDLE", filename)
@@ -61,7 +61,7 @@ func NewHTTPClient(tb testing.TB) *http.Client {
 		tb.Fatalf("load system certificate roots: %v", err)
 	}
 	if bundlePath := os.Getenv("AWS_CA_BUNDLE"); bundlePath != "" {
-		bundle, err := os.ReadFile(bundlePath)
+		bundle, err := os.ReadFile(bundlePath) // #nosec G304 G703 -- AWS_CA_BUNDLE is a trusted test-runner path.
 		if err != nil {
 			tb.Fatalf("read AWS test CA bundle: %v", err)
 		}

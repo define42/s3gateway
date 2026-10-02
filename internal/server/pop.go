@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -37,12 +38,13 @@ var (
 // handle succeeds.
 type PopConsumer interface {
 	// Consume delivers at most one record for a topic and consumer group. The
-	// implementation commits the record only after handle succeeds.
+	// implementation commits the record only after handle succeeds. A pending
+	// rebalance cancels the handler context and leaves the event unacknowledged.
 	Consume(
 		context.Context,
 		string,
 		string,
-		func(*kgo.Record) error,
+		func(context.Context, *kgo.Record) error,
 	) error
 }
 
@@ -156,7 +158,7 @@ func (s *Server) handlePopAPI(w http.ResponseWriter, r *http.Request) {
 		r.Context(),
 		topic,
 		group,
-		func(record *kgo.Record) error {
+		func(ctx context.Context, record *kgo.Record) error {
 			if record.Topic != topic {
 				responseStarted = true
 				http.Error(w, "invalid kafka upload event", http.StatusBadGateway)
@@ -208,7 +210,7 @@ func (s *Server) handlePopAPI(w http.ResponseWriter, r *http.Request) {
 			}
 
 			responseStarted = true
-			if err := s.streamPoppedObject(w, r, event); err != nil {
+			if err := s.streamPoppedObject(w, r.WithContext(ctx), event); err != nil {
 				return fmt.Errorf("%w: %w", errPopResponseHandled, err)
 			}
 			return nil
@@ -219,6 +221,11 @@ func (s *Server) handlePopAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	if errors.Is(err, kafkapop.ErrNoEvent) {
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if errors.Is(err, kafkapop.ErrRebalance) && !responseStarted {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "pop consumer group is rebalancing; retry the request", http.StatusServiceUnavailable)
 		return
 	}
 	if errors.Is(err, context.Canceled) && !responseStarted {
@@ -277,10 +284,29 @@ func (s *Server) streamPoppedObject(
 	}
 	out, err := s.up.GetObject(r.Context(), input)
 	if err != nil {
+		if errors.Is(context.Cause(r.Context()), kafkapop.ErrRebalance) {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "pop consumer group is rebalancing; retry the request", http.StatusServiceUnavailable)
+			return kafkapop.ErrRebalance
+		}
 		s3http.WriteUpstreamError(w, err)
 		return fmt.Errorf("get popped object: %w", err)
 	}
 	defer func() { _ = out.Body.Close() }()
+	// Canceling S3 I/O does not interrupt a blocked client Write or Flush.
+	// Join an already-running callback before returning so it cannot modify a
+	// connection's deadline after this handler has released the response writer.
+	controller := http.NewResponseController(w)
+	interrupted := make(chan struct{})
+	stopInterrupt := context.AfterFunc(r.Context(), func() {
+		defer close(interrupted)
+		_ = controller.SetWriteDeadline(time.Now())
+	})
+	defer func() {
+		if !stopInterrupt() {
+			<-interrupted
+		}
+	}()
 
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -319,7 +345,7 @@ func (s *Server) streamPoppedObject(
 			*out.ContentLength,
 		)
 	}
-	if err := http.NewResponseController(w).Flush(); err != nil &&
+	if err := controller.Flush(); err != nil &&
 		!errors.Is(err, http.ErrNotSupported) {
 		return fmt.Errorf("%w: flush popped object: %w", errPopResponseInterrupted, err)
 	}

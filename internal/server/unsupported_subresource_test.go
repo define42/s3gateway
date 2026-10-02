@@ -157,7 +157,7 @@ func TestUnsupportedSubresourcesAreRejected(t *testing.T) {
 
 func TestListObjectsV1RoutingAndResponse(t *testing.T) {
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/team2-bucket" {
+		if r.Method != http.MethodGet || !isBucketRequestPath(r.URL.Path, "team2-bucket") {
 			t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
 		}
 		q := r.URL.Query()
@@ -339,7 +339,7 @@ func TestListObjectsV1ParameterAndErrorBranches(t *testing.T) {
 func TestGetBucketLocationRoutingAndResponse(t *testing.T) {
 	t.Run("region returned", func(t *testing.T) {
 		gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet || r.URL.Path != "/team2-bucket" {
+			if r.Method != http.MethodGet || !isBucketRequestPath(r.URL.Path, "team2-bucket") {
 				t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
 			}
 			if _, ok := r.URL.Query()["location"]; !ok {

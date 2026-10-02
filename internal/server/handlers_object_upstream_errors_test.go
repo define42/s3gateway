@@ -26,7 +26,7 @@ func TestListObjectsV2SDKRejectsUpstreamDeserializationErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gateway, cleanup := newGatewayWithRawStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-				if r.Method != http.MethodGet || r.URL.Path != "/team2-bucket" || r.URL.Query().Get("list-type") != "2" {
+				if r.Method != http.MethodGet || !isBucketRequestPath(r.URL.Path, "team2-bucket") || r.URL.Query().Get("list-type") != "2" {
 					t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL)
 				}
 				w.Header().Set("Content-Type", "application/xml")

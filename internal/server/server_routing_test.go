@@ -259,7 +259,7 @@ func TestGatewayPreservesMinIOLifecycleRead(t *testing.T) {
 	var upstreamCalls atomic.Int32
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		upstreamCalls.Add(1)
-		if r.Method != http.MethodGet || r.URL.Path != "/team2-bucket" || !r.URL.Query().Has("lifecycle") {
+		if r.Method != http.MethodGet || !isBucketRequestPath(r.URL.Path, "team2-bucket") || !r.URL.Query().Has("lifecycle") {
 			t.Errorf("unexpected upstream lifecycle request: %s %s", r.Method, r.URL)
 		}
 		w.Header().Set("Content-Type", "application/xml")

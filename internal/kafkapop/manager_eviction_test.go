@@ -35,7 +35,7 @@ func TestManagerEvictionCloseHonorsRequestCancellation(t *testing.T) {
 				}}
 				replacement := &fakeConsumerClient{}
 				created := 0
-				manager := newManager(30*time.Second, time.Minute, 1, func(_, _ string) (consumerClient, error) {
+				manager := newManager(30*time.Second, time.Minute, 1, func(_, _ string, _ func()) (consumerClient, error) {
 					created++
 					if created == 1 {
 						return old, nil
@@ -43,7 +43,7 @@ func TestManagerEvictionCloseHonorsRequestCancellation(t *testing.T) {
 					return replacement, nil
 				})
 				defer manager.Close()
-				if err := manager.Consume(t.Context(), "images", "old", func(*kgo.Record) error { return nil }); !errors.Is(err, ErrNoEvent) {
+				if err := manager.Consume(t.Context(), "images", "old", func(context.Context, *kgo.Record) error { return nil }); !errors.Is(err, ErrNoEvent) {
 					t.Fatal(err)
 				}
 				var requestCtx context.Context
@@ -61,7 +61,7 @@ func TestManagerEvictionCloseHonorsRequestCancellation(t *testing.T) {
 				consumed := make(chan error, 1)
 				started := time.Now()
 				go func() {
-					consumed <- manager.Consume(requestCtx, "images", "new", func(*kgo.Record) error { return nil })
+					consumed <- manager.Consume(requestCtx, "images", "new", func(context.Context, *kgo.Record) error { return nil })
 				}()
 				<-closing
 				if !deadline {
@@ -88,7 +88,7 @@ func TestManagerEvictionCloseHonorsRequestCancellation(t *testing.T) {
 					t.Fatalf("canceled request used replacement client: %v", replacement.sequence)
 				}
 				// One request's cancellation must leave the manager and replacement usable.
-				if err := manager.Consume(t.Context(), "images", "new", func(*kgo.Record) error { return nil }); !errors.Is(err, ErrNoEvent) {
+				if err := manager.Consume(t.Context(), "images", "new", func(context.Context, *kgo.Record) error { return nil }); !errors.Is(err, ErrNoEvent) {
 					t.Fatal(err)
 				}
 			})
@@ -107,7 +107,7 @@ func TestManagerShutdownCancelsRequestEviction(t *testing.T) {
 			return ctx.Err()
 		}}
 		created := 0
-		manager := newManager(30*time.Second, time.Minute, 1, func(_, _ string) (consumerClient, error) {
+		manager := newManager(30*time.Second, time.Minute, 1, func(_, _ string, _ func()) (consumerClient, error) {
 			created++
 			if created == 1 {
 				return old, nil
@@ -115,10 +115,10 @@ func TestManagerShutdownCancelsRequestEviction(t *testing.T) {
 			return &fakeConsumerClient{}, nil
 		})
 		defer manager.Close()
-		_ = manager.Consume(t.Context(), "images", "old", func(*kgo.Record) error { return nil })
+		_ = manager.Consume(t.Context(), "images", "old", func(context.Context, *kgo.Record) error { return nil })
 		consumed := make(chan error, 1)
 		go func() {
-			consumed <- manager.Consume(t.Context(), "images", "new", func(*kgo.Record) error { return nil })
+			consumed <- manager.Consume(t.Context(), "images", "new", func(context.Context, *kgo.Record) error { return nil })
 		}()
 		<-closing
 		closeCtx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)

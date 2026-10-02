@@ -31,7 +31,7 @@ func TestDeleteObjectsHTTPChecksumTrailers(t *testing.T) {
 			var upstreamCalls atomic.Int32
 			gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 				upstreamCalls.Add(1)
-				if r.Method != http.MethodPost || r.URL.Path != "/team2-bucket" || !r.URL.Query().Has("delete") {
+				if r.Method != http.MethodPost || !isBucketRequestPath(r.URL.Path, "team2-bucket") || !r.URL.Query().Has("delete") {
 					t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL)
 				}
 				if _, err := io.Copy(io.Discard, r.Body); err != nil {

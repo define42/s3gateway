@@ -113,7 +113,7 @@ func TestMinioMultipartListingsDecodeKeysAndAbortUploads(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		if r.Method != http.MethodGet || r.URL.Path != "/team2-bucket" || !q.Has("uploads") || q.Get("encoding-type") != "url" {
+		if r.Method != http.MethodGet || !isBucketRequestPath(r.URL.Path, "team2-bucket") || !q.Has("uploads") || q.Get("encoding-type") != "url" {
 			t.Errorf("unexpected multipart listing request: %s %s", r.Method, r.URL)
 			w.WriteHeader(http.StatusBadRequest)
 			return

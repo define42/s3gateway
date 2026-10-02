@@ -26,7 +26,7 @@ func TestManagerExpiresConsumerWithoutFurtherRequests(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				const idle = 5 * time.Second
 				var clients []*fakeConsumerClient
-				manager := newManager(time.Second, idle, 2, func(topic, _ string) (consumerClient, error) {
+				manager := newManager(time.Second, idle, 2, func(topic, _ string, _ func()) (consumerClient, error) {
 					client := &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
 						if outcome == "no event" {
 							return nil
@@ -42,7 +42,7 @@ func TestManagerExpiresConsumerWithoutFurtherRequests(t *testing.T) {
 				defer manager.Close()
 				consume := func() {
 					t.Helper()
-					err := manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error {
+					err := manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error {
 						if outcome == "handler failure" {
 							return errors.New("delivery failed")
 						}
@@ -74,13 +74,13 @@ func TestManagerActivityRestartsIdleTimeout(t *testing.T) {
 		const idle = 5 * time.Second
 		client := &fakeConsumerClient{}
 		created := 0
-		manager := newManager(time.Second, idle, 1, func(_, _ string) (consumerClient, error) {
+		manager := newManager(time.Second, idle, 1, func(_, _ string, _ func()) (consumerClient, error) {
 			created++
 			return client, nil
 		})
 		defer manager.Close()
 		for range 3 {
-			if err := manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error { return nil }); !errors.Is(err, ErrNoEvent) {
+			if err := manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error { return nil }); !errors.Is(err, ErrNoEvent) {
 				t.Fatalf("Consume() error = %v, want ErrNoEvent", err)
 			}
 			time.Sleep(idle - time.Second)
@@ -121,12 +121,12 @@ func TestManagerIdleTimeoutPreservesInProgressWork(t *testing.T) {
 					},
 					beforeCommit: func() { pause("commit") },
 				}
-				manager := newManager(4*idle, idle, 1, func(_, _ string) (consumerClient, error) { return client, nil })
+				manager := newManager(4*idle, idle, 1, func(_, _ string, _ func()) (consumerClient, error) { return client, nil })
 				defer manager.Close()
 				defer unblock()
 				done := make(chan error, 1)
 				go func() {
-					done <- manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error {
+					done <- manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error {
 						pause("handler")
 						return nil
 					})
@@ -161,7 +161,7 @@ func TestManagerIdleTimeoutWaitsForAllQueuedCalls(t *testing.T) {
 		client := &fakeConsumerClient{poll: func(context.Context) kgo.Fetches {
 			return fetchWithRecord(&kgo.Record{Topic: "images"})
 		}}
-		manager := newManager(time.Second, idle, 1, func(_, _ string) (consumerClient, error) { return client, nil })
+		manager := newManager(time.Second, idle, 1, func(_, _ string, _ func()) (consumerClient, error) { return client, nil })
 		defer manager.Close()
 		forFirst := make(chan struct{})
 		forSecond := make(chan struct{})
@@ -172,11 +172,11 @@ func TestManagerIdleTimeoutWaitsForAllQueuedCalls(t *testing.T) {
 		firstDone := make(chan error, 1)
 		secondDone := make(chan error, 1)
 		go func() {
-			firstDone <- manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error { <-forFirst; return nil })
+			firstDone <- manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error { <-forFirst; return nil })
 		}()
 		synctest.Wait()
 		go func() {
-			secondDone <- manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error { <-forSecond; return nil })
+			secondDone <- manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error { <-forSecond; return nil })
 		}()
 		synctest.Wait()
 		time.Sleep(2 * idle)
@@ -209,7 +209,7 @@ func TestManagerCloseWaitsForDetachedIdleConsumer(t *testing.T) {
 		old := &fakeConsumerClient{beforeClose: func() { close(closing); <-releaseClose }}
 		replacement := &fakeConsumerClient{}
 		created := 0
-		manager := newManager(time.Second, idle, 1, func(_, _ string) (consumerClient, error) {
+		manager := newManager(time.Second, idle, 1, func(_, _ string, _ func()) (consumerClient, error) {
 			created++
 			if created == 1 {
 				return old, nil
@@ -220,7 +220,7 @@ func TestManagerCloseWaitsForDetachedIdleConsumer(t *testing.T) {
 		defer unblock()
 		consume := func() {
 			t.Helper()
-			if err := manager.Consume(t.Context(), "images", "scanner", func(*kgo.Record) error { return nil }); !errors.Is(err, ErrNoEvent) {
+			if err := manager.Consume(t.Context(), "images", "scanner", func(context.Context, *kgo.Record) error { return nil }); !errors.Is(err, ErrNoEvent) {
 				t.Fatalf("Consume() error = %v, want ErrNoEvent", err)
 			}
 		}

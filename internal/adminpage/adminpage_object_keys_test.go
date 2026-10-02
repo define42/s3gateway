@@ -43,7 +43,7 @@ func TestAdminObjectKeysPreserved(t *testing.T) {
 			handler, cookie, cleanup := newLoggedInAdminHandlerWithStub(t, map[string]struct{}{"team2-rd": {}}, func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				defer mu.Unlock()
-				if r.Method == http.MethodGet && r.URL.Path == "/"+bucket && r.URL.Query().Get("list-type") == "2" {
+				if r.Method == http.MethodGet && isBucketRequestPath(r.URL.Path, bucket) && r.URL.Query().Get("list-type") == "2" {
 					w.Header().Set("Content-Type", "application/xml")
 					_, _ = io.WriteString(w, `<ListBucketResult><Name>`+bucket+`</Name><IsTruncated>false</IsTruncated><Contents><Key>`)
 					if err := xml.EscapeText(w, []byte(tt.key)); err != nil {

@@ -22,6 +22,12 @@ import (
 	"github.com/define42/s3gateway/internal/upstream"
 )
 
+// isBucketRequestPath accepts both S3 bucket root URL forms without
+// normalizing object paths, where a trailing slash is part of the key.
+func isBucketRequestPath(path, bucket string) bool {
+	return path == "/"+bucket || path == "/"+bucket+"/"
+}
+
 func newGatewayWithStubUpstream(t *testing.T, h http.HandlerFunc) (*Server, func()) {
 	t.Helper()
 	return newGatewayWithRawStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
@@ -298,7 +304,7 @@ func TestGatewayWriteCopyAndDeleteHandlerMatrix(t *testing.T) {
 			w.Header().Set("x-amz-version-id", "v-del")
 			w.Header().Set("x-amz-request-charged", "requester")
 			w.WriteHeader(http.StatusNoContent)
-		case r.Method == http.MethodPost && r.URL.Path == "/team2-rich" && strings.Contains(r.URL.RawQuery, "delete"):
+		case r.Method == http.MethodPost && isBucketRequestPath(r.URL.Path, "team2-rich") && strings.Contains(r.URL.RawQuery, "delete"):
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
@@ -415,22 +421,22 @@ func TestGatewayWriteCopyAndDeleteHandlerMatrix(t *testing.T) {
 func TestGatewayBucketHeadVersioningAndCreateDelete(t *testing.T) {
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPut && r.URL.Path == "/team2-bucket" && strings.Contains(r.URL.RawQuery, "versioning"):
+		case r.Method == http.MethodPut && isBucketRequestPath(r.URL.Path, "team2-bucket") && strings.Contains(r.URL.RawQuery, "versioning"):
 			w.WriteHeader(http.StatusOK)
-		case r.Method == http.MethodGet && r.URL.Path == "/team2-bucket" && strings.Contains(r.URL.RawQuery, "versioning"):
+		case r.Method == http.MethodGet && isBucketRequestPath(r.URL.Path, "team2-bucket") && strings.Contains(r.URL.RawQuery, "versioning"):
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>Enabled</Status><MfaDelete>Enabled</MfaDelete></VersioningConfiguration>`))
-		case r.Method == http.MethodPut && r.URL.Path == "/team2-bucket":
+		case r.Method == http.MethodPut && isBucketRequestPath(r.URL.Path, "team2-bucket"):
 			w.WriteHeader(http.StatusOK)
-		case r.Method == http.MethodHead && r.URL.Path == "/team2-bucket":
+		case r.Method == http.MethodHead && isBucketRequestPath(r.URL.Path, "team2-bucket"):
 			w.Header().Set("x-amz-bucket-region", "us-east-1")
 			w.Header().Set("x-amz-bucket-arn", "arn:aws:s3:::team2-bucket")
 			w.Header().Set("x-amz-bucket-location-name", "us-east-1")
 			w.Header().Set("x-amz-bucket-location-type", "AvailabilityZone")
 			w.Header().Set("x-amz-access-point-alias", "true")
 			w.WriteHeader(http.StatusOK)
-		case r.Method == http.MethodDelete && r.URL.Path == "/team2-bucket":
+		case r.Method == http.MethodDelete && isBucketRequestPath(r.URL.Path, "team2-bucket"):
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			t.Fatalf("unexpected upstream request: %s %s?%s", r.Method, r.URL.Path, r.URL.RawQuery)
@@ -488,13 +494,13 @@ func TestGatewayBucketHeadVersioningAndCreateDelete(t *testing.T) {
 func TestGatewayBucketAndObjectTaggingRoutes(t *testing.T) {
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodPut && r.URL.Path == "/team2-bucket" && strings.Contains(r.URL.RawQuery, "tagging"):
+		case r.Method == http.MethodPut && isBucketRequestPath(r.URL.Path, "team2-bucket") && strings.Contains(r.URL.RawQuery, "tagging"):
 			w.WriteHeader(http.StatusOK)
-		case r.Method == http.MethodGet && r.URL.Path == "/team2-bucket" && strings.Contains(r.URL.RawQuery, "tagging"):
+		case r.Method == http.MethodGet && isBucketRequestPath(r.URL.Path, "team2-bucket") && strings.Contains(r.URL.RawQuery, "tagging"):
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet><Tag><Key>bk</Key><Value>bv</Value></Tag></TagSet></Tagging>`))
-		case r.Method == http.MethodDelete && r.URL.Path == "/team2-bucket" && strings.Contains(r.URL.RawQuery, "tagging"):
+		case r.Method == http.MethodDelete && isBucketRequestPath(r.URL.Path, "team2-bucket") && strings.Contains(r.URL.RawQuery, "tagging"):
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPut && r.URL.Path == "/team2-bucket/object.txt" && strings.Contains(r.URL.RawQuery, "tagging"):
 			w.Header().Set("x-amz-version-id", "v-put")

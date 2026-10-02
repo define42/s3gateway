@@ -153,7 +153,7 @@ func newDeleteObjectsChecksumFixture(t *testing.T) *deleteObjectsChecksumFixture
 	fixture := &deleteObjectsChecksumFixture{requests: make(chan deleteObjectsChecksumRequest, 8)}
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		fixture.calls.Add(1)
-		if r.Method != http.MethodPost || r.URL.Path != "/team2-bucket" || !r.URL.Query().Has("delete") {
+		if r.Method != http.MethodPost || !isBucketRequestPath(r.URL.Path, "team2-bucket") || !r.URL.Query().Has("delete") {
 			t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL)
 		}
 		body, err := io.ReadAll(r.Body)

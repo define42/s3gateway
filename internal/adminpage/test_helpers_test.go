@@ -15,6 +15,12 @@ import (
 	"github.com/define42/s3gateway/internal/testutil"
 )
 
+// isBucketRequestPath accepts both S3 bucket root URL forms without
+// normalizing object paths, where a trailing slash is part of the key.
+func isBucketRequestPath(path, bucket string) bool {
+	return path == "/"+bucket || path == "/"+bucket+"/"
+}
+
 func newTestS3Client(t *testing.T, upstreamURL string) *s3.Client {
 	t.Helper()
 	cfg, err := awsconfig.LoadDefaultConfig(t.Context(),
