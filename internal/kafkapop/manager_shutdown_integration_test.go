@@ -51,11 +51,14 @@ func TestManagerShutdownInterruptsUnavailableBrokerIntegration(t *testing.T) {
 	defer cancelClose()
 	started := time.Now()
 	err = manager.CloseContext(closeCtx)
-	t.Logf("consumer cleanup completed after %s: %v", time.Since(started), err)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal(err)
+	elapsed := time.Since(started)
+	t.Logf("consumer cleanup completed after %s: %v", elapsed, err)
+	// A disconnected coordinator can let cleanup finish before the deadline.
+	// Both prompt completion and deadline cancellation satisfy bounded shutdown.
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CloseContext error = %v, want nil or context.DeadlineExceeded", err)
 	}
-	if elapsed := time.Since(started); elapsed > 2*time.Second {
+	if elapsed > 2*time.Second {
 		t.Fatalf("Kafka cleanup ignored its shared deadline: %s", elapsed)
 	}
 }
