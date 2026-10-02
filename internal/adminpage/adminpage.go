@@ -54,7 +54,12 @@ const (
 	maxAdminUploadMetadataValueBytes = int64(4 << 10)
 	maxAdminUploadMetadataBytes      = 16 << 10
 	adminUploadAbortTimeout          = 10 * time.Second
+	adminUploadPartSize              = 16 << 20 // 16 MiB keeps upload memory bounded.
+	maxAdminUploadObjectSize         = int64(adminUploadPartSize) * 10000
+	adminUploadTooLargeMessage       = "File is too large. Maximum browser upload size is 156.25 GiB."
 )
+
+var errAdminUploadTooLarge = errors.New("admin upload exceeds maximum object size")
 
 // IsBrowser reports whether a request looks like interactive browser traffic.
 // SigV4 authorization always takes precedence, even when the request also
@@ -1485,6 +1490,24 @@ func (b adminUploadBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// readAdminUploadPart reads at most the remaining object capacity plus one byte
+// so an upload without a declared size cannot consume another full part at the
+// limit. The extra byte distinguishes an exact-size object from an oversized one.
+func readAdminUploadPart(reader io.Reader, buf []byte, receivedSize int64) (int, error) {
+	remaining := maxAdminUploadObjectSize - receivedSize
+	if remaining < 0 {
+		return 0, errAdminUploadTooLarge
+	}
+	if remaining < int64(len(buf)) {
+		buf = buf[:remaining+1]
+	}
+	n, err := io.ReadFull(reader, buf)
+	if int64(n) > remaining {
+		return n, errAdminUploadTooLarge
+	}
+	return n, err
+}
+
 func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
@@ -1623,7 +1646,8 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 				}
 			case "key":
 				if key == "" {
-					key = value
+					// Object keys are literal identifiers, including whitespace.
+					key = string(valueBytes)
 				}
 			case "cursor":
 				if cursor == "" {
@@ -1645,7 +1669,7 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 				size = parsedSize
 			}
 		case "file":
-			fileName := strings.TrimSpace(part.FileName())
+			fileName := part.FileName()
 			fileContentType := strings.TrimSpace(part.Header.Get("Content-Type"))
 
 			if bucket == "" {
@@ -1669,16 +1693,15 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 			if finalKey == "" {
 				finalKey = fileName
 			}
-			finalKey = strings.TrimSpace(strings.TrimPrefix(finalKey, "/"))
 			if finalKey == "" {
 				redirectToBucket("", "Object key is required.")
 				return
 			}
 
-			// Guard against S3's maximum object size (5 TiB) when the browser provided file size.
-			const maxMultipartObjectSize = int64(5 * 1024 * 1024 * 1024 * 1024)
-			if size > maxMultipartObjectSize {
-				redirectToBucket("", "File is too large. Maximum supported object size is 5 TiB.")
+			// Browser uploads use fixed-size parts and S3 allows 10,000 parts.
+			// Reject known oversized files before creating or sending any parts.
+			if size > maxAdminUploadObjectSize {
+				redirectToBucket("", adminUploadTooLargeMessage)
 				return
 			}
 
@@ -1729,16 +1752,19 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 				})
 			}()
 
-			const uploadPartSize = int64(16 << 20) // 16 MiB
-			buf := make([]byte, uploadPartSize)
+			buf := make([]byte, adminUploadPartSize)
 			completedParts := make([]types.CompletedPart, 0, 16)
 			var partNumber int32 = 1
 			var receivedSize int64
 
 			for {
-				n, readErr := io.ReadFull(part, buf)
+				n, readErr := readAdminUploadPart(part, buf, receivedSize)
 				if errors.Is(readErr, io.EOF) {
 					break
+				}
+				if errors.Is(readErr, errAdminUploadTooLarge) {
+					redirectToBucket("", adminUploadTooLargeMessage)
+					return
 				}
 				if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) {
 					redirectToBucket("", "Could not upload object.")
@@ -1752,11 +1778,6 @@ func (h *handler) handleAdminBucketUpload(w http.ResponseWriter, r *http.Request
 					redirectToBucket("", "Uploaded file size does not match the declared size.")
 					return
 				}
-				if partNumber > 10000 {
-					redirectToBucket("", "File is too large. Maximum multipart part count exceeded.")
-					return
-				}
-
 				partBody := bytes.NewReader(buf[:n])
 				uploadOut, uploadErr := h.s3.UploadPart(r.Context(), &s3.UploadPartInput{
 					Bucket:        &bucket,

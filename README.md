@@ -360,6 +360,12 @@ suffix. The console lists permitted buckets and objects and supports bucket
 creation plus object upload, download, and deletion according to the same LDAP
 group permissions as the S3 API.
 
+Upload keys are used exactly as entered, including leading slashes and
+whitespace. Leaving the key empty uses the selected file's name. Browser uploads
+support files up to **156.25 GiB** (167,772,160,000 bytes). Larger declared files
+are rejected before starting an upstream upload. Use the S3 multipart API for
+larger objects, choosing a part size that fits within the backend's part limit.
+
 When Kafka is configured, the **Kafka topics** page shows retained element
 counts and each topic's consumer groups with their committed offsets by
 partition. Users see bucket-named topics only when their LDAP groups grant read
@@ -419,6 +425,11 @@ Lifecycle GET, PUT, and DELETE requests forward
 `x-amz-expected-bucket-owner`.
 Malformed or oversized configuration XML returns `400 MalformedXML`.
 
+Lifecycle XML rejects unknown elements, duplicate fields where only one is
+allowed, and nested content in scalar fields before changing the upstream
+configuration. Explicitly empty filters and prefixes remain valid and apply to
+every object in the bucket.
+
 Lifecycle PUT accepts `x-amz-transition-default-minimum-object-size` values
 `all_storage_classes_128K` and `varies_by_storage_class`; invalid or repeated
 values return `400 InvalidArgument`. Lifecycle GET and PUT responses preserve
@@ -454,6 +465,13 @@ XML it sends upstream.
 
 Requests without checksum headers remain accepted for compatibility.
 [AWS documents stricter checksum requirements for DeleteObjects](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html).
+
+Size and last-modified-time deletion conditions are unsupported. Requests with
+`x-amz-if-match-size` or `x-amz-if-match-last-modified-time`, or bulk-delete XML
+containing `Size` or `LastModifiedTime`, are rejected before any object is
+deleted. Unsupported condition headers return `501 NotImplemented`; unsupported
+XML conditions return `400 MalformedXML`. Supported ETag and version-ID
+conditions continue to be forwarded.
 
 ### Upload checksums
 

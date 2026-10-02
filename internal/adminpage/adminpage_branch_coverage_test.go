@@ -1178,7 +1178,7 @@ func TestHandleAdminBucketUploadAdditionalBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("empty final key after trim", func(t *testing.T) {
+	t.Run("empty key and filename rejected", func(t *testing.T) {
 		handler, cookie, cleanup := newLoggedInAdminHandlerWithStub(t, map[string]struct{}{"team2-w": {}}, func(w http.ResponseWriter, r *http.Request) {
 			t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
 		})
@@ -1188,7 +1188,7 @@ func TestHandleAdminBucketUploadAdditionalBranches(t *testing.T) {
 			if err := mw.WriteField("name", "team2-logs"); err != nil {
 				return err
 			}
-			if err := mw.WriteField("key", "/"); err != nil {
+			if err := mw.WriteField("key", ""); err != nil {
 				return err
 			}
 			h := make(textproto.MIMEHeader)
@@ -1208,13 +1208,13 @@ func TestHandleAdminBucketUploadAdditionalBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("size above 5 TiB rejected", func(t *testing.T) {
+	t.Run("size above browser upload limit rejected", func(t *testing.T) {
 		handler, cookie, cleanup := newLoggedInAdminHandlerWithStub(t, map[string]struct{}{"team2-w": {}}, func(w http.ResponseWriter, r *http.Request) {
 			t.Fatalf("unexpected upstream request: %s %s", r.Method, r.URL.Path)
 		})
 		defer cleanup()
 
-		tooLarge := strconv.FormatInt(5*1024*1024*1024*1024+1, 10)
+		tooLarge := strconv.FormatInt(maxAdminUploadObjectSize+1, 10)
 		body, contentType := newMultipartBody(t, func(mw *multipart.Writer) error {
 			if err := mw.WriteField("name", "team2-logs"); err != nil {
 				return err
@@ -1235,7 +1235,7 @@ func TestHandleAdminBucketUploadAdditionalBranches(t *testing.T) {
 		rr := httptest.NewRecorder()
 		handler.ServeHTTP(rr, req)
 		loc := parseRedirectLocation(t, rr)
-		if loc.Query().Get("err") != "File is too large. Maximum supported object size is 5 TiB." {
+		if loc.Query().Get("err") != adminUploadTooLargeMessage {
 			t.Fatalf("error mismatch: got=%q", loc.Query().Get("err"))
 		}
 	})

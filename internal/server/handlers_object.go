@@ -67,10 +67,53 @@ type deleteObjectReqItemXML struct {
 	ETag      *string `xml:"ETag,omitempty"`
 }
 
+func (r *deleteObjectsReqXML) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
+	// Inspect every element before normal decoding can skip unknown fields or
+	// nested scalar content. Dropping a condition would broaden the deletion.
+	type requestXML deleteObjectsReqXML
+	guard := &deleteObjectsTokenReader{decoder: decoder, start: &start}
+	return xml.NewTokenDecoder(guard).Decode((*requestXML)(r))
+}
+
+type deleteObjectsTokenReader struct {
+	decoder *xml.Decoder
+	start   *xml.StartElement
+}
+
+func (r *deleteObjectsTokenReader) Token() (xml.Token, error) {
+	if r.start != nil {
+		start := *r.start
+		r.start = nil
+		return start, nil
+	}
+	token, err := r.decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if start, ok := token.(xml.StartElement); ok {
+		switch start.Name.Local {
+		case "Size", "LastModifiedTime":
+			return nil, fmt.Errorf("unsupported DeleteObjects condition %q", start.Name.Local)
+		}
+	}
+	return token, nil
+}
+
 func decodeDeleteObjectsRequest(r io.Reader) (deleteObjectsReqXML, error) {
 	var req deleteObjectsReqXML
 	err := s3xml.DecodeLimited(r, &req, deleteObjectsDecodeLimits)
 	return req, err
+}
+
+func requireSupportedDeleteConditions(w http.ResponseWriter, r *http.Request) bool {
+	for name := range r.Header {
+		switch strings.ToLower(name) {
+		case "x-amz-if-match-size", "x-amz-if-match-last-modified-time":
+			s3xml.WriteError(w, http.StatusNotImplemented, "NotImplemented", "Size and last-modified-time deletion conditions are not supported")
+			return false
+		}
+	}
+	return true
 }
 
 // requireNoGovernanceRetentionBypass rejects attempts to borrow the shared
@@ -210,6 +253,9 @@ func (s *Server) handleDeleteObjects(w http.ResponseWriter, r *http.Request, buc
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanDeleteObject(rules, bucket) {
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+	if !requireSupportedDeleteConditions(w, r) {
 		return
 	}
 	if !requireNoGovernanceRetentionBypass(w, r) {
@@ -1898,6 +1944,9 @@ func (s *Server) handleDeleteObject(w http.ResponseWriter, r *http.Request, buck
 	rules := authz.RulesFromRequest(r)
 	if !authz.CanDeleteObject(rules, bucket) {
 		s3xml.WriteError(w, http.StatusForbidden, "AccessDenied", "Forbidden")
+		return
+	}
+	if !requireSupportedDeleteConditions(w, r) {
 		return
 	}
 	if !requireNoGovernanceRetentionBypass(w, r) {

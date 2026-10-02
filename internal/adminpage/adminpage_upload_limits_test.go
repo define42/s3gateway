@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -30,6 +31,101 @@ func (r *adminUploadReadGuard) Read(p []byte) (int, error) {
 	}
 	r.drained = true
 	return 0, errors.New("read past rejection point")
+}
+
+func TestAdminUploadDeclaredSizeLimit(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		size       int64
+		wantCreate bool
+	}{
+		{name: "below limit", size: maxAdminUploadObjectSize - 1, wantCreate: true},
+		{name: "exact limit", size: maxAdminUploadObjectSize, wantCreate: true},
+		{name: "one byte over limit", size: maxAdminUploadObjectSize + 1},
+		{name: "200 GiB", size: 200 << 30},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHandlerWithNilS3(map[string]struct{}{"team2-w": {}})
+			createCalls := 0
+			h.s3 = s3.New(s3.Options{
+				Region:           "us-east-1",
+				BaseEndpoint:     aws.String("https://upstream.test"),
+				Credentials:      credentials.NewStaticCredentialsProvider("test-ak", "test-sk", ""),
+				RetryMaxAttempts: 1,
+				HTTPClient: adminUploadIntegrityHTTPClient(func(r *http.Request) (*http.Response, error) {
+					createCalls++
+					if r.Method != http.MethodPost || !r.URL.Query().Has("uploads") {
+						t.Errorf("unexpected upstream request: %s %s", r.Method, r.URL)
+					}
+					// Stop after size validation so the boundary test requires no large payload.
+					return nil, errors.New("upstream unavailable")
+				}),
+			})
+			cookie := adminLoginSessionCookie(t, h, "alice", "secret")
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			for _, field := range [][2]string{{"name", "team2-logs"}, {"key", "large.bin"}, {"size", strconv.FormatInt(tt.size, 10)}} {
+				if err := writer.WriteField(field[0], field[1]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := writer.CreateFormFile("file", "large.bin"); err != nil {
+				t.Fatal(err)
+			}
+			guard := &adminUploadReadGuard{prefix: bytes.NewReader(body.Bytes())}
+			r := httptest.NewRequest(http.MethodPost, "/admin/bucket/upload", guard)
+			r.Header.Set("Content-Type", writer.FormDataContentType())
+			r.AddCookie(cookie)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if guard.drained {
+				t.Error("read file contents before rejecting the upload")
+			}
+			wantCalls := 0
+			if tt.wantCreate {
+				wantCalls = 1
+			}
+			if createCalls != wantCalls {
+				t.Errorf("multipart creation calls = %d, want %d", createCalls, wantCalls)
+			}
+			location := parseRedirectLocation(t, w)
+			wantError := adminUploadTooLargeMessage
+			if tt.wantCreate {
+				wantError = "Could not upload object."
+			}
+			if got := location.Query().Get("err"); got != wantError {
+				t.Errorf("upload error = %q, want %q", got, wantError)
+			}
+		})
+	}
+}
+
+func TestAdminUploadPartReadAtObjectLimit(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		receivedSize int64
+		remaining    string
+		wantRead     int
+		wantErr      error
+	}{
+		{name: "final short part", receivedSize: maxAdminUploadObjectSize - 4, remaining: "abc", wantRead: 3, wantErr: io.ErrUnexpectedEOF},
+		{name: "exact limit", receivedSize: maxAdminUploadObjectSize - 3, remaining: "abc", wantRead: 3, wantErr: io.ErrUnexpectedEOF},
+		{name: "over limit in final part", receivedSize: maxAdminUploadObjectSize - 3, remaining: "abcdefghi", wantRead: 4, wantErr: errAdminUploadTooLarge},
+		{name: "EOF after final full part", receivedSize: maxAdminUploadObjectSize, wantErr: io.EOF},
+		{name: "extra data after final full part", receivedSize: maxAdminUploadObjectSize, remaining: "abcdefghi", wantRead: 1, wantErr: errAdminUploadTooLarge},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := strings.NewReader(tt.remaining)
+			buf := make([]byte, 8)
+			n, err := readAdminUploadPart(reader, buf, tt.receivedSize)
+			if n != tt.wantRead || !errors.Is(err, tt.wantErr) {
+				t.Errorf("read = %d, %v; want %d, %v", n, err, tt.wantRead, tt.wantErr)
+			}
+			if reader.Len() != len(tt.remaining)-tt.wantRead {
+				t.Errorf("read past object-size rejection point: %d bytes remain", reader.Len())
+			}
+		})
+	}
 }
 
 func TestAdminUploadRejectsPartsWithoutDraining(t *testing.T) {

@@ -162,7 +162,7 @@ func newLifecycleWireGateway(t *testing.T, getResponse string) (*Server, <-chan 
 	t.Helper()
 	requests := make(chan []byte, 1)
 	gw, cleanup := newGatewayWithStubUpstream(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/team2-bucket" || !r.URL.Query().Has("lifecycle") {
+		if strings.TrimSuffix(r.URL.Path, "/") != "/team2-bucket" || !r.URL.Query().Has("lifecycle") {
 			t.Errorf("unexpected upstream route: %s %s", r.Method, r.URL)
 		}
 		if r.Method == http.MethodGet {

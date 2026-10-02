@@ -7,6 +7,13 @@ Release versions and dates below come from this repository's Git tags.
 
 ## [Unreleased]
 
+### Fixed
+
+- Reject malformed lifecycle XML that could otherwise lose filter restrictions when forwarded upstream.
+- Preserve literal object keys, including whitespace and leading slashes, in browser uploads.
+- Reject browser uploads above the actual 156.25 GiB limit before starting an upstream upload when the file size is supplied.
+- Reject unsupported size and last-modified-time deletion conditions instead of silently discarding them.
+
 ### Added
 
 - Added `ObjectCreated:Copy` Kafka notifications after successful S3 `CopyObject` operations.
