@@ -71,6 +71,9 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      - name: Build MinIO test image from source
+        run: make test-minio-image
+
       - name: Run Docker-backed tests with coverage
         run: |
           cover_packages=$(go list ./internal/... | grep -v '/internal/testutil$' | paste -sd, -)

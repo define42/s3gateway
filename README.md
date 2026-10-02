@@ -233,6 +233,10 @@ The local stack generates a development certificate for MinIO and configures
 the gateway to trust it. The browser may require trusting that certificate
 before opening the MinIO console.
 
+Compose builds MinIO from pinned source using `testminio/Dockerfile.server`.
+The first build downloads Go dependencies and compiles MinIO; later builds use
+Docker's cache.
+
 `testuser` has full access to the `team2` and `team8` bucket namespaces.
 `readonly` has read-only access to `team2`.
 
@@ -253,6 +257,20 @@ Stop the stack when finished:
 
 ```bash
 docker compose down
+```
+
+### Integration tests
+
+Run `make integration` to build the local MinIO image and run the Docker-backed
+tests with race detection. CI and benchmarks build the same image before testing.
+The source build runs separately so it does not consume individual test timeouts.
+
+Before running integration tests or benchmarks directly with `go test`, build
+the image once:
+
+```bash
+make test-minio-image
+go test -race -tags=integration ./internal/app ./internal/server ./internal/ldap ./internal/kafkapop
 ```
 
 ### Published container

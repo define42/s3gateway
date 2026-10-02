@@ -1,7 +1,7 @@
 GOLANGCI_LINT_VERSION := v2.13.2
 GOVULNCHECK_VERSION := v1.7.0
 
-.PHONY: all coverage integration lint gosec govulncheck test race tidy-check run
+.PHONY: all coverage integration lint gosec govulncheck test test-minio-image race tidy-check run
 
 all:
 	docker compose build
@@ -23,7 +23,10 @@ coverage:
 	@cover_packages="$$(go list ./cmd/s3gateway ./internal/... | grep -v '/internal/testutil$$' | paste -sd, -)"; \
 	go test -shuffle=on -count=1 ./... -coverprofile=coverage-unit.out -covermode=atomic -coverpkg="$$cover_packages"
 
-integration:
+test-minio-image:
+	docker build -t s3gateway-test-minio:local -f testminio/Dockerfile.server testminio
+
+integration: test-minio-image
 	go test -race -tags=integration -shuffle=on -count=1 ./internal/app ./internal/server ./internal/ldap ./internal/kafkapop
 
 race:

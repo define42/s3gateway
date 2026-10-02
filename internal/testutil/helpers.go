@@ -25,7 +25,7 @@ import (
 
 const (
 	glauthTestImage   = "glauth/glauth@sha256:b3efd79fc32ac626ad1b18e36ab42fac2e2ac662454582fdfa21cc82efab786b"
-	minioTestImage    = "minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e"
+	minioTestImage    = "s3gateway-test-minio:local"
 	redpandaTestImage = "docker.redpanda.com/redpandadata/redpanda:v25.2.4"
 )
 
@@ -186,6 +186,7 @@ func StartGlauthWithConfig(ctx context.Context, tb testing.TB, cfg string, schem
 
 // StartMinio starts MinIO with HTTPS, adds its generated certificate to the
 // test's AWS_CA_BUNDLE, and returns its endpoint URL plus a cleanup function.
+// Build the local image with make test-minio-image before running integration tests.
 func StartMinio(ctx context.Context, tb testing.TB, accessKey string, secretKey string) (string, func()) {
 	tb.Helper()
 
@@ -236,7 +237,7 @@ func StartMinio(ctx context.Context, tb testing.TB, accessKey string, secretKey 
 		},
 	)
 	if err != nil {
-		tb.Fatalf("failed to start minio container: %v", err)
+		tb.Fatalf("failed to start minio container (build the local image with make test-minio-image): %v", err)
 	}
 	cleanup := sync.OnceFunc(func() {
 		_ = container.Terminate(context.Background())
